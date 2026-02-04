@@ -1,0 +1,21 @@
+{
+  "last_folder": "",
+  "thresh": 80,
+  "min_area": 6,
+  "sharpness": 1.2,
+  "contrast": 15,
+  "kill_flat": true,
+  "kill_hist": true,
+  "kill_dipole": true,
+  "auto_crop": true,
+  "edge_margin": 10,
+  "auto_clear_cache": false,
+  "dynamic_thresh": false,
+  "max_sharpness": 5.0,
+  "model_path": "",
+  "crowd_high_score": 0.85,
+  "crowd_high_count": 10,
+  "crowd_high_penalty": 0.5,
+  "jpg_download_dir": "",
+  "fits_download_dir": ""
+}
