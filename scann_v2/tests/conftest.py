@@ -7,12 +7,27 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 from typing import Generator
 
 import numpy as np
 import pytest
+
+
+# ─── Qt Application (会话级) ───
+
+
+@pytest.fixture(scope="session")
+def qapp():
+    """创建全局 QApplication 实例 (整个测试会话复用)"""
+    from PyQt5.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(sys.argv)
+    yield app
 
 
 # ─── 合成 FITS 数据 ───

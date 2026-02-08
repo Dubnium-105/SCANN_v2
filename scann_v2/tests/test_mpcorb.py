@@ -49,3 +49,35 @@ class TestMpcorbParser:
 
         result = _parse_mpcorb_line("too short")
         assert result is None
+
+    def test_unpack_epoch_k249a(self):
+        """测试解包packed epoch格式 K249A"""
+        from scann.core.mpcorb import _unpack_packed_epoch
+
+        # K249A = K(2000s) + 24(年份) + 9A(月日分数)
+        # K = 2000s century prefix
+        # 24 = 2024
+        # 9A = 9.x (需要解析为月份/日)
+        jd = _unpack_packed_epoch("K249A")
+        # 2024年9月某日，JD应该在2460000附近
+        assert isinstance(jd, float)
+        assert jd > 2460000  # 2024年9月的JD大约是2460580
+
+    def test_unpack_epoch_j8300(self):
+        """测试解包packed epoch格式 J8300 (旧格式示例)"""
+        from scann.core.mpcorb import _unpack_packed_epoch
+
+        # J = 1900s century prefix
+        # 83 = 1983
+        # 00 = 年初
+        jd = _unpack_packed_epoch("J8300")
+        assert isinstance(jd, float)
+        assert jd > 2440000  # 1983年初的JD大约是2445300
+
+    def test_epoch_is_set_in_parsed_orbit(self):
+        """测试解析后epoch被正确设置"""
+        from scann.core.mpcorb import _parse_mpcorb_line
+
+        orbit = _parse_mpcorb_line(self.SAMPLE_MPCORB_LINE)
+        assert orbit is not None
+        assert orbit.epoch > 0.0  # epoch应该被正确解析，不再是0.0
