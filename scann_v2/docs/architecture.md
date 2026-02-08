@@ -24,23 +24,42 @@ SCANN v2 (Star/Source Classification and Analysis Neural Network) 是一个天�
 - **TDD 驱动**: 测试先行，Core 层 100% 可测试
 - **FITS 优先**: 所有操作基于 FITS 数据和头信息
 - **显存友好**: AI 推理控制在 8GB 以内
+- **图像为王**: 所有 UI 控件为图像让路，侧边栏可折叠
+- **渐进式披露**: 首屏仅核心功能，高级功能通过菜单按需展开
+- **状态可见性**: 当前显示状态（新图/旧图/反色/闪烁）始终有明确视觉反馈
 
 ## 2. 系统架构
 
 ```
-┌──────────────────────────────────────────────────────┐
-│                    GUI Layer (PyQt5)                   │
-│  MainWindow │ ImageViewer │ Settings │ TrainingDialog  │
-├──────────────────────────────────────────────────────┤
-│                   Service Layer                        │
-│  BlinkService │ DetectionService │ QueryService │ ...  │
-├──────────────────────────────────────────────────────┤
-│                    Core Layer                          │
-│  FitsIO │ ImageProcessor │ Aligner │ Detector │ AI     │
-├──────────────────────────────────────────────────────┤
-│                    Data Layer                          │
-│  Database │ FileManager │ Config                       │
-└──────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                         GUI Layer (PyQt5)                            │
+│  MainWindow │ ImageViewer │ Widgets │ Dialogs                        │
+│  ┌─────────────────────────────────────────────────────────────────┐ │
+│  │ Widgets:                                                        │ │
+│  │  OverlayLabel │ SuspectTable │ HistogramPanel │ BlinkSpeedSlider│ │
+│  │  CollapsibleSidebar │ MpcorbOverlay │ CoordinateLabel           │ │
+│  │  NoScrollSpinBox                                                │ │
+│  ├─────────────────────────────────────────────────────────────────┤ │
+│  │ Dialogs:                                                        │ │
+│  │  SettingsDialog │ TrainingDialog │ BatchProcessDialog           │ │
+│  │  MpcReportDialog │ QueryResultPopup │ ShortcutHelpDialog        │ │
+│  └─────────────────────────────────────────────────────────────────┘ │
+├──────────────────────────────────────────────────────────────────────┤
+│                         Service Layer                                │
+│  BlinkService │ DetectionService │ QueryService │ ExclusionService   │
+│  SchedulerService                                                    │
+├──────────────────────────────────────────────────────────────────────┤
+│                          Core Layer                                  │
+│  FitsIO │ ImageProcessor │ Aligner │ CandidateDetector │ Astrometry  │
+│  Mpcorb │ ObservationReport │ Config                                 │
+├──────────────────────────────────────────────────────────────────────┤
+│                          AI Layer                                    │
+│  SCANNDetector │ InferenceEngine │ Trainer │ FitsDataset             │
+│  TargetMarker                                                        │
+├──────────────────────────────────────────────────────────────────────┤
+│                         Data Layer                                   │
+│  Database │ FileManager │ Config                                     │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ## 3. 模块设计
@@ -152,29 +171,83 @@ SCANN v2 (Star/Source Classification and Analysis Neural Network) 是一个天�
 
 ### 3.5 GUI Layer (`src/scann/gui/`)
 
-#### main_window.py
-- 紧凑布局，最大化图像显示区域
-- 两个按钮：显示新图/旧图
-- 可疑目标列表（AI评分、坐标可复制）
+> 详见 [UI/UX 设计文档](ui_ux_design.md)
 
-#### image_viewer.py
-- 中键拖拽（新旧图同步移动）
-- 滚轮缩放
-- 支持方框/十字线标记显示
+#### main_window.py - 主窗口
+- **菜单栏**: 文件 | 处理 | AI | 查询 | 视图 | 设置 | 帮助
+- **可折叠侧边栏** (240px, Ctrl+B 切换):
+  - 文件夹按钮 (新图/旧图)
+  - 批量对齐/检测按钮 + 进度条
+  - 图像配对列表 (`QListWidget`)
+  - 可疑目标表格 (`SuspectTableWidget`)
+- **图像区域** (弹性填充，≥ 75% 窗口面积):
+  - 浮层状态标签 (NEW/OLD/INV, `OverlayLabel`)
+  - FITS 图像查看器 (`FitsImageViewer`)
+- **控制栏** (40px):
+  - 新图/旧图切换、闪烁 toggle、闪烁速度滑块、反色 toggle
+  - 直方图拉伸按钮
+  - 标记真/假/下一个
+- **状态栏**: 当前图类型 | 像素坐标 | 天球坐标 | 缩放百分比
 
-#### widgets/no_scroll_spinbox.py
-- 所有数字输入禁用滚轮
+#### image_viewer.py - FITS 图像查看器
+- `FitsImageViewer(QGraphicsView)`:
+  - 中键拖拽（新旧图同步移动，共享 viewport 变换矩阵）
+  - 滚轮缩放 (锚点在鼠标位置)
+  - 方框/十字线候选体标记绘制
+  - 左键选点 → `point_clicked` 信号
+  - 右键 → `right_click` 信号 → 上下文查询菜单
+  - MPCORB 已知小行星叠加层
+
+#### widgets/ - 自定义组件
+- `no_scroll_spinbox.py`: 禁用滚轮的 SpinBox / DoubleSpinBox
+- `coordinate_label.py`: 可选择复制的坐标标签
+- `overlay_label.py` (**新增**): 半透明浮层状态标签 (NEW/OLD/INV)
+- `suspect_table.py` (**新增**): 带 AI 评分排序/筛选/右键菜单的可疑目标表格
+- `histogram_panel.py` (**新增**): 实时直方图 + 黑白点滑块 (仅调显示)
+- `blink_speed_slider.py` (**新增**): 带数值显示的闪烁速度控制 (50~2000ms)
+- `collapsible_sidebar.py` (**新增**): 可折叠/展开的侧面板
+- `mpcorb_overlay.py` (**新增**): 图像上的已知小行星叠加绘制层
+
+#### dialogs/ - 对话框 (**新增目录**)
+- `settings_dialog.py`: 分页设置 (望远镜/天文台/检测/AI/保存/高级)
+- `training_dialog.py`: AI 训练配置 + 进度监控 + Loss 曲线
+- `batch_process_dialog.py`: 批量降噪/伪平场，另存为 FITS
+- `mpc_report_dialog.py`: MPC 80 列报告预览/复制/导出
+- `query_result_popup.py`: 外部查询结果浮窗
+- `shortcut_help_dialog.py`: 快捷键列表
 
 ## 4. 快捷键设计
 
-| 快捷键 | 功能 | 作用域 |
-|--------|------|--------|
-| r | 切换闪烁 | 窗口内 |
-| n | 标记为假 | 窗口内 |
-| y | 标记为真 | 窗口内 |
-| 滚轮 | 放大缩小 | 图像区域 |
-| i | 切换反色 | 窗口内 |
-| 中键拖拽 | 拖动图片 | 图像区域 |
+### 4.1 核心快捷键 (单键，窗口焦点内)
+
+| 快捷键 | 功能 | 作用域 | 条件 |
+|--------|------|--------|------|
+| R | 切换闪烁 | 窗口内 | 已加载图像 |
+| I | 切换反色 | 窗口内 | 已加载图像 |
+| Y | 标记为真 | 窗口内 | 有选中候选 |
+| N | 标记为假 | 窗口内 | 有选中候选 |
+| 1 | 显示新图 | 窗口内 | 已加载图像 |
+| 2 | 显示旧图 | 窗口内 | 已加载图像 |
+| F | 适配窗口 | 图像区域 | — |
+| Space | 下一个候选 | 窗口内 | 有候选列表 |
+| 滚轮 | 放大缩小 | 图像区域 | — |
+| 中键拖拽 | 拖动图片 | 图像区域 | — |
+
+### 4.2 扩展快捷键 (组合键)
+
+| 快捷键 | 功能 |
+|--------|------|
+| Ctrl+O | 打开新图文件夹 |
+| Ctrl+Shift+O | 打开旧图文件夹 |
+| Ctrl+B | 切换侧边栏 |
+| Ctrl+, | 打开设置 |
+| Ctrl+S | 保存当前图像 |
+| Ctrl+E | 导出 MPC 报告 |
+| ← / → | 上/下一组图像配对 |
+
+### 4.3 快捷键约束
+- 所有快捷键使用 `Qt.WindowShortcut`，非全局
+- 单字母快捷键在文本输入框获得焦点时自动失效
 
 ## 5. 数据流
 
@@ -183,12 +256,27 @@ FITS文件夹(新) ─┐
                  ├──→ 配对 → 对齐 → 候选检测 → AI评分 → 已知排除 → 可疑列表
 FITS文件夹(旧) ─┘                                        ↑
                                                     MPCORB + 外部查询
+
+可疑列表 ──→ 人工复核 (Y/N) ──→ MPC 80列报告
 ```
 
-## 6. 约束
+## 6. GUI 信号-槽连接
+
+```
+文件夹按钮.clicked  → FileManager.scan → file_list 更新 → 加载配对 → ImageViewer
+btn_blink.clicked   → BlinkService.toggle → QTimer start/stop → 切换 NEW/OLD
+btn_detect.clicked  → DetectionPipeline (工作线程) → SuspectTableWidget 更新
+suspect_list.clicked → ImageViewer.centerOn(candidate) + draw_markers
+ImageViewer.right_click → QMenu → QueryService.query_xxx → QueryResultPopup
+```
+
+## 7. 约束
 
 - **显存**: AI 推理 ≤ 8GB
 - **FITS 头**: 任何保存操作不得修改原始 FITS 文件头
 - **保存格式**: 整数（16/32bit 可选），不使用浮点
 - **快捷键**: 非全局，仅窗口焦点内有效
 - **滚轮**: 所有数字输入框禁用滚轮调整
+- **图像优先**: 图像区域占窗口 ≥ 75%，侧边栏可折叠
+- **暗色主题**: 背景 `#1E1E1E`，图像区域 `#141414`
+- **最小窗口**: 1024×768，宽度 < 1200px 时侧边栏自动折叠

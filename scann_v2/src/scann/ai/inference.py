@@ -16,7 +16,7 @@ import numpy as np
 import torch
 from torchvision import transforms
 
-from scann.core.models import Candidate, Detection
+from scann.core.models import Candidate, Detection, MarkerType
 
 
 @dataclass
@@ -122,16 +122,165 @@ class InferenceEngine:
     def detect_full_image(
         self,
         image: np.ndarray,
+        patch_size: int = 224,
+        stride: int = 112,
+        iou_threshold: float = 0.5,
     ) -> List[Detection]:
         """全图检测 (v2 新功能)
 
-        TODO: 实现滑动窗口 + 检测模型
+        使用滑动窗口在整幅图像上进行检测，并使用 NMS 合并重叠结果
 
         Args:
-            image: 完整天文图像
+            image: 完整天文图像 (H, W)
+            patch_size: 滑动窗口大小（默认 224）
+            stride: 滑动步长（默认 112，50% 重叠）
+            iou_threshold: NMS IoU 阈值（默认 0.5）
 
         Returns:
             检测结果列表
         """
-        # 占位实现：后续替换为真正的全图检测逻辑
-        raise NotImplementedError("全图检测功能尚在开发中")
+        from skimage.transform import resize
+
+        if self.model is None:
+            return []
+
+        height, width = image.shape[:2]
+
+        # 如果图像小于窗口大小，先进行填充
+        if height < patch_size or width < patch_size:
+            padded = np.zeros((patch_size, patch_size), dtype=image.dtype)
+            padded[:height, :width] = image
+            image = padded
+            height, width = patch_size, patch_size
+
+        # 收集所有窗口的检测结果
+        all_detections = []
+
+        # 滑动窗口遍历
+        for y in range(0, height - patch_size + 1, stride):
+            for x in range(0, width - patch_size + 1, stride):
+                # 提取窗口
+                patch = image[y:y+patch_size, x:x+patch_size]
+
+                # 归一化
+                if patch.max() > patch.min():
+                    patch = (patch - patch.min()) / (patch.max() - patch.min())
+
+                # 转换为张量并添加 batch 和 channel 维度
+                patch_tensor = torch.from_numpy(patch).float()
+                patch_tensor = patch_tensor.unsqueeze(0).unsqueeze(0)  # (1, 1, H, W)
+
+                # 重复为 3 通道（如果模型期望 RGB 输入）
+                patch_tensor = patch_tensor.repeat(1, 3, 1, 1)
+
+                # 推理
+                with torch.no_grad():
+                    patch_tensor = patch_tensor.to(self.device)
+                    output = self.model(patch_tensor)
+
+                # 获取概率
+                probs = torch.softmax(output, dim=1)[0, 1].cpu().item()
+
+                # 如果置信度超过阈值，添加到结果
+                if probs > self._threshold:
+                    # 计算窗口中心坐标
+                    center_x = int(x + patch_size / 2.0)
+                    center_y = int(y + patch_size / 2.0)
+
+                    # 边界框大小
+                    bbox_width = patch_size
+                    bbox_height = patch_size
+
+                    detection = Detection(
+                        x=center_x,
+                        y=center_y,
+                        width=bbox_width,
+                        height=bbox_height,
+                        confidence=probs,
+                        marker_type=MarkerType.BOUNDING_BOX
+                    )
+                    all_detections.append(detection)
+
+        # 应用 NMS 合并重叠检测
+        if len(all_detections) > 1:
+            all_detections = self._nms(all_detections, iou_threshold)
+
+        return all_detections
+
+    def _nms(self, detections: List[Detection], iou_threshold: float) -> List[Detection]:
+        """非极大值抑制（Non-Maximum Suppression）
+
+        合并重叠的检测结果，保留置信度最高的
+
+        Args:
+            detections: 检测结果列表
+            iou_threshold: IoU 阈值
+
+        Returns:
+            合并后的检测结果列表
+        """
+        if len(detections) == 0:
+            return []
+
+        # 按置信度排序（降序）
+        sorted_detections = sorted(detections, key=lambda d: d.confidence, reverse=True)
+
+        keep = []
+        while len(sorted_detections) > 0:
+            # 保留置信度最高的检测
+            current = sorted_detections.pop(0)
+            keep.append(current)
+
+            # 计算当前检测的边界框（从中心点和宽高计算）
+            bbox1 = [
+                current.x - current.width // 2,
+                current.y - current.height // 2,
+                current.x + current.width // 2,
+                current.y + current.height // 2
+            ]
+
+            # 移除与当前检测重叠的其他检测
+            remaining = []
+            for d in sorted_detections:
+                bbox2 = [
+                    d.x - d.width // 2,
+                    d.y - d.height // 2,
+                    d.x + d.width // 2,
+                    d.y + d.height // 2
+                ]
+                iou = self._calculate_iou(bbox1, bbox2)
+                if iou < iou_threshold:
+                    remaining.append(d)
+
+            sorted_detections = remaining
+
+        return keep
+
+    def _calculate_iou(self, bbox1: List[float], bbox2: List[float]) -> float:
+        """计算两个边界框的 IoU (Intersection over Union)
+
+        Args:
+            bbox1: 第一个边界框 [x1, y1, x2, y2]
+            bbox2: 第二个边界框 [x1, y1, x2, y2]
+
+        Returns:
+            IoU 值 (0-1)
+        """
+        # 计算交集区域
+        x1 = max(bbox1[0], bbox2[0])
+        y1 = max(bbox1[1], bbox2[1])
+        x2 = min(bbox1[2], bbox2[2])
+        y2 = min(bbox1[3], bbox2[3])
+
+        if x2 <= x1 or y2 <= y1:
+            return 0.0
+
+        intersection = (x2 - x1) * (y2 - y1)
+
+        # 计算并集区域
+        area1 = (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1])
+        area2 = (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1])
+        union = area1 + area2 - intersection
+
+        return intersection / union if union > 0 else 0.0
+
