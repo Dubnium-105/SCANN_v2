@@ -484,7 +484,7 @@ class MainWindow(QMainWindow):
 
     def _connect_signals(self) -> None:
         """连接所有信号与槽"""
-        # 控制栏
+        # ── 控制栏按钮 ──
         self.btn_show_new.clicked.connect(self._on_show_new)
         self.btn_show_old.clicked.connect(self._on_show_old)
         self.btn_blink.clicked.connect(self._on_blink_toggle)
@@ -494,21 +494,71 @@ class MainWindow(QMainWindow):
         self.btn_next_candidate.clicked.connect(self._on_next_candidate)
         self.btn_histogram.clicked.connect(self._on_toggle_histogram)
 
-        # 闪烁速度
+        # ── 闪烁速度 ──
         self.blink_speed.speed_changed.connect(self._on_blink_speed_changed)
 
-        # 侧边栏切换
-        self.act_toggle_sidebar.triggered.connect(self.sidebar.toggle)
+        # ── 侧边栏按钮 ──
+        self.btn_new_folder.clicked.connect(self._on_open_new_folder)
+        self.btn_old_folder.clicked.connect(self._on_open_old_folder)
+        self.btn_align.clicked.connect(self._on_batch_align)
+        self.btn_detect.clicked.connect(self._on_batch_detect)
 
-        # 可疑目标表格
+        # ── 文件菜单 ──
+        self.act_open_new.triggered.connect(self._on_open_new_folder)
+        self.act_open_old.triggered.connect(self._on_open_old_folder)
+        self.act_save.triggered.connect(self._on_save_image)
+        self.act_save_marked.triggered.connect(self._on_save_marked_image)
+
+        # ── 处理菜单 ──
+        self.act_align.triggered.connect(self._on_batch_align)
+        self.act_batch_process.triggered.connect(self._on_batch_process)
+        self.act_histogram.triggered.connect(self._on_toggle_histogram)
+
+        # ── AI 菜单 ──
+        self.act_detect.triggered.connect(self._on_batch_detect)
+        self.act_train.triggered.connect(self._on_open_training)
+        self.act_load_model.triggered.connect(self._on_load_model)
+        self.act_model_info.triggered.connect(self._on_model_info)
+
+        # ── 查询菜单 ──
+        self.act_query_vsx.triggered.connect(lambda: self._on_menu_query("vsx"))
+        self.act_query_mpc.triggered.connect(lambda: self._on_menu_query("mpc"))
+        self.act_query_simbad.triggered.connect(lambda: self._on_menu_query("simbad"))
+        self.act_query_tns.triggered.connect(lambda: self._on_menu_query("tns"))
+        self.act_query_satellite.triggered.connect(lambda: self._on_menu_query("satellite"))
+        self.act_mpc_report.triggered.connect(self._on_mpc_report)
+
+        # ── 视图菜单 ──
+        self.act_toggle_sidebar.triggered.connect(self.sidebar.toggle)
+        self.act_fit_view.triggered.connect(self.image_viewer.fit_in_view)
+        self.act_zoom_actual.triggered.connect(self._on_zoom_actual)
+        self.act_zoom_in.triggered.connect(self._on_zoom_in)
+        self.act_zoom_out.triggered.connect(self._on_zoom_out)
+        self.act_show_markers.toggled.connect(lambda _: self._update_markers())
+        self.act_show_mpcorb.toggled.connect(self._on_toggle_mpcorb)
+        self.act_show_known.toggled.connect(self._on_toggle_known)
+
+        # ── 设置菜单 ──
+        self.act_preferences.triggered.connect(self._on_open_preferences)
+        self.act_mpcorb_file.triggered.connect(self._on_select_mpcorb_file)
+        self.act_scheduler.triggered.connect(self._on_open_scheduler)
+
+        # ── 帮助菜单 ──
+        self.act_shortcut_help.triggered.connect(self._on_shortcut_help)
+        self.act_docs.triggered.connect(self._on_open_docs)
+        self.act_about.triggered.connect(self._on_about)
+
+        # ── 可疑目标表格 ──
         self.suspect_table.candidate_selected.connect(self._on_candidate_selected)
         self.suspect_table.candidate_double_clicked.connect(self._on_candidate_double_clicked)
 
-        # 图像查看器
+        # ── 图像查看器 ──
         self.image_viewer.point_clicked.connect(self._on_image_clicked)
         self.image_viewer.right_click.connect(self._on_image_right_click)
+        self.image_viewer.mouse_moved.connect(self._on_mouse_moved)
+        self.image_viewer.zoom_changed.connect(self._on_zoom_changed)
 
-        # 直方图
+        # ── 直方图 ──
         self.histogram_panel.stretch_changed.connect(self._on_stretch_changed)
 
     # ══════════════════════════════════════════════
@@ -524,6 +574,7 @@ class MainWindow(QMainWindow):
             "N": self._on_mark_bogus,
             "1": self._on_show_new,
             "2": self._on_show_old,
+            "F": self.image_viewer.fit_in_view,
             "Space": self._on_next_candidate,
             "Left": self._on_prev_pair,
             "Right": self._on_next_pair,
@@ -694,7 +745,8 @@ class MainWindow(QMainWindow):
 
     def _on_stretch_changed(self, black: float, white: float) -> None:
         """直方图拉伸参数变化 (仅影响显示)"""
-        # 拉伸逻辑将在 ImageProcessor 中实现
+        # TODO: 通过 ImageProcessor 对当前图像执行线性拉伸
+        #       使用 black/white 点映射像素范围，刷新 image_viewer 显示
         pass
 
     def _on_image_clicked(self, x: int, y: int) -> None:
@@ -719,16 +771,25 @@ class MainWindow(QMainWindow):
             )
 
         menu.addSeparator()
-        menu.addAction("📝 生成 MPC 80列报告")
+        act_mpc = menu.addAction("📝 生成 MPC 80列报告")
+        act_mpc.triggered.connect(
+            lambda checked, cx=x, cy=y: self._on_context_mpc_report(cx, cy)
+        )
         menu.addSeparator()
-        menu.addAction("➕ 手动添加候选体")
+        act_add_cand = menu.addAction("➕ 手动添加候选体")
+        act_add_cand.triggered.connect(
+            lambda checked, cx=x, cy=y: self._on_context_add_candidate(cx, cy)
+        )
         menu.addSeparator()
 
         act_copy_pixel = menu.addAction("📋 复制像素坐标")
         act_copy_pixel.triggered.connect(
             lambda: QApplication.clipboard().setText(f"{x}, {y}")
         )
-        menu.addAction("📋 复制天球坐标")
+        act_copy_wcs = menu.addAction("📋 复制天球坐标")
+        act_copy_wcs.triggered.connect(
+            lambda checked, cx=x, cy=y: self._on_copy_wcs_coordinates(cx, cy)
+        )
 
         menu.exec_(self.image_viewer.mapToGlobal(
             self.image_viewer.mapFromScene(float(x), float(y))
@@ -737,7 +798,10 @@ class MainWindow(QMainWindow):
     def _do_query(self, query_type: str, x: int, y: int) -> None:
         """执行外部查询"""
         self.statusBar().showMessage(f"正在查询 {query_type} ({x}, {y})...", 5000)
-        # 实际查询将通过 QueryService 实现
+        # TODO: 通过 QueryService 实现远程查询
+        #       1. 将像素坐标 (x, y) 转换为天球坐标 (RA, Dec)
+        #       2. 调用 QueryService.query_{query_type}(ra, dec)
+        #       3. 将结果展示在弹出窗口或侧边栏中
 
     def _on_prev_pair(self) -> None:
         """上一组图像配对"""
@@ -750,6 +814,229 @@ class MainWindow(QMainWindow):
         current = self.file_list.currentRow()
         if current < self.file_list.count() - 1:
             self.file_list.setCurrentRow(current + 1)
+
+    # ══════════════════════════════════════════════
+    #  TODO: 待完成的菜单 / 按钮处理方法
+    # ══════════════════════════════════════════════
+
+    # ── 文件菜单 ──
+
+    def _on_open_new_folder(self) -> None:
+        """打开新图文件夹"""
+        # TODO: 加载文件夹中的 FITS 文件到 file_list，
+        #       为每个文件创建配对，并设置 _new_image_data
+        folder = QFileDialog.getExistingDirectory(self, "选择新图文件夹")
+        if folder:
+            self.statusBar().showMessage(f"已选择新图文件夹: {folder}", 3000)
+
+    def _on_open_old_folder(self) -> None:
+        """打开旧图文件夹"""
+        # TODO: 加载文件夹中的 FITS 文件，
+        #       与新图配对并设置 _old_image_data
+        folder = QFileDialog.getExistingDirectory(self, "选择旧图文件夹")
+        if folder:
+            self.statusBar().showMessage(f"已选择旧图文件夹: {folder}", 3000)
+
+    def _on_save_image(self) -> None:
+        """保存当前图像"""
+        # TODO: 通过 FitsIO 将当前显示的图像数据保存为 FITS 文件
+        self.statusBar().showMessage("TODO: 保存当前图像", 3000)
+
+    def _on_save_marked_image(self) -> None:
+        """另存为带标记的图像"""
+        # TODO: 将当前图像连同候选标记一起导出为 PNG/FITS
+        path, _ = QFileDialog.getSaveFileName(
+            self, "另存为标记图", "", "PNG (*.png);;FITS (*.fits)"
+        )
+        if path:
+            self.statusBar().showMessage(f"TODO: 保存标记图到 {path}", 3000)
+
+    def _on_update_recent_menu(self) -> None:
+        """更新最近打开菜单"""
+        # TODO: 从 AppConfig 读取最近打开的文件夹列表，
+        #       填充 menu_recent 子菜单项并连接点击事件
+        self.menu_recent.clear()
+        self.menu_recent.addAction("(无最近打开)")
+
+    # ── 处理菜单 ──
+
+    def _on_batch_align(self) -> None:
+        """批量对齐"""
+        # TODO: 调用 ImageAligner 对当前文件夹中的图像进行批量对齐
+        self.statusBar().showMessage("TODO: 批量对齐 — 需要集成 ImageAligner", 3000)
+
+    def _on_batch_process(self) -> None:
+        """打开批量处理对话框"""
+        # TODO: 打开 BatchProcessDialog，获取参数后调用 ImageProcessor
+        from scann.gui.dialogs.batch_process_dialog import BatchProcessDialog
+        dlg = BatchProcessDialog(self)
+        dlg.exec_()
+
+    # ── AI 菜单 ──
+
+    def _on_batch_detect(self) -> None:
+        """批量检测"""
+        # TODO: 调用 DetectionService 对当前图像配对执行 AI 检测，
+        #       将结果通过 set_candidates() 设置到界面
+        self.statusBar().showMessage("TODO: 批量检测 — 需要集成 DetectionService", 3000)
+
+    def _on_open_training(self) -> None:
+        """打开训练对话框"""
+        # TODO: 打开 TrainingDialog，配置并启动模型训练
+        from scann.gui.dialogs.training_dialog import TrainingDialog
+        dlg = TrainingDialog(self)
+        dlg.exec_()
+
+    def _on_load_model(self) -> None:
+        """加载 AI 模型"""
+        # TODO: 通过 InferenceEngine 加载 .pth 模型文件
+        path, _ = QFileDialog.getOpenFileName(
+            self, "加载模型", "", "PyTorch 模型 (*.pth *.pt)"
+        )
+        if path:
+            self.statusBar().showMessage(f"TODO: 加载模型 {path}", 3000)
+
+    def _on_model_info(self) -> None:
+        """显示模型信息"""
+        # TODO: 显示当前已加载模型的架构、参数量、训练信息
+        self.statusBar().showMessage("TODO: 模型信息 — 需要 InferenceEngine 提供元数据", 3000)
+
+    # ── 查询菜单 ──
+
+    def _on_menu_query(self, query_type: str) -> None:
+        """从菜单栏触发的查询 (无坐标上下文)"""
+        # TODO: 若有选中候选体则使用其坐标查询，否则提示用户
+        if self._candidates and 0 <= self._current_candidate_idx < len(self._candidates):
+            cand = self._candidates[self._current_candidate_idx]
+            self._do_query(query_type, int(cand.x), int(cand.y))
+        else:
+            self.statusBar().showMessage(
+                "请先选中一个候选体，或在图像上右键进行坐标查询", 3000
+            )
+
+    def _on_mpc_report(self) -> None:
+        """打开 MPC 80列报告对话框"""
+        # TODO: 传入当前候选列表和观测信息
+        from scann.gui.dialogs.mpc_report_dialog import MpcReportDialog
+        dlg = MpcReportDialog(self)
+        dlg.exec_()
+
+    # ── 视图菜单 ──
+
+    def _on_zoom_actual(self) -> None:
+        """重置缩放到 100%"""
+        self.image_viewer.resetTransform()
+        self.image_viewer._zoom_level = 1.0
+        self.image_viewer._emit_zoom()
+
+    def _on_zoom_in(self) -> None:
+        """放大"""
+        factor = self.image_viewer.ZOOM_FACTOR
+        self.image_viewer.scale(factor, factor)
+        self.image_viewer._zoom_level *= factor
+        self.image_viewer._emit_zoom()
+
+    def _on_zoom_out(self) -> None:
+        """缩小"""
+        factor = 1.0 / self.image_viewer.ZOOM_FACTOR
+        self.image_viewer.scale(factor, factor)
+        self.image_viewer._zoom_level *= factor
+        self.image_viewer._emit_zoom()
+
+    def _on_toggle_mpcorb(self, checked: bool) -> None:
+        """切换 MPCORB 叠加显示"""
+        # TODO: 根据 checked 状态显示/隐藏 MPCORB 小行星轨道叠加层
+        self.statusBar().showMessage(
+            f"MPCORB 叠加: {'开启' if checked else '关闭'}", 2000
+        )
+
+    def _on_toggle_known(self, checked: bool) -> None:
+        """切换已知天体显示"""
+        # TODO: 根据 checked 状态显示/隐藏已知天体 (变星、小行星等) 标记
+        self.statusBar().showMessage(
+            f"已知天体标记: {'开启' if checked else '关闭'}", 2000
+        )
+
+    # ── 设置菜单 ──
+
+    def _on_open_preferences(self) -> None:
+        """打开首选项对话框"""
+        # TODO: 保存用户修改后重新加载配置
+        from scann.gui.dialogs.settings_dialog import SettingsDialog
+        dlg = SettingsDialog(self)
+        if dlg.exec_():
+            self.statusBar().showMessage("设置已保存", 3000)
+
+    def _on_select_mpcorb_file(self) -> None:
+        """选择 MPCORB 数据文件"""
+        # TODO: 更新配置并通过 MpcorbParser 重新加载小行星数据
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择 MPCORB 文件", "", "DAT 文件 (*.dat);;所有文件 (*)"
+        )
+        if path:
+            self.statusBar().showMessage(f"TODO: 加载 MPCORB 文件 {path}", 3000)
+
+    def _on_open_scheduler(self) -> None:
+        """打开计划任务设置"""
+        # TODO: 实现计划任务管理界面 (定时检测、自动下载等)
+        self.statusBar().showMessage("TODO: 计划任务 — 功能待设计", 3000)
+
+    # ── 帮助菜单 ──
+
+    def _on_shortcut_help(self) -> None:
+        """显示快捷键帮助对话框"""
+        from scann.gui.dialogs.shortcut_help_dialog import ShortcutHelpDialog
+        dlg = ShortcutHelpDialog(self)
+        dlg.exec_()
+
+    def _on_open_docs(self) -> None:
+        """打开使用文档"""
+        # TODO: 替换为项目实际文档 URL
+        import webbrowser
+        webbrowser.open("https://github.com/your-repo/scann-v2/wiki")
+
+    def _on_about(self) -> None:
+        """显示关于对话框"""
+        from PyQt5.QtWidgets import QMessageBox
+        QMessageBox.about(
+            self,
+            "关于 SCANN v2",
+            "<h3>SCANN v2</h3>"
+            "<p>Star/Source Classification and Analysis Neural Network</p>"
+            "<p>版本: 2.0.0-dev</p>"
+            "<p>基于深度学习的天文瞬变源自动检测工具</p>",
+        )
+
+    # ── 图像查看器信号处理 ──
+
+    def _on_mouse_moved(self, x: int, y: int) -> None:
+        """鼠标在图像上移动 → 更新状态栏像素坐标"""
+        self.status_pixel_coord.set_pixel_coordinates(x, y)
+        # TODO: 若已加载 WCS 头信息，同步更新天球坐标
+        # wcs_coord = self._pixel_to_wcs(x, y)
+        # if wcs_coord:
+        #     self.status_wcs_coord.set_wcs_coordinates(*wcs_coord)
+
+    def _on_zoom_changed(self, zoom_pct: float) -> None:
+        """缩放比例变化 → 更新状态栏"""
+        self.status_zoom.setText(f"{zoom_pct:.0f}%")
+
+    # ── 右键上下文菜单处理 ──
+
+    def _on_context_mpc_report(self, x: int, y: int) -> None:
+        """右键菜单 → 生成 MPC 报告"""
+        # TODO: 使用点击坐标定位候选体后打开 MPC 报告对话框
+        self._on_mpc_report()
+
+    def _on_context_add_candidate(self, x: int, y: int) -> None:
+        """右键菜单 → 手动添加候选体"""
+        # TODO: 在 (x, y) 位置创建手动候选体，添加到 _candidates 列表
+        self.statusBar().showMessage(f"TODO: 在 ({x}, {y}) 添加手动候选体", 3000)
+
+    def _on_copy_wcs_coordinates(self, x: int, y: int) -> None:
+        """右键菜单 → 复制天球坐标"""
+        # TODO: 将像素 (x, y) 通过 Astrometry 转换为 RA/Dec 并复制到剪贴板
+        self.statusBar().showMessage("TODO: 复制天球坐标 — 需要 WCS 信息", 3000)
 
     # ══════════════════════════════════════════════
     #  公共 API
