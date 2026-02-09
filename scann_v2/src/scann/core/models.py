@@ -284,3 +284,6 @@ class AppConfig:
     # MPCORB
     mpcorb_path: str = ""
     limit_magnitude: float = 20.0
+
+    # 最近打开
+    recent_folders: list = field(default_factory=list)  # 最近打开的文件夹列表

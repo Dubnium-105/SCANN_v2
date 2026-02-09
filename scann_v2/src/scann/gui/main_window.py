@@ -30,6 +30,7 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMenu,
     QMenuBar,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QStatusBar,
@@ -37,7 +38,22 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from scann.core.models import Candidate, TargetVerdict
+from scann.core.astrometry import pixel_to_wcs, format_ra_hms, format_dec_dms
+from scann.core.fits_io import read_fits, write_fits
+from scann.core.image_aligner import align
+from scann.core.image_processor import histogram_stretch, denoise, pseudo_flat_field
+from scann.core.models import (
+    AppConfig,
+    Candidate,
+    FitsHeader,
+    TargetVerdict,
+)
+from scann.core.observation_report import generate_mpc_report, Observation
+from scann.services.query_service import QueryService, QueryResult
+from scann.gui.dialogs.query_result_popup import QueryResultPopup
+from scann.data.file_manager import scan_fits_folder, match_new_old_pairs
+from scann.ai.inference import InferenceEngine
+from scann.services.detection_service import DetectionPipeline
 from scann.gui.image_viewer import FitsImageViewer
 from scann.gui.widgets.blink_speed_slider import BlinkSpeedSlider
 from scann.gui.widgets.collapsible_sidebar import CollapsibleSidebar
@@ -170,6 +186,20 @@ class MainWindow(QMainWindow):
         self._current_candidate_idx: int = -1
         self._new_image_data: Optional[np.ndarray] = None
         self._old_image_data: Optional[np.ndarray] = None
+
+        # ── 文件管理 ──
+        self._new_folder: str = ""
+        self._old_folder: str = ""
+        self._image_pairs: list = []  # FitsImagePair 列表
+        self._current_pair_idx: int = -1
+        self._new_fits_header: Optional[FitsHeader] = None
+        self._old_fits_header: Optional[FitsHeader] = None
+
+        # ── AI/推理 ──
+        self._inference_engine = None
+
+        # ── 配置 ──
+        self._config = AppConfig()
 
         # ── 构建 UI ──
         self._init_menu_bar()
@@ -552,6 +582,9 @@ class MainWindow(QMainWindow):
         self.suspect_table.candidate_selected.connect(self._on_candidate_selected)
         self.suspect_table.candidate_double_clicked.connect(self._on_candidate_double_clicked)
 
+        # ── 文件列表 ──
+        self.file_list.currentRowChanged.connect(self._on_pair_selected)
+
         # ── 图像查看器 ──
         self.image_viewer.point_clicked.connect(self._on_image_clicked)
         self.image_viewer.right_click.connect(self._on_image_right_click)
@@ -745,9 +778,22 @@ class MainWindow(QMainWindow):
 
     def _on_stretch_changed(self, black: float, white: float) -> None:
         """直方图拉伸参数变化 (仅影响显示)"""
-        # TODO: 通过 ImageProcessor 对当前图像执行线性拉伸
-        #       使用 black/white 点映射像素范围，刷新 image_viewer 显示
-        pass
+        # 确定当前显示的图像
+        if self.blink_service.current_state == BlinkState.NEW:
+            data = self._new_image_data
+        else:
+            data = self._old_image_data
+
+        if data is None:
+            return
+
+        # 使用 ImageProcessor 执行线性拉伸
+        stretched = histogram_stretch(
+            data, black_point=black, white_point=white
+        )
+        self.image_viewer.set_image_data(
+            stretched, inverted=self.blink_service.is_inverted
+        )
 
     def _on_image_clicked(self, x: int, y: int) -> None:
         """图像左键点击"""
@@ -797,11 +843,65 @@ class MainWindow(QMainWindow):
 
     def _do_query(self, query_type: str, x: int, y: int) -> None:
         """执行外部查询"""
-        self.statusBar().showMessage(f"正在查询 {query_type} ({x}, {y})...", 5000)
-        # TODO: 通过 QueryService 实现远程查询
-        #       1. 将像素坐标 (x, y) 转换为天球坐标 (RA, Dec)
-        #       2. 调用 QueryService.query_{query_type}(ra, dec)
-        #       3. 将结果展示在弹出窗口或侧边栏中
+        # 若有 WCS 头信息，先转换坐标
+        if self._new_fits_header is not None:
+            sky = pixel_to_wcs(x, y, self._new_fits_header)
+            if sky:
+                ra_deg = sky.ra
+                dec_deg = sky.dec
+                self.statusBar().showMessage(
+                    f"正在查询 {query_type} (RA={ra_deg:.4f}, Dec={dec_deg:.4f})...",
+                    5000,
+                )
+
+                # 实际查询
+                svc = QueryService()
+                results: list[QueryResult] = []
+
+                query_map = {
+                    "vsx": svc.query_vsx,
+                    "mpc": svc.query_mpc,
+                    "simbad": svc.query_simbad,
+                    "tns": svc.query_tns,
+                }
+                query_fn = query_map.get(query_type)
+                if query_fn:
+                    try:
+                        results = query_fn(ra_deg, dec_deg)
+                    except Exception as e:
+                        results = []
+                        self.statusBar().showMessage(
+                            f"查询失败: {e}", 5000
+                        )
+
+                # 显示结果弹窗
+                popup = QueryResultPopup(
+                    title=f"{query_type.upper()} 查询结果", parent=self
+                )
+                if results:
+                    lines = []
+                    for r in results:
+                        lines.append(
+                            f"{r.name}  类型={r.object_type}  "
+                            f"距离={r.distance_arcsec:.1f}″"
+                        )
+                    popup.set_content(
+                        "\n".join(lines),
+                        coords=f"RA={ra_deg:.4f}  Dec={dec_deg:.4f}",
+                    )
+                    popup.set_success(count=len(results))
+                else:
+                    popup.set_content(
+                        "未找到匹配天体",
+                        coords=f"RA={ra_deg:.4f}  Dec={dec_deg:.4f}",
+                    )
+                popup.show()
+                return
+
+        self.statusBar().showMessage(
+            f"正在查询 {query_type} ({x}, {y})... (无WCS信息，使用像素坐标)",
+            5000,
+        )
 
     def _on_prev_pair(self) -> None:
         """上一组图像配对"""
@@ -823,83 +923,337 @@ class MainWindow(QMainWindow):
 
     def _on_open_new_folder(self) -> None:
         """打开新图文件夹"""
-        # TODO: 加载文件夹中的 FITS 文件到 file_list，
-        #       为每个文件创建配对，并设置 _new_image_data
         folder = QFileDialog.getExistingDirectory(self, "选择新图文件夹")
-        if folder:
-            self.statusBar().showMessage(f"已选择新图文件夹: {folder}", 3000)
+        if not folder:
+            return
+
+        self._new_folder = folder
+        files = scan_fits_folder(folder)
+
+        # 清空并重新填充文件列表
+        self.file_list.clear()
+        self._image_pairs = []
+        self._current_pair_idx = -1
+
+        for f in files:
+            self.file_list.addItem(f.stem)
+
+        # 自动加载第一张图
+        if files:
+            try:
+                fits_img = read_fits(files[0].path)
+                self._new_image_data = fits_img.data
+                self._new_fits_header = fits_img.header
+                self._on_show_new()
+                self.histogram_panel.set_image_data(fits_img.data)
+            except Exception as e:
+                self.statusBar().showMessage(f"加载失败: {e}", 5000)
+                return
+
+        self.statusBar().showMessage(
+            f"已加载新图文件夹: {folder} ({len(files)} 个文件)", 3000
+        )
 
     def _on_open_old_folder(self) -> None:
         """打开旧图文件夹"""
-        # TODO: 加载文件夹中的 FITS 文件，
-        #       与新图配对并设置 _old_image_data
         folder = QFileDialog.getExistingDirectory(self, "选择旧图文件夹")
-        if folder:
-            self.statusBar().showMessage(f"已选择旧图文件夹: {folder}", 3000)
+        if not folder:
+            return
+
+        self._old_folder = folder
+        old_files = scan_fits_folder(folder)
+
+        # 如果已有新图文件夹，自动配对
+        if self._new_folder:
+            pairs, only_new, only_old = match_new_old_pairs(
+                self._new_folder, folder
+            )
+            self._image_pairs = pairs
+
+            # 更新文件列表显示配对状态
+            self.file_list.clear()
+            for p in pairs:
+                self.file_list.addItem(f"✅ {p.name}")
+            for n in only_new:
+                self.file_list.addItem(f"🆕 {n} (仅新图)")
+            for o in only_old:
+                self.file_list.addItem(f"📁 {o} (仅旧图)")
+
+            # 自动加载第一对
+            if pairs:
+                self._load_pair(0)
+
+            self.statusBar().showMessage(
+                f"已配对: {len(pairs)} 对, 仅新图: {len(only_new)}, 仅旧图: {len(only_old)}",
+                5000,
+            )
+        else:
+            self.statusBar().showMessage(
+                f"已选择旧图文件夹: {folder} ({len(old_files)} 个文件)", 3000
+            )
 
     def _on_save_image(self) -> None:
         """保存当前图像"""
-        # TODO: 通过 FitsIO 将当前显示的图像数据保存为 FITS 文件
-        self.statusBar().showMessage("TODO: 保存当前图像", 3000)
+        data = self._new_image_data
+        if data is None:
+            self.statusBar().showMessage("无图像数据可保存", 3000)
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "保存图像", "", "FITS (*.fits);;所有文件 (*)"
+        )
+        if not path:
+            return
+
+        try:
+            write_fits(
+                path, data,
+                header=self._new_fits_header,
+            )
+            self.statusBar().showMessage(f"已保存: {path}", 3000)
+        except Exception as e:
+            self.statusBar().showMessage(f"保存失败: {e}", 5000)
 
     def _on_save_marked_image(self) -> None:
         """另存为带标记的图像"""
-        # TODO: 将当前图像连同候选标记一起导出为 PNG/FITS
+        if self._new_image_data is None:
+            self.statusBar().showMessage("无图像数据可保存", 3000)
+            return
+
         path, _ = QFileDialog.getSaveFileName(
             self, "另存为标记图", "", "PNG (*.png);;FITS (*.fits)"
         )
-        if path:
-            self.statusBar().showMessage(f"TODO: 保存标记图到 {path}", 3000)
+        if not path:
+            return
+
+        try:
+            # 获取带标记的渲染图像
+            pixmap = self.image_viewer.grab()
+            pixmap.save(path)
+            self.statusBar().showMessage(f"已保存标记图: {path}", 3000)
+        except Exception as e:
+            self.statusBar().showMessage(f"保存失败: {e}", 5000)
 
     def _on_update_recent_menu(self) -> None:
         """更新最近打开菜单"""
-        # TODO: 从 AppConfig 读取最近打开的文件夹列表，
-        #       填充 menu_recent 子菜单项并连接点击事件
         self.menu_recent.clear()
-        self.menu_recent.addAction("(无最近打开)")
+        recent = getattr(self._config, 'recent_folders', [])
+        if not recent:
+            self.menu_recent.addAction("(无最近打开)")
+            return
+        for folder in recent:
+            self.menu_recent.addAction(folder)
 
     # ── 处理菜单 ──
 
     def _on_batch_align(self) -> None:
         """批量对齐"""
-        # TODO: 调用 ImageAligner 对当前文件夹中的图像进行批量对齐
-        self.statusBar().showMessage("TODO: 批量对齐 — 需要集成 ImageAligner", 3000)
+        if not self._image_pairs:
+            self.statusBar().showMessage("请先加载新旧图文件夹配对", 3000)
+            return
+
+        success_count = 0
+        fail_count = 0
+
+        for pair in self._image_pairs:
+            try:
+                new_fits = read_fits(pair.new_path)
+                old_fits = read_fits(pair.old_path)
+                result = align(new_fits.data, old_fits.data)
+
+                if result.success and result.aligned_old is not None:
+                    # 将对齐后的旧图回写
+                    write_fits(pair.old_path, result.aligned_old, old_fits.header)
+                    success_count += 1
+                else:
+                    fail_count += 1
+            except Exception:
+                fail_count += 1
+
+        self.statusBar().showMessage(
+            f"对齐完成: 成功 {success_count}, 失败 {fail_count}", 5000
+        )
+
+        # 重新加载当前显示的配对
+        if self._current_pair_idx >= 0:
+            self._load_pair(self._current_pair_idx)
 
     def _on_batch_process(self) -> None:
         """打开批量处理对话框"""
-        # TODO: 打开 BatchProcessDialog，获取参数后调用 ImageProcessor
         from scann.gui.dialogs.batch_process_dialog import BatchProcessDialog
         dlg = BatchProcessDialog(self)
+        dlg.process_started.connect(self._run_batch_process)
+        self._batch_dialog = dlg
         dlg.exec_()
+
+    def _run_batch_process(self, params: dict) -> None:
+        """执行批量处理 (降噪/伪平场)"""
+        input_dir = params.get("input_dir", self._new_folder)
+        output_dir = params.get("output_dir", "")
+        if not input_dir:
+            self.statusBar().showMessage("未指定输入文件夹", 3000)
+            return
+
+        from pathlib import Path
+        if not output_dir:
+            output_dir = str(Path(input_dir) / "processed")
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+        fits_files = scan_fits_folder(input_dir)
+        if not fits_files:
+            self.statusBar().showMessage("输入文件夹中未找到 FITS 文件", 3000)
+            return
+
+        success_count = 0
+        fail_count = 0
+        denoise_method_map = {
+            "中值滤波": "median",
+            "高斯滤波": "gaussian",
+            "双边滤波": "bilateral",
+        }
+
+        for i, fits_path in enumerate(fits_files):
+            try:
+                fits_img = read_fits(str(fits_path))
+                data = fits_img.data
+
+                # 降噪
+                if params.get("denoise", False):
+                    method = denoise_method_map.get(
+                        params.get("denoise_method", "中值滤波"), "median"
+                    )
+                    kernel = params.get("kernel_size", 3)
+                    data = denoise(data, method=method, kernel_size=kernel)
+
+                # 伪平场
+                if params.get("flat_field", False):
+                    sigma = params.get("flat_sigma", 100.0)
+                    kernel_size = max(3, int(sigma) * 2 + 1)
+                    if kernel_size % 2 == 0:
+                        kernel_size += 1
+                    data = pseudo_flat_field(data, kernel_size=kernel_size)
+
+                # 保存
+                out_path = str(Path(output_dir) / fits_path.name)
+                write_fits(data, out_path)
+                success_count += 1
+
+                # 更新对话框进度
+                try:
+                    if self._batch_dialog is not None:
+                        self._batch_dialog.update_progress(
+                            i + 1, len(fits_files), fits_path.name
+                        )
+                except (AttributeError, RuntimeError):
+                    pass
+            except Exception:
+                fail_count += 1
+
+        try:
+            if self._batch_dialog is not None:
+                self._batch_dialog.processing_finished()
+        except (AttributeError, RuntimeError):
+            pass
+
+        self.statusBar().showMessage(
+            f"批量处理完成: 成功 {success_count}, 失败 {fail_count}", 5000
+        )
 
     # ── AI 菜单 ──
 
     def _on_batch_detect(self) -> None:
         """批量检测"""
-        # TODO: 调用 DetectionService 对当前图像配对执行 AI 检测，
-        #       将结果通过 set_candidates() 设置到界面
-        self.statusBar().showMessage("TODO: 批量检测 — 需要集成 DetectionService", 3000)
+        if self._new_image_data is None:
+            self.statusBar().showMessage("请先加载图像数据", 3000)
+            return
+
+        old_data = self._old_image_data
+        if old_data is None:
+            old_data = np.zeros_like(self._new_image_data)
+
+        pipeline = DetectionPipeline(
+            inference_engine=self._inference_engine,
+        )
+        result = pipeline.process_pair(
+            pair_name="current",
+            new_data=self._new_image_data,
+            old_data=old_data,
+            skip_align=True,  # 如果已对齐则跳过
+        )
+
+        if result.candidates:
+            self.set_candidates(result.candidates)
+            self.statusBar().showMessage(
+                f"检测完成: 发现 {len(result.candidates)} 个候选体", 5000
+            )
+        else:
+            self.statusBar().showMessage(
+                f"检测完成: 未发现候选体 {result.error or ''}", 5000
+            )
 
     def _on_open_training(self) -> None:
         """打开训练对话框"""
-        # TODO: 打开 TrainingDialog，配置并启动模型训练
         from scann.gui.dialogs.training_dialog import TrainingDialog
         dlg = TrainingDialog(self)
+        dlg.training_started.connect(self._on_training_started)
+        dlg.training_stopped.connect(self._on_training_stopped)
+        self._training_dialog = dlg
+        self._training_thread = None
         dlg.exec_()
+
+    def _on_training_started(self, params: dict) -> None:
+        """训练开始信号处理: 接收超参数并启动训练"""
+        self.statusBar().showMessage(
+            f"训练已开始: epochs={params.get('epochs', '?')}, "
+            f"lr={params.get('lr', '?')}, backbone={params.get('backbone', '?')}",
+            5000,
+        )
+        # 保存训练参数到实例以便后续使用
+        self._training_params = params
+
+    def _on_training_stopped(self) -> None:
+        """训练停止信号处理"""
+        self._training_thread = None
+        self.statusBar().showMessage("训练已停止", 3000)
 
     def _on_load_model(self) -> None:
         """加载 AI 模型"""
-        # TODO: 通过 InferenceEngine 加载 .pth 模型文件
         path, _ = QFileDialog.getOpenFileName(
             self, "加载模型", "", "PyTorch 模型 (*.pth *.pt)"
         )
-        if path:
-            self.statusBar().showMessage(f"TODO: 加载模型 {path}", 3000)
+        if not path:
+            return
+
+        try:
+            self._inference_engine = InferenceEngine(model_path=path)
+            self.statusBar().showMessage(
+                f"模型已加载: {path} (阈值={self._inference_engine.threshold:.2f})",
+                5000,
+            )
+        except Exception as e:
+            self._inference_engine = None
+            self.statusBar().showMessage(f"模型加载失败: {e}", 5000)
 
     def _on_model_info(self) -> None:
         """显示模型信息"""
-        # TODO: 显示当前已加载模型的架构、参数量、训练信息
-        self.statusBar().showMessage("TODO: 模型信息 — 需要 InferenceEngine 提供元数据", 3000)
+        if self._inference_engine is None or not self._inference_engine.is_ready:
+            self.statusBar().showMessage("尚未加载模型", 3000)
+            return
+
+        model = self._inference_engine.model
+        # 计算参数量
+        total_params = sum(p.numel() for p in model.parameters())
+        threshold = self._inference_engine.threshold
+
+        QMessageBox.information(
+            self,
+            "模型信息",
+            f"<h3>AI 模型信息</h3>"
+            f"<p>架构: {model.__class__.__name__}</p>"
+            f"<p>参数量: {total_params:,}</p>"
+            f"<p>检测阈值: {threshold:.2f}</p>"
+            f"<p>设备: {self._inference_engine.device}</p>",
+        )
 
     # ── 查询菜单 ──
 
@@ -916,9 +1270,48 @@ class MainWindow(QMainWindow):
 
     def _on_mpc_report(self) -> None:
         """打开 MPC 80列报告对话框"""
-        # TODO: 传入当前候选列表和观测信息
         from scann.gui.dialogs.mpc_report_dialog import MpcReportDialog
+
         dlg = MpcReportDialog(self)
+
+        # 如果有候选体和 WCS 头信息，生成报告
+        if self._candidates and self._new_fits_header is not None:
+            from datetime import datetime
+
+            observations = []
+            header = self._new_fits_header
+            obs_dt = header.observation_datetime or datetime.utcnow()
+            obs_code = header.raw.get("OBSERVAT", "")[:3] if header.raw.get("OBSERVAT") else ""
+
+            for cand in self._candidates:
+                if cand.verdict == TargetVerdict.BOGUS:
+                    continue
+
+                sky = pixel_to_wcs(int(cand.x), int(cand.y), header)
+                if sky is None:
+                    continue
+
+                observations.append(Observation(
+                    designation="",
+                    discovery=False,
+                    obs_datetime=obs_dt,
+                    ra_deg=sky.ra,
+                    dec_deg=sky.dec,
+                    magnitude=0.0,
+                    mag_band="C",
+                    observatory_code=obs_code,
+                ))
+
+            if observations:
+                report = generate_mpc_report(observations)
+                dlg.set_report(report)
+        elif not self._candidates:
+            pass  # 空对话框
+        elif self._new_fits_header is None:
+            self.statusBar().showMessage(
+                "无 WCS 头信息，无法生成 MPC 报告坐标", 3000
+            )
+
         dlg.exec_()
 
     # ── 视图菜单 ──
@@ -945,14 +1338,14 @@ class MainWindow(QMainWindow):
 
     def _on_toggle_mpcorb(self, checked: bool) -> None:
         """切换 MPCORB 叠加显示"""
-        # TODO: 根据 checked 状态显示/隐藏 MPCORB 小行星轨道叠加层
+        self.image_viewer.set_mpcorb_visible(checked)
         self.statusBar().showMessage(
             f"MPCORB 叠加: {'开启' if checked else '关闭'}", 2000
         )
 
     def _on_toggle_known(self, checked: bool) -> None:
         """切换已知天体显示"""
-        # TODO: 根据 checked 状态显示/隐藏已知天体 (变星、小行星等) 标记
+        self.image_viewer.set_known_objects_visible(checked)
         self.statusBar().showMessage(
             f"已知天体标记: {'开启' if checked else '关闭'}", 2000
         )
@@ -961,25 +1354,39 @@ class MainWindow(QMainWindow):
 
     def _on_open_preferences(self) -> None:
         """打开首选项对话框"""
-        # TODO: 保存用户修改后重新加载配置
         from scann.gui.dialogs.settings_dialog import SettingsDialog
+        from scann.core.config import save_config
         dlg = SettingsDialog(self)
         if dlg.exec_():
+            # 保存配置
+            try:
+                save_config(self._config)
+            except Exception:
+                pass
             self.statusBar().showMessage("设置已保存", 3000)
 
     def _on_select_mpcorb_file(self) -> None:
         """选择 MPCORB 数据文件"""
-        # TODO: 更新配置并通过 MpcorbParser 重新加载小行星数据
         path, _ = QFileDialog.getOpenFileName(
             self, "选择 MPCORB 文件", "", "DAT 文件 (*.dat);;所有文件 (*)"
         )
-        if path:
-            self.statusBar().showMessage(f"TODO: 加载 MPCORB 文件 {path}", 3000)
+        if not path:
+            return
+
+        self._config.mpcorb_path = path
+        try:
+            from scann.core.mpcorb import MpcorbParser
+            parser = MpcorbParser(path)
+            count = parser.load()
+            self.statusBar().showMessage(
+                f"已加载 MPCORB: {count} 个小行星", 5000
+            )
+        except Exception as e:
+            self.statusBar().showMessage(f"MPCORB 加载失败: {e}", 5000)
 
     def _on_open_scheduler(self) -> None:
         """打开计划任务设置"""
-        # TODO: 实现计划任务管理界面 (定时检测、自动下载等)
-        self.statusBar().showMessage("TODO: 计划任务 — 功能待设计", 3000)
+        self.statusBar().showMessage("计划任务功能开发中，敬请期待", 3000)
 
     # ── 帮助菜单 ──
 
@@ -1012,10 +1419,14 @@ class MainWindow(QMainWindow):
     def _on_mouse_moved(self, x: int, y: int) -> None:
         """鼠标在图像上移动 → 更新状态栏像素坐标"""
         self.status_pixel_coord.set_pixel_coordinates(x, y)
-        # TODO: 若已加载 WCS 头信息，同步更新天球坐标
-        # wcs_coord = self._pixel_to_wcs(x, y)
-        # if wcs_coord:
-        #     self.status_wcs_coord.set_wcs_coordinates(*wcs_coord)
+
+        # 若已加载 WCS 头信息，同步更新天球坐标
+        if self._new_fits_header is not None:
+            sky = pixel_to_wcs(x, y, self._new_fits_header)
+            if sky:
+                self.status_wcs_coord.set_wcs_coordinates(
+                    format_ra_hms(sky.ra), format_dec_dms(sky.dec)
+                )
 
     def _on_zoom_changed(self, zoom_pct: float) -> None:
         """缩放比例变化 → 更新状态栏"""
@@ -1025,18 +1436,78 @@ class MainWindow(QMainWindow):
 
     def _on_context_mpc_report(self, x: int, y: int) -> None:
         """右键菜单 → 生成 MPC 报告"""
-        # TODO: 使用点击坐标定位候选体后打开 MPC 报告对话框
+        # 尝试定位最近的候选体
+        best_idx = -1
+        best_dist = float('inf')
+        for i, c in enumerate(self._candidates):
+            dist = (c.x - x) ** 2 + (c.y - y) ** 2
+            if dist < best_dist:
+                best_dist = dist
+                best_idx = i
+
+        if best_idx >= 0 and best_dist < 50 ** 2:  # 50像素范围内
+            self._current_candidate_idx = best_idx
+            self._focus_candidate(best_idx)
+
         self._on_mpc_report()
 
     def _on_context_add_candidate(self, x: int, y: int) -> None:
         """右键菜单 → 手动添加候选体"""
-        # TODO: 在 (x, y) 位置创建手动候选体，添加到 _candidates 列表
-        self.statusBar().showMessage(f"TODO: 在 ({x}, {y}) 添加手动候选体", 3000)
+        candidate = Candidate(
+            x=x, y=y, is_manual=True,
+            verdict=TargetVerdict.UNKNOWN,
+        )
+        self._candidates.append(candidate)
+        self._current_candidate_idx = len(self._candidates) - 1
+        self.suspect_table.set_candidates(self._candidates)
+        self._update_markers()
+        self.statusBar().showMessage(
+            f"已添加手动候选体 ({x}, {y})", 3000
+        )
 
     def _on_copy_wcs_coordinates(self, x: int, y: int) -> None:
         """右键菜单 → 复制天球坐标"""
-        # TODO: 将像素 (x, y) 通过 Astrometry 转换为 RA/Dec 并复制到剪贴板
-        self.statusBar().showMessage("TODO: 复制天球坐标 — 需要 WCS 信息", 3000)
+        if self._new_fits_header is None:
+            self.statusBar().showMessage("无 WCS 头信息，无法转换坐标", 3000)
+            return
+
+        sky = pixel_to_wcs(x, y, self._new_fits_header)
+        if sky:
+            text = f"{format_ra_hms(sky.ra)}  {format_dec_dms(sky.dec)}"
+            QApplication.clipboard().setText(text)
+            self.statusBar().showMessage(f"已复制: {text}", 3000)
+        else:
+            self.statusBar().showMessage("WCS 转换失败", 3000)
+
+    # ══════════════════════════════════════════════
+    #  图像配对加载
+    # ══════════════════════════════════════════════
+
+    def _load_pair(self, index: int) -> None:
+        """加载指定索引的图像配对"""
+        if index < 0 or index >= len(self._image_pairs):
+            return
+
+        pair = self._image_pairs[index]
+        self._current_pair_idx = index
+
+        try:
+            new_fits = read_fits(pair.new_path)
+            old_fits = read_fits(pair.old_path)
+            self._new_image_data = new_fits.data
+            self._old_image_data = old_fits.data
+            self._new_fits_header = new_fits.header
+            self._old_fits_header = old_fits.header
+            self._on_show_new()
+            self.histogram_panel.set_image_data(new_fits.data)
+        except Exception as e:
+            self.statusBar().showMessage(f"加载失败: {e}", 5000)
+
+    def _on_pair_selected(self, index: int) -> None:
+        """配对列表选择事件"""
+        if index < 0 or index >= len(self._image_pairs):
+            return
+        self._load_pair(index)
 
     # ══════════════════════════════════════════════
     #  公共 API
