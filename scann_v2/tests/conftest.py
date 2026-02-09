@@ -75,9 +75,37 @@ def synth_image_pair(synth_fits_data_16bit) -> tuple[np.ndarray, np.ndarray]:
 
 @pytest.fixture
 def tmp_dir() -> Generator[Path, None, None]:
-    """临时目录"""
+    """临时目录，自动清理日志handlers"""
+    import logging
+    from pathlib import Path
+    
     with tempfile.TemporaryDirectory() as d:
         yield Path(d)
+        # 清理后：关闭所有日志handlers以释放文件锁
+        try:
+            # 关闭root logger的handlers
+            root_logger = logging.getLogger()
+            for handler in root_logger.handlers[:]:
+                try:
+                    handler.flush()
+                    handler.close()
+                except Exception:
+                    pass
+                root_logger.removeHandler(handler)
+            
+            # 关闭所有子logger的handlers
+            for logger_name in list(logging.Logger.manager.loggerDict.keys()):
+                logger = logging.getLogger(logger_name)
+                for handler in logger.handlers[:]:
+                    try:
+                        handler.flush()
+                        handler.close()
+                    except Exception:
+                        pass
+                    logger.removeHandler(handler)
+        except Exception:
+            # 如果关闭handlers失败，继续清理临时目录
+            pass
 
 
 @pytest.fixture
@@ -192,3 +220,15 @@ def config_file(tmp_dir, sample_config_dict) -> Path:
 def db_path(tmp_dir) -> Path:
     """临时数据库路径"""
     return tmp_dir / "test_candidates.db"
+
+
+# ─── Monkeypatch ───
+
+
+@pytest.fixture
+def monkeypatch():
+    """monkeypatch fixture"""
+    from _pytest.monkeypatch import MonkeyPatch
+    m = MonkeyPatch()
+    yield m
+    m.undo()

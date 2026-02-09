@@ -1,27 +1,183 @@
 # SCANN (Star/Source Classification and Analysis Neural Network)
 
-这是一个用于天文图像（三联图）分类和数据管理的工具集。它包含了数据下载、模型训练、归一化参数计算以及一个基于 PyQt5 的图形用户界面。
+SCANN v2 是一个专业的天文图像分析工具，用于从新旧 FITS 图像中检测移动天体（如小行星、彗星）和暂现源（如超新星）。该项目采用分层架构设计，支持 AI 辅助检测、闪烁比对、MPC 报告生成等功能。
 
-## 项目结构
+## 版本说明
+
+本项目包含两个版本：
+- **v1（legacy）**: 基于三联图 JPG 的经典版本
+- **v2（推荐）**: 基于 FITS 文件的专业版本，功能更强大
+
+本文档主要描述 v2 版本。
+
+## v1 与 v2 对比
+
+| 特性 | v1 | v2 |
+|------|----|----|
+| 工作模式 | 三联图 JPG（差异图+新图+参考图） | 新旧 FITS 文件夹直接对比 |
+| 文件格式 | JPG/PNG | FITS（含 Header） |
+| 图像对齐 | 无 | 以新图为参考，仅移动旧图 |
+| AI 模式 | 小裁剪图分类 | 全图检测 + 方框/十字标记 |
+| 显存需求 | 无限制 | ≤ 8GB |
+| 叠加功能 | 无 | MPCORB 已知小行星叠加 |
+| 外部查询 | 无 | VSX/MPC/SIMBAD/TNS |
+| 归算报告 | 无 | MPC 80列格式 |
+| 闪烁比对 | 无 | 支持速度调节的实时闪烁 |
+
+## v2 项目结构
+
+```
+scann_v2/
+├── src/scann/              # 主要源代码
+│   ├── app.py             # 应用入口
+│   ├── ai/                # AI 模块（检测、训练、推理）
+│   ├── core/              # 核心业务逻辑（FITS IO、图像处理）
+│   ├── services/          # 服务层（闪烁、检测、查询）
+│   ├── gui/               # GUI 组件
+│   └── data/              # 数据管理
+├── tests/                 # 测试套件
+├── docs/                  # 文档（架构、UI/UX 设计）
+├── logs/                  # 日志文件
+└── pyproject.toml         # 项目配置
+```
+
+## v1 项目结构（遗留）
 
 - `SCANN.py`: 主 GUI 应用程序，支持数据下载、联动查看和分类。
 - `train_triplet_resnet_augmented.py`: 使用 ResNet-18 进行三联图分类的模型训练脚本，支持数据增强和加权采样。
 - `calc_triplet_mean_std.py`: 计算数据集均值和标准差的工具脚本，用于训练时的归一化。
-- `dataset/`: 存放训练数据的目录。
-  - `positive/`: 正样本 PNG 图像。
-  - `negative/`: 负样本 PNG 图像。
+- `dataset/`: 存放训练数据的目录（PNG 格式）。
 - `best_model.pth`: 训练好的模型权重文件。
-- `requirements.txt`: 项目依赖包列表。
+- `requirements.txt`: v1 版本依赖包列表。
 
-## 安装指南
+## v2 安装指南
 
-首先，请确保已安装 Python 3.7+。然后，使用以下命令安装依赖：
+### 环境要求
+
+- Python 3.9+
+- CUDA-capable GPU（可选，用于 AI 加速）
+- Windows / Linux / macOS
+
+### 安装步骤
+
+1. **克隆或下载项目**
+   ```bash
+   cd scann_v2
+   ```
+
+2. **创建虚拟环境（推荐）**
+   ```bash
+   python -m venv .venv
+   .venv\Scripts\activate  # Windows
+   # source .venv/bin/activate  # Linux/macOS
+   ```
+
+3. **安装项目**
+   ```bash
+   pip install -e .
+   ```
+
+   或安装开发版本（包含测试工具）：
+   ```bash
+   pip install -e ".[dev]"
+   ```
+
+### 可选：GPU 支持
+
+如果您有 NVIDIA GPU 并希望加速 AI 推理，请安装 CUDA 版本的 PyTorch：
 
 ```bash
-pip install -r requirements.txt
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 ```
 
-## 脚本使用方法
+## v2 使用方法
+
+### 1. 启动应用程序
+
+```bash
+# 方式一：直接运行
+python src/scann/app.py
+
+# 方式二：使用命令行工具（安装后）
+scann
+```
+
+### 2. 快速上手
+
+#### 加载数据
+1. 点击"打开"按钮，选择新图文件夹和旧图文件夹
+2. 程序会自动按文件名配对图像
+
+#### 闪烁比对
+- 按 `R` 键或点击"闪烁"按钮切换新旧图
+- 使用滑块调节闪烁速度（0.1s - 2.0s）
+
+#### AI 检测
+- 点击"AI 检测"按钮，系统自动扫描全图
+- 检测结果显示在侧边栏的可疑目标列表
+- 点击列表项可跳转到目标位置
+
+#### 标记目标
+- 在可疑目标上按 `Y` 标记为真目标
+- 按 `N` 标记为假目标
+- 真目标会显示方框标记，假目标显示十字标记
+
+#### 生成报告
+- 点击"生成报告"导出 MPC 80 列格式
+- 支持复制到剪贴板或保存为文本文件
+
+### 3. 快捷键
+
+| 快捷键 | 功能 |
+|--------|------|
+| `R` | 切换新旧图 / 闪烁 |
+| `N` | 标记为假目标 |
+| `Y` | 标记为真目标 |
+| `I` | 切换反色 |
+| 鼠标中键 | 拖动图像 |
+| 滚轮 | 缩放图像 |
+
+### 4. 高级功能
+
+#### MPCORB 叠加
+1. 在设置中配置望远镜参数（焦距、像素大小、天文台代码）
+2. 加载 MPCORB 文件
+3. 系统会自动计算并叠加已知小行星位置
+4. 按极限星等过滤暗目标
+
+#### 外部数据库查询
+- 右键点击可疑目标
+- 选择查询服务（VSX、MPC、SIMBAD、TNS）
+- 排除已知天体
+
+#### 图像处理
+- **直方图拉伸**: 调整显示范围，不改变原始数据
+- **去噪点**: 去除热像素
+- **伪平场**: 平滑背景
+- 所有处理仅影响显示，可另存为新 FITS 文件
+
+#### AI 训练
+1. 标记足够的真/假样本
+2. 点击"训练模型"打开训练对话框
+3. 配置训练参数并开始训练
+4. 训练完成后自动加载新模型
+
+### 5. 运行测试
+
+```bash
+# 运行所有测试
+pytest
+
+# 运行特定测试
+pytest tests/test_logger.py -v
+
+# 查看覆盖率
+pytest --cov=src/scann --cov-report=html
+```
+
+## v1 使用方法（遗留）
+
+如果您需要使用 v1 版本：
 
 ### 1. 主 GUI 程序 (`SCANN.py`)
 
@@ -59,48 +215,27 @@ pip install -r requirements.txt
   ```bash
   python calc_triplet_mean_std.py --neg dataset/negative --pos dataset/positive
   ```
-- **输出**: 脚本会输出 `mean` 和 `std`，你可以将其复制到训练脚本的 `Normalize` 转换中。
+- **输出**: 脚本会输出 `mean` 和 `std`，您可以将其复制到训练脚本的 `Normalize` 转换中。
 
-## 数据说明
+## 数据格式说明
 
-项目处理的是 **三联图 (Triplet Images)**，尺寸通常为 80x240 像素。这些图被水平切分为三部分：
+### v2: FITS 文件
+- 标准天文 FITS 格式
+- 包含完整的头信息（观测时间、坐标、曝光等）
+- 支持 16/32 位整数
+- 图像对齐以新图为参考，仅移动旧图
+
+### v1: 三联图 (Triplet Images)（遗留）
+项目处理的是 **三联图**，尺寸通常为 80x240 像素。这些图被水平切分为三部分：
 1. **左 (Diff)**: 差异图。
 2. **中 (New)**: 新发现的图像。
 3. **右 (Ref)**: 参考图像。
 
 这些图像按指定的通道顺序（如 0, 1, 2）堆叠成 3 通道张量输入神经网络。
 
-# SCANN v2 架构设计文档
+## 架构设计
 
-## 1. 概述
-
-SCANN v2 (Star/Source Classification and Analysis Neural Network) 是一个天文图像分析工具，
-用于从新旧天文图像中检测移动天体（如小行星、彗星）和暂现源（如超新星）。
-
-### 1.1 与 v1 的主要区别
-
-| 特性 | v1 | v2 |
-|------|----|----|
-| 工作模式 | 三联图 JPG（差异图+新图+参考图） | 新旧 FITS 文件夹直接对比 |
-| 文件格式 | JPG/PNG | FITS（含 Header） |
-| 图像对齐 | 无 | 以新图为参考，仅移动旧图 |
-| AI 模式 | 小裁剪图分类 | 全图检测 + 方框/十字标记 |
-| 显存需求 | 无限制 | ≤ 8GB |
-| 叠加功能 | 无 | MPCORB 已知小行星叠加 |
-| 外部查询 | 无 | VSX/MPC/SIMBAD/TNS |
-| 归算报告 | 无 | MPC 80列格式 |
-
-### 1.2 设计原则
-
-- **分层架构**: Core → Service → GUI，严格单向依赖
-- **TDD 驱动**: 测试先行，Core 层 100% 可测试
-- **FITS 优先**: 所有操作基于 FITS 数据和头信息
-- **显存友好**: AI 推理控制在 8GB 以内
-- **图像为王**: 所有 UI 控件为图像让路，侧边栏可折叠
-- **渐进式披露**: 首屏仅核心功能，高级功能通过菜单按需展开
-- **状态可见性**: 当前显示状态（新图/旧图/反色/闪烁）始终有明确视觉反馈
-
-## 2. 系统架构
+SCANN v2 采用分层架构设计：
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -134,116 +269,134 @@ SCANN v2 (Star/Source Classification and Analysis Neural Network) 是一个天�
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-## 3. 模块设计
+### 核心模块说明
 
-### 3.1 Core Layer (`src/scann/core/`)
+#### AI Layer
+- **SCANNDetector**: 全图目标检测模型（控制显存 ≤ 8GB）
+- **InferenceEngine**: GPU 推理管理，支持 CUDA 多线程并行
+- **Trainer**: 完整训练流程
+- **FitsDataset**: FITS 训练数据集管理
 
-纯业务逻辑，零 GUI 依赖，100% 单元可测试。
+#### Core Layer
+- **FitsIO**: FITS 文件读写操作
+- **ImageProcessor**: 图像处理（直方图拉伸、反色、去噪、伪平场）
+- **ImageAligner**: 图像对齐（以新图为参考，仅移动旧图）
+- **CandidateDetector**: 候选体检测
+- **Mpcorb**: MPCORB 文件处理和位置计算
+- **Astrometry**: 天文坐标转换
+- **ObservationReport**: MPC 80列报告生成
 
-#### fits_io.py - FITS 文件操作
-- `read_fits(path) -> FitsImage`: 读取 FITS 文件，返回数据+头信息
-- `write_fits(path, data, header, bit_depth)`: 保存为整数 FITS（16/32bit）
-- `read_header(path) -> dict`: 仅读取文件头
-- `get_observation_datetime(header) -> datetime`: 从头信息提取观测时间
-- **约束**: 保存时绝不修改 FITS 文件头
+#### Service Layer
+- **BlinkService**: 闪烁比对服务
+- **DetectionService**: 完整检测管线（对齐→检测→评分→排除→排序）
+- **QueryService**: 外部数据库查询（VSX/MPC/SIMBAD/TNS）
+- **ExclusionService**: 已知天体排除
+- **SchedulerService**: 计划任务（定时下载、自动检测）
 
-#### image_processor.py - 图像处理
-- `histogram_stretch(data, black_point, white_point) -> ndarray`: 直方图拉伸（仅显示）
-- `invert(data) -> ndarray`: 反色（仅显示）
-- `denoise(data, method) -> ndarray`: 去噪点
-- `pseudo_flat_field(data, kernel_size) -> ndarray`: 伪平场
+#### GUI Layer
+- **MainWindow**: 主窗口，可折叠侧边栏
+- **ImageViewer**: FITS 图像查看器
+- **Widgets**: 各种 UI 组件（表格、滑块、标签等）
+- **Dialogs**: 对话框（设置、训练、报告等）
 
-#### image_aligner.py - 图像对齐
-- `align(new_image, old_image) -> AlignResult`: 以新图为参考，仅移动旧图
-- `batch_align(new_images, old_images) -> list[AlignResult]`: 批量对齐
-- **约束**: 绝不移动新图
+## 常见问题
 
-#### candidate_detector.py - 候选体检测
-- `detect_candidates(new_data, old_data, params) -> list[Candidate]`: 检测可疑目标
-- `compute_features(candidate, new_data, old_data) -> CandidateFeatures`: 特征计算
+### Q: v1 和 v2 哪个版本更推荐使用？
+A: **v2** 是推荐版本。它支持 FITS 格式、全图 AI 检测、MPC 报告生成等更专业的功能。
 
-#### mpcorb.py - MPCORB 处理
-- `load_mpcorb(path) -> list[Asteroid]`: 加载 MPCORB 文件
-- `compute_positions(asteroids, datetime, observatory) -> list[SkyPosition]`: 计算位置
-- `filter_by_magnitude(asteroids, limit_mag) -> list[Asteroid]`: 按极限星等过滤
+### Q: GPU 是必须的吗？
+A: 不是必须的。CPU 可以运行，但 AI 推理速度会较慢。如果有 NVIDIA GPU，安装 CUDA 版本的 PyTorch 可以显著提升速度。
 
-#### astrometry.py - 天文坐标
-- `pixel_to_wcs(x, y, header) -> (ra, dec)`: 像素坐标→天球坐标
-- `wcs_to_pixel(ra, dec, header) -> (x, y)`: 天球坐标→像素坐标
-- `plate_solve(image, params) -> WCS`: 天文定位
+### Q: 如何提高 AI 检测准确率？
+A: 标记更多的真/假样本进行训练。建议每类至少 100 个样本，多样性越强效果越好。
 
-#### observation_report.py - 观测报告
-- `generate_mpc_report(observations, observatory_code) -> str`: 生成 MPC 80列报告
-- `format_80col_line(obs) -> str`: 格式化单行
+### Q: 图像对齐会修改原始 FITS 文件吗？
+A: 不会。所有图像处理操作仅影响显示，不会修改原始数据。如需保存处理后的图像，可以另存为新文件。
 
-#### config.py - 配置管理
-- `AppConfig`: 完整配置数据类
-- `TelescopeConfig`: 望远镜/相机参数（像素大小、焦距、旋转角等）
-- `load_config() / save_config()`: 持久化
+### Q: 如何配置望远镜参数？
+A: 在设置对话框中输入：
+- 像素大小（μm 或 arcsec/pix）
+- 焦距（mm）
+- 相机旋转角（°）
+- 天文台代码
 
-### 3.2 AI Layer (`src/scann/ai/`)
+### Q: MPC 报告可以直接提交吗？
+A: 可以。报告完全符合 MPC 80列格式标准。建议人工复核后再提交。
 
-#### model.py - 模型定义
-- `SCANNDetector`: 全图目标检测模型（控制显存 ≤ 8GB）
-- `SCANNClassifier`: 兼容 v1 的裁剪图分类器
+## 技术栈
 
-#### inference.py - 推理引擎
-- `InferenceEngine`: GPU 推理管理
-  - `detect(image) -> list[Detection]`: 全图检测
-  - `classify_patches(patches) -> list[float]`: 裁剪图分类
-  - CUDA 多线程并行计算
+- **GUI 框架**: PyQt5
+- **AI 框架**: PyTorch, torchvision
+- **天文数据处理**: astropy
+- **图像处理**: opencv-python, scikit-image
+- **数值计算**: numpy
+- **测试框架**: pytest, pytest-qt
 
-#### trainer.py - 训练管线
-- `Trainer`: 完整训练流程
-  - `train(config) -> TrainResult`: 训练
-  - `evaluate(model, dataset) -> Metrics`: 评估
+## 许可证
 
-#### dataset.py - 数据集
-- `FitsDataset`: FITS 训练数据集
-- `TargetAnnotation`: 目标标注（像素位置 + 类别）
+本项目遵循相关开源许可证。
 
-#### target_marker.py - 目标标记
-- `mark_target(image, position, marker_type) -> MarkedImage`: 在图上标记
-- `save_marked_fits(image, targets, original_header, save_path)`: 保存标记图
+## 贡献指南
 
-### 3.3 Data Layer (`src/scann/data/`)
+欢迎贡献代码、报告问题或提出建议！
 
-#### database.py - 数据库
-- `CandidateDatabase`: SQLite 候选体数据库（异步写入）
-- `LinkageDatabase`: FITS 联动数据库
+1. Fork 本项目
+2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
+3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
+4. 推送到分支 (`git push origin feature/AmazingFeature`)
+5. 开启 Pull Request
 
-#### file_manager.py - 文件管理
-- `scan_fits_folder(path) -> list[FitsFileInfo]`: 扫描 FITS 文件夹
-- `match_new_old_pairs(new_folder, old_folder) -> list[ImagePair]`: 新旧图配对
-- `organize_training_data(...)`: 训练数据组织
+## 联系方式
 
-#### downloader.py - 下载引擎（继承 v1）
+如有问题或建议，请通过以下方式联系：
+- 提交 Issue
+- 发送邮件
 
-### 3.4 Service Layer (`src/scann/services/`)
+---
 
-协调多个 Core 模块完成复杂业务流程。
+**SCANN v2** - 让天文图像分析更高效！
 
-#### blink_service.py - 闪烁服务
-- `BlinkService`: 管理闪烁状态和速度
-  - `start(speed_ms)` / `stop()` / `tick() -> which_image`
+## 附录
 
-#### detection_service.py - 检测管线
-- `DetectionPipeline`: 完整检测流程
-  1. 对齐 → 2. 检测候选 → 3. AI 评分 → 4. 排除已知 → 5. 排序输出
+### 详细的架构设计
 
-#### query_service.py - 外部查询
-- `query_vsx(ra, dec)` / `query_mpc(ra, dec)` / `query_simbad(ra, dec)` / `query_tns(ra, dec)`
-- `check_artificial_satellite(ra, dec, datetime)`
+如需了解更详细的架构设计、模块说明和 UI/UX 设计，请参阅 `scann_v2/docs/` 目录下的文档：
 
-#### exclusion_service.py - 已知排除
-- `ExclusionService`: 综合 MPCORB + 外部查询排除已知天体
+- `architecture.md` - 完整的系统架构设计文档
+- `ui_ux_design.md` - UI/UX 设计文档
+- `new requirements.md` - 详细的功能需求
+- `TODO.md` - 开发进度和待办事项
 
-#### scheduler_service.py - 计划任务
-- `SchedulerService`: 定时爬取 HMT 目录、自动下载、自动检测
+### v1 与 v2 的技术细节对比
 
-### 3.5 GUI Layer (`src/scann/gui/`)
+| 方面 | v1 | v2 |
+|------|----|----|
+| **数据格式** | JPG/PNG 三联图 | FITS（完整头信息） |
+| **图像处理** | 无对齐 | 以新图为参考自动对齐 |
+| **AI 模型** | ResNet-18 分类器 | 全图检测器（显存≤8GB） |
+| **输入方式** | 80x240 三联图 | 新旧 FITS 文件夹 |
+| **标注方式** | 标注图像类别 | 方框/十字标记目标位置 |
+| **检测方式** | 分类真/假 | 检测 + 评分 + 排序 |
+| **坐标支持** | 无 | 完整 WCS 天球坐标 |
+| **报告生成** | 无 | MPC 80 列标准格式 |
+| **已知排除** | 无 | MPCORB + 外部查询 |
+| **测试覆盖** | 无 | pytest 完整测试套件 |
 
-> 详见 [UI/UX 设计文档](ui_ux_design.md)
+### 日志系统
+
+v2 版本内置完善的日志系统，所有操作都会记录到 `logs/scann.log` 文件中。日志包含：
+- 应用启动和关闭事件
+- 文件加载和保存操作
+- AI 检测和训练过程
+- 错误和异常信息
+
+### 配置文件
+
+v2 使用 `SCANN_config.json` 存储应用配置，包括：
+- 望远镜参数（焦距、像素大小、旋转角）
+- 天文台代码
+- AI 模型路径
+- 界面偏好设置
 
 #### main_window.py - 主窗口
 - **菜单栏**: 文件 | 处理 | AI | 查询 | 视图 | 设置 | 帮助
