@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+import logging
+
 import numpy as np
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QKeySequence
@@ -49,6 +51,7 @@ from scann.core.models import (
     TargetVerdict,
 )
 from scann.core.observation_report import generate_mpc_report, Observation
+from scann.logger_config import get_logger
 from scann.services.query_service import QueryService, QueryResult
 from scann.gui.dialogs.query_result_popup import QueryResultPopup
 from scann.data.file_manager import scan_fits_folder, match_new_old_pairs
@@ -201,6 +204,9 @@ class MainWindow(QMainWindow):
         # ── 配置 ──
         self._config = AppConfig()
 
+        # ── 日志 ──
+        self._logger = get_logger(__name__)
+
         # ── 构建 UI ──
         self._init_menu_bar()
         self._init_central_ui()
@@ -208,6 +214,25 @@ class MainWindow(QMainWindow):
         self._init_histogram_dock()
         self._connect_signals()
         self._init_shortcuts()
+
+    # ══════════════════════════════════════════════
+    #  日志和消息输出
+    # ══════════════════════════════════════════════
+
+    def _show_message(self, message: str, timeout: int = 3000, level: str = 'INFO') -> None:
+        """统一的消息输出方法，同时输出到状态栏、终端和日志
+
+        Args:
+            message: 消息内容
+            timeout: 状态栏显示超时时间（毫秒）
+            level: 日志级别 (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        """
+        # 输出到状态栏（左下角）
+        self.statusBar().showMessage(message, timeout)
+
+        # 输出到终端和日志
+        log_level = getattr(logging, level.upper(), logging.INFO)
+        self._logger.log(log_level, message)
 
     # ══════════════════════════════════════════════
     #  菜单栏
@@ -714,9 +739,7 @@ class MainWindow(QMainWindow):
         candidate.verdict = TargetVerdict.REAL
         self.suspect_table.update_candidate(self._current_candidate_idx)
         self._update_markers()
-        self.statusBar().showMessage(
-            f"候选 #{self._current_candidate_idx + 1} → 真目标", 3000
-        )
+        self._show_message(f"候选 #{self._current_candidate_idx + 1} → 真目标")
 
     def _on_mark_bogus(self) -> None:
         """标记当前候选为假目标"""
@@ -729,9 +752,7 @@ class MainWindow(QMainWindow):
         candidate.verdict = TargetVerdict.BOGUS
         self.suspect_table.update_candidate(self._current_candidate_idx)
         self._update_markers()
-        self.statusBar().showMessage(
-            f"候选 #{self._current_candidate_idx + 1} → 假目标", 3000
-        )
+        self._show_message(f"候选 #{self._current_candidate_idx + 1} → 假目标")
 
     def _on_next_candidate(self) -> None:
         """跳转到下一个候选体"""
@@ -849,10 +870,7 @@ class MainWindow(QMainWindow):
             if sky:
                 ra_deg = sky.ra
                 dec_deg = sky.dec
-                self.statusBar().showMessage(
-                    f"正在查询 {query_type} (RA={ra_deg:.4f}, Dec={dec_deg:.4f})...",
-                    5000,
-                )
+                self._show_message(f"正在查询 {query_type} (RA={ra_deg:.4f}, Dec={dec_deg:.4f})...", 5000)
 
                 # 实际查询
                 svc = QueryService()
@@ -870,9 +888,7 @@ class MainWindow(QMainWindow):
                         results = query_fn(ra_deg, dec_deg)
                     except Exception as e:
                         results = []
-                        self.statusBar().showMessage(
-                            f"查询失败: {e}", 5000
-                        )
+                        self._show_message(f"查询失败: {e}", 5000, level='WARNING')
 
                 # 显示结果弹窗
                 popup = QueryResultPopup(
@@ -898,9 +914,8 @@ class MainWindow(QMainWindow):
                 popup.show()
                 return
 
-        self.statusBar().showMessage(
-            f"正在查询 {query_type} ({x}, {y})... (无WCS信息，使用像素坐标)",
-            5000,
+        self._show_message(
+            f"正在查询 {query_type} ({x}, {y})... (无WCS信息，使用像素坐标)", 5000
         )
 
     def _on_prev_pair(self) -> None:
@@ -947,12 +962,10 @@ class MainWindow(QMainWindow):
                 self._on_show_new()
                 self.histogram_panel.set_image_data(fits_img.data)
             except Exception as e:
-                self.statusBar().showMessage(f"加载失败: {e}", 5000)
+                self._show_message(f"加载失败: {e}", 5000, level='ERROR')
                 return
 
-        self.statusBar().showMessage(
-            f"已加载新图文件夹: {folder} ({len(files)} 个文件)", 3000
-        )
+        self._show_message(f"已加载新图文件夹: {folder} ({len(files)} 个文件)")
 
     def _on_open_old_folder(self) -> None:
         """打开旧图文件夹"""
@@ -983,20 +996,17 @@ class MainWindow(QMainWindow):
             if pairs:
                 self._load_pair(0)
 
-            self.statusBar().showMessage(
-                f"已配对: {len(pairs)} 对, 仅新图: {len(only_new)}, 仅旧图: {len(only_old)}",
-                5000,
+            self._show_message(
+                f"已配对: {len(pairs)} 对, 仅新图: {len(only_new)}, 仅旧图: {len(only_old)}", 5000
             )
         else:
-            self.statusBar().showMessage(
-                f"已选择旧图文件夹: {folder} ({len(old_files)} 个文件)", 3000
-            )
+            self._show_message(f"已选择旧图文件夹: {folder} ({len(old_files)} 个文件)")
 
     def _on_save_image(self) -> None:
         """保存当前图像"""
         data = self._new_image_data
         if data is None:
-            self.statusBar().showMessage("无图像数据可保存", 3000)
+            self._show_message("无图像数据可保存")
             return
 
         path, _ = QFileDialog.getSaveFileName(
@@ -1010,14 +1020,14 @@ class MainWindow(QMainWindow):
                 path, data,
                 header=self._new_fits_header,
             )
-            self.statusBar().showMessage(f"已保存: {path}", 3000)
+            self._show_message(f"已保存: {path}")
         except Exception as e:
-            self.statusBar().showMessage(f"保存失败: {e}", 5000)
+            self._show_message(f"保存失败: {e}", 5000, level='ERROR')
 
     def _on_save_marked_image(self) -> None:
         """另存为带标记的图像"""
         if self._new_image_data is None:
-            self.statusBar().showMessage("无图像数据可保存", 3000)
+            self._show_message("无图像数据可保存")
             return
 
         path, _ = QFileDialog.getSaveFileName(
@@ -1030,9 +1040,9 @@ class MainWindow(QMainWindow):
             # 获取带标记的渲染图像
             pixmap = self.image_viewer.grab()
             pixmap.save(path)
-            self.statusBar().showMessage(f"已保存标记图: {path}", 3000)
+            self._show_message(f"已保存标记图: {path}")
         except Exception as e:
-            self.statusBar().showMessage(f"保存失败: {e}", 5000)
+            self._show_message(f"保存失败: {e}", 5000, level='ERROR')
 
     def _on_update_recent_menu(self) -> None:
         """更新最近打开菜单"""
@@ -1049,7 +1059,7 @@ class MainWindow(QMainWindow):
     def _on_batch_align(self) -> None:
         """批量对齐"""
         if not self._image_pairs:
-            self.statusBar().showMessage("请先加载新旧图文件夹配对", 3000)
+            self._show_message("请先加载新旧图文件夹配对")
             return
 
         success_count = 0
@@ -1070,9 +1080,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 fail_count += 1
 
-        self.statusBar().showMessage(
-            f"对齐完成: 成功 {success_count}, 失败 {fail_count}", 5000
-        )
+        self._show_message(f"对齐完成: 成功 {success_count}, 失败 {fail_count}", 5000)
 
         # 重新加载当前显示的配对
         if self._current_pair_idx >= 0:
@@ -1091,7 +1099,7 @@ class MainWindow(QMainWindow):
         input_dir = params.get("input_dir", self._new_folder)
         output_dir = params.get("output_dir", "")
         if not input_dir:
-            self.statusBar().showMessage("未指定输入文件夹", 3000)
+            self._show_message("未指定输入文件夹")
             return
 
         from pathlib import Path
@@ -1101,7 +1109,7 @@ class MainWindow(QMainWindow):
 
         fits_files = scan_fits_folder(input_dir)
         if not fits_files:
-            self.statusBar().showMessage("输入文件夹中未找到 FITS 文件", 3000)
+            self._show_message("输入文件夹中未找到 FITS 文件")
             return
 
         success_count = 0
@@ -1155,16 +1163,14 @@ class MainWindow(QMainWindow):
         except (AttributeError, RuntimeError):
             pass
 
-        self.statusBar().showMessage(
-            f"批量处理完成: 成功 {success_count}, 失败 {fail_count}", 5000
-        )
+        self._show_message(f"批量处理完成: 成功 {success_count}, 失败 {fail_count}", 5000)
 
     # ── AI 菜单 ──
 
     def _on_batch_detect(self) -> None:
         """批量检测"""
         if self._new_image_data is None:
-            self.statusBar().showMessage("请先加载图像数据", 3000)
+            self._show_message("请先加载图像数据")
             return
 
         old_data = self._old_image_data
@@ -1183,13 +1189,9 @@ class MainWindow(QMainWindow):
 
         if result.candidates:
             self.set_candidates(result.candidates)
-            self.statusBar().showMessage(
-                f"检测完成: 发现 {len(result.candidates)} 个候选体", 5000
-            )
+            self._show_message(f"检测完成: 发现 {len(result.candidates)} 个候选体", 5000)
         else:
-            self.statusBar().showMessage(
-                f"检测完成: 未发现候选体 {result.error or ''}", 5000
-            )
+            self._show_message(f"检测完成: 未发现候选体 {result.error or ''}", 5000)
 
     def _on_open_training(self) -> None:
         """打开训练对话框"""
@@ -1203,10 +1205,9 @@ class MainWindow(QMainWindow):
 
     def _on_training_started(self, params: dict) -> None:
         """训练开始信号处理: 接收超参数并启动训练"""
-        self.statusBar().showMessage(
+        self._show_message(
             f"训练已开始: epochs={params.get('epochs', '?')}, "
-            f"lr={params.get('lr', '?')}, backbone={params.get('backbone', '?')}",
-            5000,
+            f"lr={params.get('lr', '?')}, backbone={params.get('backbone', '?')}", 5000
         )
         # 保存训练参数到实例以便后续使用
         self._training_params = params
@@ -1214,7 +1215,7 @@ class MainWindow(QMainWindow):
     def _on_training_stopped(self) -> None:
         """训练停止信号处理"""
         self._training_thread = None
-        self.statusBar().showMessage("训练已停止", 3000)
+        self._show_message("训练已停止")
 
     def _on_load_model(self) -> None:
         """加载 AI 模型"""
@@ -1226,18 +1227,17 @@ class MainWindow(QMainWindow):
 
         try:
             self._inference_engine = InferenceEngine(model_path=path)
-            self.statusBar().showMessage(
-                f"模型已加载: {path} (阈值={self._inference_engine.threshold:.2f})",
-                5000,
+            self._show_message(
+                f"模型已加载: {path} (阈值={self._inference_engine.threshold:.2f})", 5000
             )
         except Exception as e:
             self._inference_engine = None
-            self.statusBar().showMessage(f"模型加载失败: {e}", 5000)
+            self._show_message(f"模型加载失败: {e}", 5000, level='ERROR')
 
     def _on_model_info(self) -> None:
         """显示模型信息"""
         if self._inference_engine is None or not self._inference_engine.is_ready:
-            self.statusBar().showMessage("尚未加载模型", 3000)
+            self._show_message("尚未加载模型")
             return
 
         model = self._inference_engine.model
@@ -1264,9 +1264,7 @@ class MainWindow(QMainWindow):
             cand = self._candidates[self._current_candidate_idx]
             self._do_query(query_type, int(cand.x), int(cand.y))
         else:
-            self.statusBar().showMessage(
-                "请先选中一个候选体，或在图像上右键进行坐标查询", 3000
-            )
+            self._show_message("请先选中一个候选体，或在图像上右键进行坐标查询")
 
     def _on_mpc_report(self) -> None:
         """打开 MPC 80列报告对话框"""
@@ -1308,9 +1306,7 @@ class MainWindow(QMainWindow):
         elif not self._candidates:
             pass  # 空对话框
         elif self._new_fits_header is None:
-            self.statusBar().showMessage(
-                "无 WCS 头信息，无法生成 MPC 报告坐标", 3000
-            )
+            self._show_message("无 WCS 头信息，无法生成 MPC 报告坐标")
 
         dlg.exec_()
 
@@ -1339,16 +1335,12 @@ class MainWindow(QMainWindow):
     def _on_toggle_mpcorb(self, checked: bool) -> None:
         """切换 MPCORB 叠加显示"""
         self.image_viewer.set_mpcorb_visible(checked)
-        self.statusBar().showMessage(
-            f"MPCORB 叠加: {'开启' if checked else '关闭'}", 2000
-        )
+        self._show_message(f"MPCORB 叠加: {'开启' if checked else '关闭'}", 2000)
 
     def _on_toggle_known(self, checked: bool) -> None:
         """切换已知天体显示"""
         self.image_viewer.set_known_objects_visible(checked)
-        self.statusBar().showMessage(
-            f"已知天体标记: {'开启' if checked else '关闭'}", 2000
-        )
+        self._show_message(f"已知天体标记: {'开启' if checked else '关闭'}", 2000)
 
     # ── 设置菜单 ──
 
@@ -1363,7 +1355,7 @@ class MainWindow(QMainWindow):
                 save_config(self._config)
             except Exception:
                 pass
-            self.statusBar().showMessage("设置已保存", 3000)
+            self._show_message("设置已保存")
 
     def _on_select_mpcorb_file(self) -> None:
         """选择 MPCORB 数据文件"""
@@ -1378,15 +1370,13 @@ class MainWindow(QMainWindow):
             from scann.core.mpcorb import MpcorbParser
             parser = MpcorbParser(path)
             count = parser.load()
-            self.statusBar().showMessage(
-                f"已加载 MPCORB: {count} 个小行星", 5000
-            )
+            self._show_message(f"已加载 MPCORB: {count} 个小行星", 5000)
         except Exception as e:
-            self.statusBar().showMessage(f"MPCORB 加载失败: {e}", 5000)
+            self._show_message(f"MPCORB 加载失败: {e}", 5000, level='ERROR')
 
     def _on_open_scheduler(self) -> None:
         """打开计划任务设置"""
-        self.statusBar().showMessage("计划任务功能开发中，敬请期待", 3000)
+        self._show_message("计划任务功能开发中，敬请期待")
 
     # ── 帮助菜单 ──
 
@@ -1398,9 +1388,8 @@ class MainWindow(QMainWindow):
 
     def _on_open_docs(self) -> None:
         """打开使用文档"""
-        # TODO: 替换为项目实际文档 URL
         import webbrowser
-        webbrowser.open("https://github.com/your-repo/scann-v2/wiki")
+        webbrowser.open("https://github.com/Dubnium-105/SCANN_v2/wiki")
 
     def _on_about(self) -> None:
         """显示关于对话框"""
@@ -1461,23 +1450,21 @@ class MainWindow(QMainWindow):
         self._current_candidate_idx = len(self._candidates) - 1
         self.suspect_table.set_candidates(self._candidates)
         self._update_markers()
-        self.statusBar().showMessage(
-            f"已添加手动候选体 ({x}, {y})", 3000
-        )
+        self._show_message(f"已添加手动候选体 ({x}, {y})")
 
     def _on_copy_wcs_coordinates(self, x: int, y: int) -> None:
         """右键菜单 → 复制天球坐标"""
         if self._new_fits_header is None:
-            self.statusBar().showMessage("无 WCS 头信息，无法转换坐标", 3000)
+            self._show_message("无 WCS 头信息，无法转换坐标")
             return
 
         sky = pixel_to_wcs(x, y, self._new_fits_header)
         if sky:
             text = f"{format_ra_hms(sky.ra)}  {format_dec_dms(sky.dec)}"
             QApplication.clipboard().setText(text)
-            self.statusBar().showMessage(f"已复制: {text}", 3000)
+            self._show_message(f"已复制: {text}")
         else:
-            self.statusBar().showMessage("WCS 转换失败", 3000)
+            self._show_message("WCS 转换失败")
 
     # ══════════════════════════════════════════════
     #  图像配对加载
@@ -1501,7 +1488,7 @@ class MainWindow(QMainWindow):
             self._on_show_new()
             self.histogram_panel.set_image_data(new_fits.data)
         except Exception as e:
-            self.statusBar().showMessage(f"加载失败: {e}", 5000)
+            self._show_message(f"加载失败: {e}", 5000, level='ERROR')
 
     def _on_pair_selected(self, index: int) -> None:
         """配对列表选择事件"""
