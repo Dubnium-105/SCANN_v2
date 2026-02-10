@@ -191,6 +191,21 @@ class SettingsDialog(QDialog):
         self.spin_patch_size.setSuffix(" px")
         model_form.addRow("切片大小:", self.spin_patch_size)
 
+        # 模型格式选择
+        self.combo_model_format = QComboBox()
+        self.combo_model_format.addItems([
+            "auto (自动检测)",
+            "v1_classifier (SCANN v1)",
+            "v2_classifier (SCANN v2)",
+        ])
+        self.combo_model_format.setToolTip(
+            "选择模型文件格式\n"
+            "auto: 自动检测 v1/v2 格式\n"
+            "v1_classifier: SCANN v1 原始 ResNet18 格式\n"
+            "v2_classifier: SCANN v2 带 backbone 前缀格式"
+        )
+        model_form.addRow("模型格式:", self.combo_model_format)
+
         layout.addWidget(grp_model)
 
         # 推理参数
@@ -287,6 +302,11 @@ class SettingsDialog(QDialog):
         self.spin_min_area.setValue(getattr(cfg, "min_area", 3))
         self.spin_confidence.setValue(getattr(cfg, "ai_confidence", 0.5))
 
+        # 模型格式
+        model_format = getattr(cfg, "model_format", "auto")
+        format_map = {"auto": 0, "v1_classifier": 1, "v2_classifier": 2}
+        self.combo_model_format.setCurrentIndex(format_map.get(model_format, 0))
+
     def _save_to_config(self) -> None:
         """将 UI 设置写回 Config"""
         cfg = self.config
@@ -295,6 +315,10 @@ class SettingsDialog(QDialog):
         cfg.sigma_threshold = self.spin_sigma.value()
         cfg.min_area = self.spin_min_area.value()
         cfg.ai_confidence = self.spin_confidence.value()
+
+        # 模型格式
+        format_values = ["auto", "v1_classifier", "v2_classifier"]
+        cfg.model_format = format_values[self.combo_model_format.currentIndex()]
         cfg.save()
 
     def _on_ok(self) -> None:

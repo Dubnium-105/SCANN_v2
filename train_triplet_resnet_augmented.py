@@ -1,10 +1,21 @@
 import os
+import sys
 import argparse
 import time
 import copy
 import random
 import numpy as np
 from PIL import Image
+from pathlib import Path
+
+# 设置PyTorch模型下载路径到项目内（必须在导入torch之前设置）
+project_root = Path(__file__).parent
+model_cache_dir = project_root / "models" / "torch_cache"
+model_cache_dir.mkdir(parents=True, exist_ok=True)
+
+# 设置环境变量
+os.environ['TORCH_HOME'] = str(model_cache_dir)
+os.environ['TORCH_HUB_DIR'] = str(model_cache_dir)
 
 import torch
 import torch.nn as nn
@@ -14,6 +25,10 @@ from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from torchvision import models, transforms
 from torchvision.transforms import functional as TF
 from sklearn.metrics import average_precision_score
+
+# 确认缓存目录
+torch.hub.set_dir(str(model_cache_dir))
+print(f"PyTorch模型缓存目录: {model_cache_dir}")
 
 # -------------------------
 #  1. Dataset (含强力增强)

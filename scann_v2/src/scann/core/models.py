@@ -271,6 +271,7 @@ class AppConfig:
 
     # AI 参数
     model_path: str = ""
+    model_format: str = "auto"  # "auto", "v1_classifier", "v2_classifier"
     crowd_high_score: float = 0.85
     crowd_high_count: int = 10
     crowd_high_penalty: float = 0.50

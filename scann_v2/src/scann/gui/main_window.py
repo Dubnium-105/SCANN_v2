@@ -1200,25 +1200,60 @@ class MainWindow(QMainWindow):
         dlg.training_started.connect(self._on_training_started)
         dlg.training_stopped.connect(self._on_training_stopped)
         self._training_dialog = dlg
-        self._training_thread = None
+        self._training_worker = None
         dlg.exec_()
 
     def _on_training_started(self, params: dict) -> None:
-        """训练开始信号处理: 接收超参数并启动训练"""
+        """训练开始信号处理: 接收超参数并启动训练线程"""
         self._show_message(
             f"训练已开始: epochs={params.get('epochs', '?')}, "
-            f"lr={params.get('lr', '?')}, backbone={params.get('backbone', '?')}", 5000
+            f"lr={params.get('lr', '?')}, backbone={params.get('backbone', '?')}, "
+            f"device={params.get('device', 'auto')}", 5000
         )
         # 保存训练参数到实例以便后续使用
         self._training_params = params
 
+        # 创建并启动训练工作线程
+        from scann.ai.training_worker import TrainingWorker
+
+        self._training_worker = TrainingWorker(params, parent=self)
+        self._training_worker.progress.connect(self._on_training_progress)
+        self._training_worker.finished.connect(self._on_training_finished)
+        self._training_worker.error.connect(self._on_training_error)
+        self._training_worker.start()
+
+    def _on_training_progress(self, epoch: int, total: int, loss: float, val_loss: float) -> None:
+        """训练进度更新"""
+        if self._training_dialog:
+            self._training_dialog.update_progress(epoch, total, loss, val_loss)
+
+    def _on_training_finished(self, model_path: str, metrics: dict) -> None:
+        """训练完成"""
+        if self._training_dialog:
+            self._training_dialog.training_finished(model_path)
+        self._training_worker = None
+        best_f2 = metrics.get('best_f2', 0)
+        best_threshold = metrics.get('best_threshold', 0.5)
+        self._show_message(
+            f"训练完成! 最佳 F2={best_f2:.4f}, 阈值={best_threshold:.3f}", 5000
+        )
+
+    def _on_training_error(self, message: str) -> None:
+        """训练出错"""
+        if self._training_dialog:
+            self._training_dialog.log_text.appendPlainText(f"❌ 错误: {message}")
+        self._training_worker = None
+        self._show_message(f"训练失败: {message}", 5000, level='ERROR')
+
     def _on_training_stopped(self) -> None:
         """训练停止信号处理"""
-        self._training_thread = None
+        if self._training_worker:
+            self._training_worker.stop()
+        self._training_worker = None
         self._show_message("训练已停止")
 
     def _on_load_model(self) -> None:
-        """加载 AI 模型"""
+        """加载 AI 模型 (支持 v1/v2 格式自动检测)"""
         path, _ = QFileDialog.getOpenFileName(
             self, "加载模型", "", "PyTorch 模型 (*.pth *.pt)"
         )
@@ -1226,9 +1261,15 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            self._inference_engine = InferenceEngine(model_path=path)
+            from scann.ai.inference import InferenceConfig
+            config = InferenceConfig(
+                model_format=getattr(self._config, 'model_format', 'auto')
+            )
+            self._inference_engine = InferenceEngine(model_path=path, config=config)
+            fmt_info = getattr(self._inference_engine, '_model_format', None)
+            fmt_str = fmt_info.value if fmt_info else 'unknown'
             self._show_message(
-                f"模型已加载: {path} (阈值={self._inference_engine.threshold:.2f})", 5000
+                f"模型已加载: {path} (格式={fmt_str}, 阈值={self._inference_engine.threshold:.2f})", 5000
             )
         except Exception as e:
             self._inference_engine = None
@@ -1244,12 +1285,15 @@ class MainWindow(QMainWindow):
         # 计算参数量
         total_params = sum(p.numel() for p in model.parameters())
         threshold = self._inference_engine.threshold
+        fmt_info = getattr(self._inference_engine, '_model_format', None)
+        fmt_str = fmt_info.value if fmt_info else 'unknown'
 
         QMessageBox.information(
             self,
             "模型信息",
             f"<h3>AI 模型信息</h3>"
             f"<p>架构: {model.__class__.__name__}</p>"
+            f"<p>模型格式: {fmt_str}</p>"
             f"<p>参数量: {total_params:,}</p>"
             f"<p>检测阈值: {threshold:.2f}</p>"
             f"<p>设备: {self._inference_engine.device}</p>",

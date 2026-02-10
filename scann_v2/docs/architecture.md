@@ -207,10 +207,16 @@ SCANN v2 (Star/Source Classification and Analysis Neural Network) 是一个天�
 - `blink_speed_slider.py` (**新增**): 带数值显示的闪烁速度控制 (50~2000ms)
 - `collapsible_sidebar.py` (**新增**): 可折叠/展开的侧面板
 - `mpcorb_overlay.py` (**新增**): 图像上的已知小行星叠加绘制层
+- `annotation_viewer.py` (**新增**): 标注专用图像查看器，支持边界框绘制/编辑
+- `triplet_preview.py` (**新增**): 三联图放大并排显示面板
+- `annotation_stats.py` (**新增**): 标注进度/类别统计面板
+- `annotation_list.py` (**新增**): v2标注框列表 + 属性编辑
+- `draw_toolbar.py` (**新增**): 绘制工具栏 (框选/点标/移动/缩放)
 
 #### dialogs/ - 对话框 (**新增目录**)
 - `settings_dialog.py`: 分页设置 (望远镜/天文台/检测/AI/保存/高级)
 - `training_dialog.py`: AI 训练配置 + 进度监控 + Loss 曲线
+- `annotation_dialog.py` (**新增**): 标注工具对话框，双模式(v1三联图/v2 FITS)，策略模式后端
 - `batch_process_dialog.py`: 批量降噪/伪平场，另存为 FITS
 - `mpc_report_dialog.py`: MPC 80 列报告预览/复制/导出
 - `query_result_popup.py`: 外部查询结果浮窗
@@ -243,6 +249,7 @@ SCANN v2 (Star/Source Classification and Analysis Neural Network) 是一个天�
 | Ctrl+, | 打开设置 |
 | Ctrl+S | 保存当前图像 |
 | Ctrl+E | 导出 MPC 报告 |
+| Ctrl+L | 打开标注工具 |
 | ← / → | 上/下一组图像配对 |
 
 ### 4.3 快捷键约束
@@ -258,6 +265,23 @@ FITS文件夹(旧) ─┘                                        ↑
                                                     MPCORB + 外部查询
 
 可疑列表 ──→ 人工复核 (Y/N) ──→ MPC 80列报告
+```
+
+### 标注数据流
+
+```
+三联图文件夹 (v1) ──→ TripletAnnotationBackend ──┐
+FITS 图像目录 (v2) ──→ FitsAnnotationBackend    ──┤
+                                                           ├─→ AnnotationDialog
+                       AI 模型 ──→ 预标注 ──────────┘
+                                                               │
+                                                           用户标注
+                                                               │
+                                                   ┌───────┼───────┐
+                                                   │              │       │
+                                             positive/   annotations.json  COCO/YOLO
+                                             negative/   (v2格式)          (导出)
+                                             (v1格式)
 ```
 
 ## 6. GUI 信号-槽连接

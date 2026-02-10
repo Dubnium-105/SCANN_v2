@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -51,6 +52,7 @@ class TrainingDialog(QDialog):
 
         self._is_training = False
         self._init_ui()
+        self._refresh_cuda_status()  # 初始化时检测CUDA状态
 
     def _init_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -115,6 +117,35 @@ class TrainingDialog(QDialog):
         self.combo_backbone.addItems(["ResNet18", "ResNet34", "ResNet50"])
         hyper_form.addRow("骨干网络:", self.combo_backbone)
 
+        # 设备选择
+        device_layout = QHBoxLayout()
+        self.combo_device = QComboBox()
+        self.combo_device.addItem("Auto (优先CUDA)", "auto")
+        self.combo_device.addItem("CUDA", "cuda:0")
+        self.combo_device.addItem("CPU", "cpu")
+        self.combo_device.setToolTip(
+            "选择训练设备\n"
+            "Auto: 有CUDA则使用cuda:0，否则cpu\n"
+            "CUDA: 强制使用cuda:0（不可用则回退cpu）\n"
+            "CPU: 强制使用cpu"
+        )
+        device_layout.addWidget(self.combo_device)
+        
+        # CUDA状态标签
+        self.lbl_cuda_status = QLabel()
+        self.lbl_cuda_status.setStyleSheet("font-size: 11px; color: #666;")
+        self.lbl_cuda_status.setWordWrap(True)
+        self.lbl_cuda_status.setMaximumWidth(200)
+        device_layout.addWidget(self.lbl_cuda_status)
+        
+        # 刷新按钮
+        self.btn_refresh_cuda = QPushButton("刷新")
+        self.btn_refresh_cuda.setMaximumWidth(50)
+        self.btn_refresh_cuda.clicked.connect(self._refresh_cuda_status)
+        device_layout.addWidget(self.btn_refresh_cuda)
+        
+        hyper_form.addRow("训练设备:", device_layout)
+
         self.chk_augment = QCheckBox("数据增强")
         self.chk_augment.setChecked(True)
         hyper_form.addRow(self.chk_augment)
@@ -127,6 +158,19 @@ class TrainingDialog(QDialog):
         self.spin_patience.setRange(1, 50)
         self.spin_patience.setValue(10)
         hyper_form.addRow("Patience:", self.spin_patience)
+
+        # 模型保存格式
+        self.combo_save_format = QComboBox()
+        self.combo_save_format.addItems([
+            "v2_classifier (SCANN v2 推荐)",
+            "v1_classifier (SCANN v1 兼容)",
+        ])
+        self.combo_save_format.setToolTip(
+            "选择训练后模型的保存格式\n"
+            "v2_classifier: 新版格式，带格式元数据\n"
+            "v1_classifier: 兼容旧版的格式"
+        )
+        hyper_form.addRow("保存格式:", self.combo_save_format)
 
         layout.addWidget(grp_hyper)
 
@@ -210,9 +254,11 @@ class TrainingDialog(QDialog):
             "lr": self.spin_lr.value(),
             "optimizer": self.combo_optimizer.currentText(),
             "backbone": self.combo_backbone.currentText(),
+            "device": (self.combo_device.currentData() or "auto"),
             "augment": self.chk_augment.isChecked(),
             "early_stop": self.chk_early_stop.isChecked(),
             "patience": self.spin_patience.value(),
+            "save_format": ["v2_classifier", "v1_classifier"][self.combo_save_format.currentIndex()],
         }
         self.training_started.emit(params)
 
@@ -227,3 +273,76 @@ class TrainingDialog(QDialog):
         path = QFileDialog.getExistingDirectory(self, "选择文件夹")
         if path:
             line_edit.setText(path)
+
+    def _refresh_cuda_status(self) -> None:
+        """刷新CUDA状态显示"""
+        self.lbl_cuda_status.setText("检测中...")
+        self.lbl_cuda_status.setStyleSheet("font-size: 11px; color: #666;")
+        self.lbl_cuda_status.repaint()
+        
+        # 刷新UI
+        from PyQt5.QtWidgets import QApplication
+        QApplication.processEvents()
+        
+        # 直接调用检查
+        self._check_cuda_availability()
+
+    def _check_cuda_availability(self) -> None:
+        """检查CUDA可用性并更新状态标签"""
+        try:
+            import torch
+        except ImportError:
+            self.lbl_cuda_status.setText("❌ PyTorch未安装")
+            self.lbl_cuda_status.setStyleSheet("font-size: 11px; color: #f44336;")
+            return
+        
+        if torch.cuda.is_available():
+            # CUDA可用
+            count = torch.cuda.device_count()
+            current_device = torch.cuda.current_device()
+            device_name = torch.cuda.get_device_name(current_device)
+            cuda_version = torch.version.cuda
+            
+            msg = f"✅ CUDA可用\n"
+            msg += f"  • 版本: {cuda_version}\n"
+            msg += f"  • 设备数: {count}\n"
+            msg += f"  • 当前: {device_name}"
+            
+            self.lbl_cuda_status.setText(msg)
+            self.lbl_cuda_status.setStyleSheet("font-size: 11px; color: #4CAF50;")
+            
+            # 确保CUDA选项可用
+            if self.combo_device.findData("cuda:0") == -1:
+                self.combo_device.insertItem(1, "CUDA", "cuda:0")
+        else:
+            # CUDA不可用，显示可能的原因
+            msg = "❌ CUDA不可用\n"
+            msg += "可能原因:\n"
+            
+            # 检查是否是CPU版本PyTorch
+            if not hasattr(torch, 'cuda'):
+                msg += "  • PyTorch CPU版未支持CUDA"
+            elif not torch.cuda.is_available():
+                # 检查CUDA是否安装
+                try:
+                    import subprocess
+                    result = subprocess.run(
+                        ["nvidia-smi"], 
+                        capture_output=True, 
+                        text=True,
+                        timeout=2,
+                        shell=True
+                    )
+                    if result.returncode != 0:
+                        msg += "  • NVIDIA驱动未安装或nvidia-smi不可用\n"
+                        msg += "  • 需要安装NVIDIA显卡驱动"
+                    else:
+                        msg += "  • 驱动已安装\n"
+                        msg += "  • 可能是PyTorch CPU版\n"
+                        msg += "  • 检查命令: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118"
+                except Exception:
+                    msg += "  • 无法检测NVIDIA驱动\n"
+                    msg += "  • 请确保安装了NVIDIA显卡和驱动"
+            
+            self.lbl_cuda_status.setText(msg)
+            self.lbl_cuda_status.setStyleSheet("font-size: 11px; color: #f44336;")
