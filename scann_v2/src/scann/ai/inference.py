@@ -26,6 +26,7 @@ class InferenceConfig:
     max_memory_mb: int = 8000  # 8GB 显存限制
     use_amp: bool = True       # 混合精度
     device: str = "auto"       # "auto", "cuda:0", "cpu"
+    model_format: str = "auto" # "auto", "v1_classifier", "v2_classifier"
 
 
 class InferenceEngine:
@@ -52,14 +53,27 @@ class InferenceEngine:
         return torch.device(self.config.device)
 
     def _load_model(self, path: str) -> None:
-        """加载模型"""
-        from scann.ai.model import SCANNClassifier
-        self.model = SCANNClassifier.load_from_checkpoint(path, self.device)
+        """加载模型 (自动检测 v1/v2 格式)"""
+        from scann.ai.model import ModelFormat, SCANNClassifier
+
+        # 解析模型格式
+        try:
+            fmt = ModelFormat(self.config.model_format)
+        except ValueError:
+            fmt = ModelFormat.AUTO
+
+        self.model = SCANNClassifier.load_from_checkpoint(
+            path, self.device, model_format=fmt
+        )
+        self._model_format = fmt
 
         # 尝试读取保存的阈值
         ckpt = torch.load(path, map_location="cpu", weights_only=False)
         if isinstance(ckpt, dict):
             self._threshold = ckpt.get("threshold", 0.5)
+            # 如果 checkpoint 中有格式元数据，记录下来
+            if "model_format" in ckpt:
+                self._model_format = ModelFormat(ckpt["model_format"])
 
     @property
     def is_ready(self) -> bool:

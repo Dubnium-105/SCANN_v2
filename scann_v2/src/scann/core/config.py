@@ -94,6 +94,7 @@ def load_config(
 
     # AI 参数
     config.model_path = data.get("model_path", "")
+    config.model_format = data.get("model_format", "auto")
     config.crowd_high_score = data.get("crowd_high_score", 0.85)
     config.crowd_high_count = data.get("crowd_high_count", 10)
     config.crowd_high_penalty = data.get("crowd_high_penalty", 0.50)
@@ -156,6 +157,7 @@ def save_config(
         "kill_flat": config.kill_flat,
         "kill_dipole": config.kill_dipole,
         "model_path": config.model_path,
+        "model_format": config.model_format,
         "crowd_high_score": config.crowd_high_score,
         "crowd_high_count": config.crowd_high_count,
         "crowd_high_penalty": config.crowd_high_penalty,

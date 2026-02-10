@@ -55,6 +55,21 @@ class TestTrainingDialogInit:
         items = [dialog.combo_backbone.itemText(i) for i in range(dialog.combo_backbone.count())]
         assert "ResNet18" in items
 
+    def test_device_options_and_default(self, dialog):
+        items = [dialog.combo_device.itemText(i) for i in range(dialog.combo_device.count())]
+        assert any("Auto" in x for x in items)
+        assert "CUDA" in items
+        assert "CPU" in items
+        assert dialog.combo_device.currentData() == "auto"
+
+    def test_cuda_status_label_exists(self, dialog):
+        assert hasattr(dialog, 'lbl_cuda_status')
+        assert dialog.lbl_cuda_status.text() != ""
+
+    def test_cuda_refresh_button_exists(self, dialog):
+        assert hasattr(dialog, 'btn_refresh_cuda')
+        assert dialog.btn_refresh_cuda.isEnabled()
+
 
 class TestOnStart:
     """测试开始训练"""
@@ -77,6 +92,7 @@ class TestOnStart:
         assert params["neg_dir"] == "/some/neg"
         assert params["epochs"] == 50
         assert params["batch_size"] == 32
+        assert params["device"] == "auto"
 
     def test_start_disables_button(self, dialog):
         dialog.edit_pos_dir.setText("/pos")

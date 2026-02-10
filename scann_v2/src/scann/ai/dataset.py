@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import random
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 import numpy as np
+from torchvision import transforms
 
 
 class TripletDataset:
@@ -66,6 +68,111 @@ class TripletDataset:
             np.array(im.crop((0, 0, 80, 80)), dtype=np.float32) / 255.0,
             np.array(im.crop((80, 0, 160, 80)), dtype=np.float32) / 255.0,
             np.array(im.crop((160, 0, 240, 80)), dtype=np.float32) / 255.0,
+        ]
+        return [parts[i] for i in self.channel_order]
+
+    def get_label_counts(self) -> dict:
+        """统计各类别数量"""
+        counts = {0: 0, 1: 0}
+        for _, y in self.samples:
+            counts[y] = counts.get(y, 0) + 1
+        return counts
+
+
+class TripletPNGDataset:
+    """三联图 PyTorch 数据集 (支持 transform 和 tensor 返回)
+
+    与 TripletDataset 类似，但返回 PyTorch tensor 格式，
+    并支持数据增强和归一化。
+    """
+
+    def __init__(
+        self,
+        root_dir: str = "",  # 仅用于兼容，实际使用 samples
+        split: str = "train",
+        indices: Optional[List[int]] = None,
+        channel_order: Tuple[int, int, int] = (0, 1, 2),
+        resize: int = 224,
+        mean: Tuple[float, ...] = (0.264, 0.282, 0.284),
+        std: Tuple[float, ...] = (0.089, 0.123, 0.128),
+        augment: bool = True,
+        samples: Optional[List[Tuple[str, int]]] = None,  # 新增：支持传入预构建的样本列表
+    ):
+        self.root_dir = Path(root_dir) if root_dir else Path("")
+        self.split = split
+        self.channel_order = channel_order
+        self.resize = resize
+        self.mean = mean
+        self.std = std
+        self.augment = augment and (split == "train")
+
+        # 收集样本（优先使用传入的 samples）
+        self.samples: List[Tuple[str, int]] = []
+        if samples is not None:
+            self.samples = samples
+        else:
+            # 兼容旧逻辑：从目录收集
+            for label_name, y in [("negative", 0), ("positive", 1)]:
+                folder = self.root_dir / label_name
+                if not folder.is_dir():
+                    continue
+                for fn in sorted(folder.iterdir()):
+                    if fn.suffix.lower() == ".png":
+                        self.samples.append((str(fn), y))
+
+        if indices is not None:
+            # 应用索引筛选
+            self.samples = [self.samples[i] for i in indices]
+
+        # 基础 transform
+        self.base_transform = transforms.Compose([
+            transforms.Resize((resize, resize)),
+            transforms.ToTensor(),
+        ])
+        self.normalize = transforms.Normalize(list(mean), list(std))
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, idx: int):
+        import torch
+        from torchvision.transforms import functional as TF
+
+        path, y = self.samples[idx]
+        parts = self._read_triplet_images(path)
+
+        # 转换为 tensor
+        tensors = [self.base_transform(p) for p in parts]
+        x = torch.cat(tensors, dim=0)  # [3, H, W]
+
+        # 数据增强
+        if self.augment:
+            if random.random() < 0.5:
+                x = TF.hflip(x)
+            if random.random() < 0.5:
+                x = TF.vflip(x)
+            k = random.randint(0, 3)
+            if k > 0:
+                x = torch.rot90(x, k, dims=[1, 2])
+
+        # 归一化
+        x = self.normalize(x)
+
+        return x, torch.tensor(y, dtype=torch.long)
+
+    def _read_triplet_images(self, path: str) -> List:
+        """读取三联图并切分（返回 PIL Image）"""
+        from PIL import Image
+
+        im = Image.open(path).convert("L")
+        w, h = im.size
+        if w < 240 or h < 80:
+            raise ValueError(f"尺寸不符: {w}x{h} for {path}")
+
+        parts = [
+            im.crop((0, 0, 80, 80)),
+            im.crop((80, 0, 160, 80)),
+            im.crop((160, 0, 240, 80)),
         ]
         return [parts[i] for i in self.channel_order]
 

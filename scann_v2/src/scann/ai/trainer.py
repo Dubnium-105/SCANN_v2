@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
 
 import numpy as np
+import torch
+import torch.nn as nn
 
 
 @dataclass
@@ -43,16 +45,23 @@ class TrainMetrics:
     f2_score: float = 0.0
 
 
-class FocalLoss:
-    """Focal Loss 实现"""
+class FocalLoss(nn.Module):
+    """Focal Loss 实现
+
+    参考: https://arxiv.org/abs/1708.02002
+    用于处理类别不平衡问题
+
+    Args:
+        gamma: 聚焦参数，越大越关注难分类样本
+        alpha: 类别权重，可以是 float（所有样本相同权重）或 list/tensor（每个类别不同权重）
+    """
 
     def __init__(self, gamma: float = 2.0, alpha: Optional[float] = None):
+        super().__init__()
         self.gamma = gamma
         self.alpha = alpha
 
-    def __call__(self, logits, targets):
-        import torch
-
+    def forward(self, logits, targets):
         logp = torch.log_softmax(logits, dim=1)
         p = torch.softmax(logits, dim=1)
         t = targets.view(-1, 1)
@@ -61,7 +70,20 @@ class FocalLoss:
         loss = -(1 - p_t) ** self.gamma * logp_t
 
         if self.alpha is not None:
-            loss = self.alpha * loss
+            # 如果 alpha 是列表或 tensor，根据样本的标签选择对应的权重
+            if isinstance(self.alpha, (list, tuple)):
+                alpha_t = torch.tensor(self.alpha, dtype=logits.dtype, device=logits.device)
+                # 选择每个样本对应类别的权重
+                alpha_per_sample = alpha_t[t]
+                loss = alpha_per_sample * loss
+            elif isinstance(self.alpha, torch.Tensor):
+                # 如果是 tensor，直接使用（确保在正确的设备上）
+                alpha_t = self.alpha.to(dtype=logits.dtype, device=logits.device)
+                alpha_per_sample = alpha_t[t]
+                loss = alpha_per_sample * loss
+            else:
+                # alpha 是 float，对所有样本使用相同权重
+                loss = self.alpha * loss
 
         return loss.mean()
 
