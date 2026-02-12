@@ -83,6 +83,24 @@ SHORTCUT_TO_DETAIL_TYPE: dict[str, DetailType] = {
     "N5": DetailType.CORRESPONDING,
 }
 
+# 详细类型颜色映射
+DETAIL_TYPE_COLOR: dict[DetailType, str] = {
+    # A. 真类 - 绿色系
+    DetailType.ASTEROID: "#2E7D32",         # 深绿
+    DetailType.SUPERNOVA: "#00E676",        # 鲜绿
+    DetailType.VARIABLE_STAR: "#69F0AE",    # 浅绿
+    # B. 假类 - 红色/橙色/灰色系
+    DetailType.SATELLITE_TRAIL: "#C62828",  # 深红
+    DetailType.NOISE: "#EF5350",             # 橙红
+    DetailType.DIFFRACTION_SPIKE: "#FF9800",# 橙色
+    DetailType.CMOS_CONDENSATION: "#FFB74D",# 灰橙
+    DetailType.CORRESPONDING: "#BDBDBD",     # 灰色
+}
+
+# 默认颜色（未标注）
+DEFAULT_BBOX_COLOR = "#FFEB3B"  # 黄色
+SELECTED_BBOX_COLOR = "#9C27B0"  # 紫色选中
+
 
 # ─────────────────────── 数据类 ───────────────────────
 
