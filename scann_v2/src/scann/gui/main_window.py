@@ -171,14 +171,11 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("SCANN v2 - Star/Source Classification and Analysis Neural Network")
-        self.resize(1600, 1000)
+        self.resize(self._config.window_width, self._config.window_height)
         self.setMinimumSize(1024, 768)
 
         # 暗色主题
         self.setStyleSheet(DARK_THEME_QSS)
-
-        # ── 服务 ──
-        self.blink_service = BlinkService(speed_ms=500)
 
         # ── 定时器 ──
         self.blink_timer = QTimer(self)
@@ -201,11 +198,15 @@ class MainWindow(QMainWindow):
         # ── AI/推理 ──
         self._inference_engine = None
 
-        # ── 配置 ──
-        self._config = AppConfig()
+        # ── 配置 (从磁盘加载持久化配置) ──
+        from scann.core.config import load_config
+        self._config = load_config()
 
         # ── 日志 ──
         self._logger = get_logger(__name__)
+
+        # ── 用持久化配置初始化服务 ──
+        self.blink_service = BlinkService(speed_ms=self._config.blink_speed_ms)
 
         # ── 构建 UI ──
         self._init_menu_bar()
@@ -214,6 +215,13 @@ class MainWindow(QMainWindow):
         self._init_histogram_dock()
         self._connect_signals()
         self._init_shortcuts()
+
+        # ── 从配置恢复文件夹路径 ──
+        self._new_folder = self._config.new_folder
+        self._old_folder = self._config.old_folder
+
+        # ── 从配置恢复 UI 状态 ──
+        self._restore_ui_state()
 
     # ══════════════════════════════════════════════
     #  日志和消息输出
@@ -284,6 +292,9 @@ class MainWindow(QMainWindow):
         self.act_train = ai_menu.addAction("训练模型...")
         self.act_load_model = ai_menu.addAction("加载模型...")
         self.act_model_info = ai_menu.addAction("模型信息")
+        ai_menu.addSeparator()
+        self.act_annotation = ai_menu.addAction("🏷️ 标注工具...")
+        self.act_annotation.setShortcut(QKeySequence("Ctrl+L"))
 
         # ── 查询 ──
         query_menu = mb.addMenu("查询(&Q)")
@@ -574,6 +585,7 @@ class MainWindow(QMainWindow):
         self.act_train.triggered.connect(self._on_open_training)
         self.act_load_model.triggered.connect(self._on_load_model)
         self.act_model_info.triggered.connect(self._on_model_info)
+        self.act_annotation.triggered.connect(self._on_open_annotation)
 
         # ── 查询菜单 ──
         self.act_query_vsx.triggered.connect(lambda: self._on_menu_query("vsx"))
@@ -673,6 +685,7 @@ class MainWindow(QMainWindow):
     def _on_blink_speed_changed(self, speed_ms: int) -> None:
         """闪烁速度变化"""
         self.blink_service.speed_ms = speed_ms
+        self._config.blink_speed_ms = speed_ms
         if self.blink_service.is_running:
             self.blink_timer.setInterval(speed_ms)
 
@@ -967,6 +980,20 @@ class MainWindow(QMainWindow):
 
         self._show_message(f"已加载新图文件夹: {folder} ({len(files)} 个文件)")
 
+        # 同步到配置并加入最近打开
+        self._config.new_folder = folder
+        self._add_recent_folder(folder)
+
+    def _add_recent_folder(self, folder: str) -> None:
+        """添加文件夹到最近打开列表"""
+        if folder in self._config.recent_folders:
+            self._config.recent_folders.remove(folder)
+        self._config.recent_folders.insert(0, folder)
+        # 限制数量
+        max_count = self._config.max_recent_count
+        self._config.recent_folders = self._config.recent_folders[:max_count]
+        self._on_update_recent_menu()
+
     def _on_open_old_folder(self) -> None:
         """打开旧图文件夹"""
         folder = QFileDialog.getExistingDirectory(self, "选择旧图文件夹")
@@ -974,6 +1001,8 @@ class MainWindow(QMainWindow):
             return
 
         self._old_folder = folder
+        self._config.old_folder = folder
+        self._add_recent_folder(folder)
         old_files = scan_fits_folder(folder)
 
         # 如果已有新图文件夹，自动配对
@@ -1047,12 +1076,42 @@ class MainWindow(QMainWindow):
     def _on_update_recent_menu(self) -> None:
         """更新最近打开菜单"""
         self.menu_recent.clear()
-        recent = getattr(self._config, 'recent_folders', [])
+        recent = self._config.recent_folders
         if not recent:
             self.menu_recent.addAction("(无最近打开)")
             return
         for folder in recent:
-            self.menu_recent.addAction(folder)
+            action = self.menu_recent.addAction(folder)
+            action.triggered.connect(
+                lambda checked, f=folder: self._open_recent_folder(f)
+            )
+
+    def _open_recent_folder(self, folder: str) -> None:
+        """从最近打开列表恢复文件夹"""
+        from pathlib import Path
+        if not Path(folder).exists():
+            self._show_message(f"文件夹不存在: {folder}", 5000, level='WARNING')
+            return
+        # 按新图文件夹打开
+        self._new_folder = folder
+        self._config.new_folder = folder
+        files = scan_fits_folder(folder)
+        self.file_list.clear()
+        self._image_pairs = []
+        self._current_pair_idx = -1
+        for f in files:
+            self.file_list.addItem(f.stem)
+        if files:
+            try:
+                fits_img = read_fits(files[0].path)
+                self._new_image_data = fits_img.data
+                self._new_fits_header = fits_img.header
+                self._on_show_new()
+                self.histogram_panel.set_image_data(fits_img.data)
+            except Exception as e:
+                self._show_message(f"加载失败: {e}", 5000, level='ERROR')
+                return
+        self._show_message(f"已加载: {folder} ({len(files)} 个文件)")
 
     # ── 处理菜单 ──
 
@@ -1165,6 +1224,25 @@ class MainWindow(QMainWindow):
 
         self._show_message(f"批量处理完成: 成功 {success_count}, 失败 {fail_count}", 5000)
 
+    def _build_detection_params(self):
+        """从 AppConfig 构造 DetectionParams"""
+        from scann.core.candidate_detector import DetectionParams
+        return DetectionParams(
+            thresh=self._config.thresh,
+            min_area=self._config.min_area,
+            max_area=self._config.max_area,
+            sharpness_min=self._config.sharpness,
+            sharpness_max=self._config.max_sharpness,
+            contrast_min=self._config.contrast,
+            edge_margin=self._config.edge_margin,
+            dynamic_thresh=self._config.dynamic_thresh,
+            kill_flat=self._config.kill_flat,
+            kill_dipole=self._config.kill_dipole,
+            aspect_ratio_max=self._config.aspect_ratio_max,
+            extent_max=self._config.extent_max,
+            topk=self._config.topk,
+        )
+
     # ── AI 菜单 ──
 
     def _on_batch_detect(self) -> None:
@@ -1178,7 +1256,9 @@ class MainWindow(QMainWindow):
             old_data = np.zeros_like(self._new_image_data)
 
         pipeline = DetectionPipeline(
+            detection_params=self._build_detection_params(),
             inference_engine=self._inference_engine,
+            patch_size=self._config.slice_size,
         )
         result = pipeline.process_pair(
             pair_name="current",
@@ -1202,6 +1282,13 @@ class MainWindow(QMainWindow):
         self._training_dialog = dlg
         self._training_worker = None
         dlg.exec_()
+
+    def _on_open_annotation(self) -> None:
+        """打开标注工具对话框 (非模态)"""
+        from scann.gui.dialogs.annotation_dialog import AnnotationDialog
+        dlg = AnnotationDialog(self)
+        self._annotation_dialog = dlg
+        dlg.show()
 
     def _on_training_started(self, params: dict) -> None:
         """训练开始信号处理: 接收超参数并启动训练线程"""
@@ -1263,9 +1350,13 @@ class MainWindow(QMainWindow):
         try:
             from scann.ai.inference import InferenceConfig
             config = InferenceConfig(
-                model_format=getattr(self._config, 'model_format', 'auto')
+                batch_size=self._config.batch_size,
+                device=self._config.compute_device,
+                model_format=self._config.model_format,
             )
             self._inference_engine = InferenceEngine(model_path=path, config=config)
+            self._inference_engine._threshold = self._config.ai_confidence
+            self._config.model_path = path
             fmt_info = getattr(self._inference_engine, '_model_format', None)
             fmt_str = fmt_info.value if fmt_info else 'unknown'
             self._show_message(
@@ -1392,13 +1483,15 @@ class MainWindow(QMainWindow):
         """打开首选项对话框"""
         from scann.gui.dialogs.settings_dialog import SettingsDialog
         from scann.core.config import save_config
-        dlg = SettingsDialog(self)
+        dlg = SettingsDialog(self._config, parent=self)
         if dlg.exec_():
-            # 保存配置
+            # 保存配置到磁盘
             try:
                 save_config(self._config)
-            except Exception:
-                pass
+            except Exception as e:
+                self._logger.error(f"保存配置失败: {e}")
+            # 同步运行时状态
+            self.blink_service.speed_ms = self._config.blink_speed_ms
             self._show_message("设置已保存")
 
     def _on_select_mpcorb_file(self) -> None:
@@ -1410,6 +1503,12 @@ class MainWindow(QMainWindow):
             return
 
         self._config.mpcorb_path = path
+        # 立即持久化保存 MPCORB 路径
+        try:
+            from scann.core.config import save_config as _save_cfg
+            _save_cfg(self._config)
+        except Exception:
+            pass
         try:
             from scann.core.mpcorb import MpcorbParser
             parser = MpcorbParser(path)
@@ -1566,10 +1665,91 @@ class MainWindow(QMainWindow):
     #  窗口事件
     # ══════════════════════════════════════════════
 
+    def closeEvent(self, event) -> None:
+        """窗口关闭 → 自动保存配置"""
+        if self._config.confirm_before_close:
+            from PyQt5.QtWidgets import QMessageBox
+            reply = QMessageBox.question(
+                self, "确认退出",
+                "确定要退出 SCANN v2 吗？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                event.ignore()
+                return
+
+        # 将运行时状态回写到配置
+        self._save_runtime_state()
+
+        # 持久化保存到磁盘
+        try:
+            from scann.core.config import save_config
+            save_config(self._config)
+            self._logger.info("配置已自动保存")
+        except Exception as e:
+            self._logger.error(f"退出时保存配置失败: {e}")
+
+        super().closeEvent(event)
+
+    def _save_runtime_state(self) -> None:
+        """将运行时状态同步到配置对象"""
+        self._config.new_folder = self._new_folder
+        self._config.old_folder = self._old_folder
+        self._config.blink_speed_ms = self.blink_service.speed_ms
+
+        # 直方图拉伸参数
+        self._config.stretch_black_point = self.histogram_panel.black_point
+        self._config.stretch_white_point = self.histogram_panel.white_point
+        mode_names = ["线性", "对数", "平方根", "Asinh", "自动拉伸"]
+        mode_idx = self.histogram_panel.combo_mode.currentIndex()
+        if 0 <= mode_idx < len(mode_names):
+            self._config.stretch_mode = mode_names[mode_idx]
+
+        # 视图开关
+        self._config.show_markers = self.act_show_markers.isChecked()
+        self._config.show_mpcorb = self.act_show_mpcorb.isChecked()
+        self._config.show_known_objects = self.act_show_known.isChecked()
+        self._config.histogram_visible = self.histogram_panel.isVisible()
+        self._config.sidebar_collapsed = self.sidebar.is_collapsed
+
+        # 窗口几何
+        self._config.window_width = self.width()
+        self._config.window_height = self.height()
+
+    def _restore_ui_state(self) -> None:
+        """从配置恢复 UI 状态 (在构建 UI 后调用)"""
+        cfg = self._config
+
+        # 闪烁速度滑块
+        self.blink_speed.speed_ms = cfg.blink_speed_ms
+
+        # 视图菜单开关
+        self.act_show_markers.setChecked(cfg.show_markers)
+        self.act_show_mpcorb.setChecked(cfg.show_mpcorb)
+        self.act_show_known.setChecked(cfg.show_known_objects)
+
+        # 直方图面板可见性
+        self.histogram_panel.setVisible(cfg.histogram_visible)
+
+        # 直方图拉伸预设模式
+        mode_names = ["线性", "对数", "平方根", "Asinh", "自动拉伸"]
+        if cfg.stretch_mode in mode_names:
+            self.histogram_panel.combo_mode.setCurrentIndex(
+                mode_names.index(cfg.stretch_mode)
+            )
+
+        # 侧边栏折叠状态
+        if cfg.sidebar_collapsed:
+            self.sidebar.collapse()
+
     def resizeEvent(self, event) -> None:
         """窗口大小变化 → 自动折叠侧边栏"""
         super().resizeEvent(event)
-        self.sidebar.auto_collapse_check(self.width())
+        if self._config.auto_collapse_sidebar:
+            self.sidebar.auto_collapse_check(self.width())
+        else:
+            pass  # 不自动折叠
 
         # 重新定位浮层标签
         self.overlay_state.move(10, 10)

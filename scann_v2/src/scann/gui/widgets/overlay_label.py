@@ -91,6 +91,16 @@ class OverlayLabel(QLabel):
         self._visible_flag = False
         self.setVisible(False)
 
+    def set_file_name(self, name: str, match_found: bool = True) -> None:
+        """在标签旁显示文件名及匹配状态
+
+        Args:
+            name: 文件名
+            match_found: 是否找到对应的新/旧图
+        """
+        icon = "✓" if match_found else "✗"
+        self.setText(f"{self.text().split(' |')[0]} | {icon} {name}")
+
     def _update_style(self) -> None:
         """更新样式表"""
         bg = self._bg_color
