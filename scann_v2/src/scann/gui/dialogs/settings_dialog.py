@@ -296,30 +296,102 @@ class SettingsDialog(QDialog):
     def _load_from_config(self) -> None:
         """从 Config 对象加载当前设置"""
         cfg = self.config
-        self.edit_obs_code.setText(getattr(cfg, "obs_code", ""))
-        self.edit_obs_name.setText(getattr(cfg, "obs_name", ""))
-        self.spin_sigma.setValue(getattr(cfg, "sigma_threshold", 5.0))
-        self.spin_min_area.setValue(getattr(cfg, "min_area", 3))
-        self.spin_confidence.setValue(getattr(cfg, "ai_confidence", 0.5))
+
+        # ── 望远镜/天文台 ──
+        self.edit_obs_code.setText(cfg.observatory.code)
+        self.edit_obs_name.setText(cfg.observatory.name)
+        self.spin_lat.setValue(cfg.observatory.latitude)
+        self.spin_lon.setValue(cfg.observatory.longitude)
+        self.spin_alt.setValue(cfg.observatory.altitude)
+        self.edit_telescope.setText(cfg.telescope_name)
+        self.spin_pixel_scale.setValue(cfg.telescope.pixel_scale_arcsec)
+
+        # ── 检测参数 ──
+        self.spin_sigma.setValue(float(cfg.thresh))
+        self.spin_min_area.setValue(cfg.min_area)
+        self.spin_max_area.setValue(cfg.max_area)
+        self.spin_nms_radius.setValue(cfg.nms_radius)
+        self.chk_exclude_edge.setChecked(cfg.exclude_edge)
+        self.spin_edge_margin.setValue(cfg.edge_margin)
+
+        # ── AI 模型 ──
+        self.edit_model_path.setText(cfg.model_path)
+        self.spin_confidence.setValue(cfg.ai_confidence)
+        self.spin_patch_size.setValue(cfg.slice_size)
+        self.spin_batch_size.setValue(cfg.batch_size)
 
         # 模型格式
-        model_format = getattr(cfg, "model_format", "auto")
         format_map = {"auto": 0, "v1_classifier": 1, "v2_classifier": 2}
-        self.combo_model_format.setCurrentIndex(format_map.get(model_format, 0))
+        self.combo_model_format.setCurrentIndex(format_map.get(cfg.model_format, 0))
+
+        # 计算设备
+        device_map = {"auto": 0, "cpu": 1, "cuda": 2}
+        self.combo_device.setCurrentIndex(device_map.get(cfg.compute_device, 0))
+
+        # ── 保存/路径 ──
+        self.edit_save_dir.setText(cfg.save_folder)
+        self.edit_mpcorb_path.setText(cfg.mpcorb_path)
+        self.edit_db_path.setText(cfg.database_path)
+
+        # 保存格式
+        format_list = ["FITS (16-bit)", "FITS (32-bit)", "PNG (8-bit)"]
+        idx = format_list.index(cfg.save_format) if cfg.save_format in format_list else 0
+        self.combo_save_format.setCurrentIndex(idx)
+
+        # ── 高级 ──
+        self.spin_max_threads.setValue(cfg.max_threads)
+        self.chk_auto_save.setChecked(cfg.auto_save_annotations)
+        self.chk_auto_collapse.setChecked(cfg.auto_collapse_sidebar)
+        self.spin_recent_max.setValue(cfg.max_recent_count)
+        self.chk_confirm_close.setChecked(cfg.confirm_before_close)
 
     def _save_to_config(self) -> None:
         """将 UI 设置写回 Config"""
         cfg = self.config
-        cfg.obs_code = self.edit_obs_code.text()
-        cfg.obs_name = self.edit_obs_name.text()
-        cfg.sigma_threshold = self.spin_sigma.value()
+
+        # ── 望远镜/天文台 ──
+        cfg.observatory.code = self.edit_obs_code.text()
+        cfg.observatory.name = self.edit_obs_name.text()
+        cfg.observatory.latitude = self.spin_lat.value()
+        cfg.observatory.longitude = self.spin_lon.value()
+        cfg.observatory.altitude = self.spin_alt.value()
+        cfg.telescope_name = self.edit_telescope.text()
+        cfg.telescope.pixel_scale_arcsec = self.spin_pixel_scale.value()
+
+        # ── 检测参数 ──
+        cfg.thresh = int(self.spin_sigma.value())
         cfg.min_area = self.spin_min_area.value()
+        cfg.max_area = self.spin_max_area.value()
+        cfg.nms_radius = self.spin_nms_radius.value()
+        cfg.exclude_edge = self.chk_exclude_edge.isChecked()
+        cfg.edge_margin = self.spin_edge_margin.value()
+
+        # ── AI 模型 ──
+        cfg.model_path = self.edit_model_path.text()
         cfg.ai_confidence = self.spin_confidence.value()
+        cfg.slice_size = self.spin_patch_size.value()
+        cfg.batch_size = self.spin_batch_size.value()
 
         # 模型格式
         format_values = ["auto", "v1_classifier", "v2_classifier"]
         cfg.model_format = format_values[self.combo_model_format.currentIndex()]
-        cfg.save()
+
+        # 计算设备
+        device_values = ["auto", "cpu", "cuda"]
+        cfg.compute_device = device_values[self.combo_device.currentIndex()]
+
+        # ── 保存/路径 ──
+        cfg.save_folder = self.edit_save_dir.text()
+        cfg.mpcorb_path = self.edit_mpcorb_path.text()
+        cfg.database_path = self.edit_db_path.text()
+        cfg.save_format = self.combo_save_format.currentText()
+
+        # ── 高级 ──
+        cfg.max_threads = self.spin_max_threads.value()
+        cfg.auto_save_annotations = self.chk_auto_save.isChecked()
+        cfg.auto_collapse_sidebar = self.chk_auto_collapse.isChecked()
+        cfg.max_recent_count = self.spin_recent_max.value()
+        cfg.confirm_before_close = self.chk_confirm_close.isChecked()
 
     def _on_ok(self) -> None:
         self._save_to_config()

@@ -123,6 +123,11 @@ def _make_mock_window():
     w._old_fits_header = None
     w._inference_engine = None
     w._config = AppConfig()
+    w._annotation_dialog = None
+    w._training_worker = None
+
+    # logger mock（_show_message 依赖 self._logger）
+    w._logger = Mock()
 
     return w
 
@@ -364,7 +369,10 @@ class TestLoadModel:
 
         w._on_load_model()
 
-        mock_engine_cls.assert_called_once_with(model_path="/path/to/model.pth")
+        mock_engine_cls.assert_called_once()
+        # 验证 model_path 关键字参数
+        call_kwargs = mock_engine_cls.call_args[1]
+        assert call_kwargs["model_path"] == "/path/to/model.pth"
         assert w._inference_engine is mock_engine
         w.statusBar().showMessage.assert_called()
 
@@ -807,9 +815,12 @@ class TestTrainingIntegration:
             w._on_open_training()
             mock_dlg.assert_called_once()
 
-    def test_training_started_calls_trainer(self):
+    @patch("scann.ai.training_worker.TrainingWorker")
+    def test_training_started_calls_trainer(self, mock_worker_cls):
         """training_started 信号应启动后台训练"""
         w = _make_mock_window()
+        mock_worker = Mock()
+        mock_worker_cls.return_value = mock_worker
         params = {
             "pos_dir": "/fake/pos",
             "neg_dir": "/fake/neg",
@@ -1020,3 +1031,74 @@ class TestMpcReportIntegration:
 
             # 无 WCS 时应显示提示
             w.statusBar().showMessage.assert_called()
+
+
+# ═══════════════════════════════════════════════
+#  功能: 标注工具入口
+# ═══════════════════════════════════════════════
+
+
+class TestAnnotationToolEntry:
+    """测试标注工具系统在主窗口中的入口"""
+
+    def test_annotation_menu_exists(self):
+        """AI 菜单中应有标注工具菜单项"""
+        from scann.gui.main_window import MainWindow
+        import inspect
+        src = inspect.getsource(MainWindow._init_menu_bar)
+        assert "标注工具" in src
+        assert "act_annotation" in src
+
+    def test_annotation_shortcut_ctrl_l(self):
+        """标注工具应绑定 Ctrl+L 快捷键"""
+        from scann.gui.main_window import MainWindow
+        import inspect
+        src = inspect.getsource(MainWindow._init_menu_bar)
+        assert "Ctrl+L" in src
+
+    def test_on_open_annotation_creates_dialog(self):
+        """调用 _on_open_annotation 应创建 AnnotationDialog 实例"""
+        w = _make_mock_window()
+
+        with patch("scann.gui.dialogs.annotation_dialog.AnnotationDialog") as mock_cls:
+            mock_dlg = Mock()
+            mock_cls.return_value = mock_dlg
+
+            w._on_open_annotation()
+
+            mock_cls.assert_called_once_with(w)
+            mock_dlg.show.assert_called_once()
+
+    def test_on_open_annotation_stores_reference(self):
+        """打开标注对话框后应保存引用到 _annotation_dialog"""
+        w = _make_mock_window()
+
+        with patch("scann.gui.dialogs.annotation_dialog.AnnotationDialog") as mock_cls:
+            mock_dlg = Mock()
+            mock_cls.return_value = mock_dlg
+
+            w._on_open_annotation()
+
+            assert w._annotation_dialog is mock_dlg
+
+    def test_annotation_dialog_is_non_modal(self):
+        """标注对话框应以非模态方式打开 (show 而非 exec_)"""
+        w = _make_mock_window()
+
+        with patch("scann.gui.dialogs.annotation_dialog.AnnotationDialog") as mock_cls:
+            mock_dlg = Mock()
+            mock_cls.return_value = mock_dlg
+
+            w._on_open_annotation()
+
+            # show() 被调用, exec_() 不应被调用
+            mock_dlg.show.assert_called_once()
+            mock_dlg.exec_.assert_not_called()
+
+    def test_annotation_signal_connected(self):
+        """act_annotation.triggered 应连接到 _on_open_annotation"""
+        from scann.gui.main_window import MainWindow
+        import inspect
+        src = inspect.getsource(MainWindow._connect_signals)
+        assert "act_annotation" in src
+        assert "_on_open_annotation" in src

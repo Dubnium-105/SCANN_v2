@@ -254,16 +254,23 @@ class AppConfig:
 
     # 望远镜参数
     telescope: TelescopeConfig = field(default_factory=TelescopeConfig)
+    telescope_name: str = ""    # 望远镜名称描述
     observatory: ObservatoryConfig = field(default_factory=ObservatoryConfig)
 
     # 检测参数
     thresh: int = 80
     min_area: int = 6
+    max_area: int = 600         # 最大面积 (px)
     sharpness: float = 1.2
     max_sharpness: float = 5.0
     contrast: int = 15
     edge_margin: int = 10
+    exclude_edge: bool = True   # 是否排除边缘区域
     dynamic_thresh: bool = False
+    nms_radius: float = 5.0     # NMS 非极大值抑制半径 (px)
+    aspect_ratio_max: float = 3.0
+    extent_max: float = 0.90
+    topk: int = 20              # Top-K 候选体上限
 
     # 过滤器
     kill_flat: bool = True
@@ -272,12 +279,18 @@ class AppConfig:
     # AI 参数
     model_path: str = ""
     model_format: str = "auto"  # "auto", "v1_classifier", "v2_classifier"
+    ai_confidence: float = 0.50 # AI 置信度阈值
+    slice_size: int = 64        # 切片大小 (px)
+    batch_size: int = 64        # 推理批量大小
+    compute_device: str = "auto"  # "auto", "cpu", "cuda"
     crowd_high_score: float = 0.85
     crowd_high_count: int = 10
     crowd_high_penalty: float = 0.50
 
     # 保存参数
     save_bit_depth: BitDepth = BitDepth.INT16
+    save_format: str = "FITS (16-bit)"  # "FITS (16-bit)", "FITS (32-bit)", "PNG (8-bit)"
+    database_path: str = ""     # 数据库路径
 
     # 闪烁
     blink_speed_ms: int = 500
@@ -288,3 +301,26 @@ class AppConfig:
 
     # 最近打开
     recent_folders: list = field(default_factory=list)  # 最近打开的文件夹列表
+    max_recent_count: int = 10  # 最近打开列表最大数量
+
+    # 高级/UI 选项
+    max_threads: int = 4        # 最大线程数
+    auto_save_annotations: bool = False  # 退出时自动保存标记
+    auto_collapse_sidebar: bool = True   # 窗口 < 1200px 时自动折叠侧边栏
+    confirm_before_close: bool = True    # 关闭前确认
+
+    # 直方图拉伸参数 (显示用，不改变原始数据)
+    stretch_black_point: float = 0.0     # 黑点值 (原始像素值)
+    stretch_white_point: float = 65535.0 # 白点值 (原始像素值)
+    stretch_mode: str = "线性"           # 拉伸预设: "线性","对数","平方根","Asinh","自动拉伸"
+
+    # 视图开关 (菜单栏 "视图" 中的可勾选项)
+    show_markers: bool = True            # 显示候选标记
+    show_mpcorb: bool = True             # 显示 MPCORB 叠加
+    show_known_objects: bool = True       # 显示已知天体
+    histogram_visible: bool = False       # 直方图面板是否可见
+    sidebar_collapsed: bool = False       # 侧边栏是否折叠
+
+    # 窗口几何
+    window_width: int = 1600
+    window_height: int = 1000

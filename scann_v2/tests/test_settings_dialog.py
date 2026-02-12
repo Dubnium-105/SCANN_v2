@@ -13,14 +13,15 @@ from unittest.mock import Mock, MagicMock, patch
 
 from PyQt5.QtWidgets import QDialogButtonBox
 
+from scann.core.models import AppConfig, ObservatoryConfig, TelescopeConfig
+
 
 @pytest.fixture
 def mock_config():
-    """创建模拟 Config 对象"""
-    cfg = Mock()
-    cfg.obs_code = "C42"
-    cfg.obs_name = "Test Obs"
-    cfg.sigma_threshold = 5.0
+    """创建真实的 AppConfig 对象用于测试"""
+    cfg = AppConfig()
+    cfg.observatory = ObservatoryConfig(code="C42", name="Test Obs")
+    cfg.thresh = 5
     cfg.min_area = 3
     cfg.ai_confidence = 0.5
     return cfg
@@ -152,11 +153,12 @@ class TestSaveToConfig:
     def test_save_updates_config(self, dialog, mock_config):
         dialog.edit_obs_code.setText("X99")
         dialog._save_to_config()
-        assert mock_config.obs_code == "X99"
+        assert mock_config.observatory.code == "X99"
 
-    def test_save_calls_config_save(self, dialog, mock_config):
+    def test_save_updates_ai_confidence(self, dialog, mock_config):
+        dialog.spin_confidence.setValue(0.75)
         dialog._save_to_config()
-        mock_config.save.assert_called_once()
+        assert mock_config.ai_confidence == 0.75
 
 
 class TestSettingsChangedSignal:
