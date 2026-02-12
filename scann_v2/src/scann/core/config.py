@@ -149,6 +149,22 @@ def load_config(
     config.window_width = data.get("window_width", 1600)
     config.window_height = data.get("window_height", 1000)
 
+    # 标注工具选项
+    config.ann_mode = data.get("ann_mode", "v1")
+    config.ann_dataset_path = data.get("ann_dataset_path", "")
+    config.ann_auto_advance = data.get("ann_auto_advance", True)
+    config.ann_filter = data.get("ann_filter", "all")
+    config.ann_sort = data.get("ann_sort", "默认")
+    config.ann_bbox_width = data.get("ann_bbox_width", 2)
+    config.ann_invert = data.get("ann_invert", False)
+    config.ann_splitter_sizes = data.get("ann_splitter_sizes", [])
+    config.ann_window_width = data.get("ann_window_width", 1000)
+    config.ann_window_height = data.get("ann_window_height", 700)
+    config.ann_stretch_black = data.get("ann_stretch_black", 0.0)
+    config.ann_stretch_white = data.get("ann_stretch_white", 65535.0)
+    config.ann_stretch_mode = data.get("ann_stretch_mode", "线性")
+    config.ann_histogram_visible = data.get("ann_histogram_visible", False)
+
     return config
 
 
@@ -233,6 +249,20 @@ def save_config(
         "sidebar_collapsed": config.sidebar_collapsed,
         "window_width": config.window_width,
         "window_height": config.window_height,
+        "ann_mode": config.ann_mode,
+        "ann_dataset_path": config.ann_dataset_path,
+        "ann_auto_advance": config.ann_auto_advance,
+        "ann_filter": config.ann_filter,
+        "ann_sort": config.ann_sort,
+        "ann_bbox_width": config.ann_bbox_width,
+        "ann_invert": config.ann_invert,
+        "ann_splitter_sizes": config.ann_splitter_sizes,
+        "ann_window_width": config.ann_window_width,
+        "ann_window_height": config.ann_window_height,
+        "ann_stretch_black": config.ann_stretch_black,
+        "ann_stretch_white": config.ann_stretch_white,
+        "ann_stretch_mode": config.ann_stretch_mode,
+        "ann_histogram_visible": config.ann_histogram_visible,
     }
 
     path.parent.mkdir(parents=True, exist_ok=True)

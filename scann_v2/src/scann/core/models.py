@@ -324,3 +324,19 @@ class AppConfig:
     # 窗口几何
     window_width: int = 1600
     window_height: int = 1000
+
+    # 标注工具选项
+    ann_mode: str = "v1"                    # 标注模式: "v1" 三联图 / "v2" FITS
+    ann_dataset_path: str = ""              # 上次使用的数据集路径
+    ann_auto_advance: bool = True           # 标注后自动下一个
+    ann_filter: str = "all"                 # 筛选: "all","unlabeled","real","bogus"
+    ann_sort: str = "默认"                   # 排序方式
+    ann_bbox_width: int = 2                 # 边框粗细 (1-5)
+    ann_invert: bool = False                # 反色显示
+    ann_splitter_sizes: list = field(default_factory=list)  # 分割面板比例
+    ann_window_width: int = 1000            # 标注窗口宽度
+    ann_window_height: int = 700            # 标注窗口高度
+    ann_stretch_black: float = 0.0          # 标注工具直方图黑点
+    ann_stretch_white: float = 65535.0      # 标注工具直方图白点
+    ann_stretch_mode: str = "线性"           # 标注工具拉伸预设
+    ann_histogram_visible: bool = False     # 标注工具直方图面板是否可见

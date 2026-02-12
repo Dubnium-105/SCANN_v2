@@ -170,6 +170,11 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
+
+        # ── 配置 (最先加载，后续初始化依赖它) ──
+        from scann.core.config import load_config
+        self._config = load_config()
+
         self.setWindowTitle("SCANN v2 - Star/Source Classification and Analysis Neural Network")
         self.resize(self._config.window_width, self._config.window_height)
         self.setMinimumSize(1024, 768)
@@ -197,10 +202,6 @@ class MainWindow(QMainWindow):
 
         # ── AI/推理 ──
         self._inference_engine = None
-
-        # ── 配置 (从磁盘加载持久化配置) ──
-        from scann.core.config import load_config
-        self._config = load_config()
 
         # ── 日志 ──
         self._logger = get_logger(__name__)
@@ -1286,7 +1287,7 @@ class MainWindow(QMainWindow):
     def _on_open_annotation(self) -> None:
         """打开标注工具对话框 (非模态)"""
         from scann.gui.dialogs.annotation_dialog import AnnotationDialog
-        dlg = AnnotationDialog(self)
+        dlg = AnnotationDialog(self, config=self._config)
         self._annotation_dialog = dlg
         dlg.show()
 
