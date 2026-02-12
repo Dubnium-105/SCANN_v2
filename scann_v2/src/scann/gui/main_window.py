@@ -668,12 +668,12 @@ class MainWindow(QMainWindow):
         if running:
             self.blink_timer.setInterval(self.blink_service.speed_ms)
             self.blink_timer.start()
-            self.overlay_blink.show_label()
-            self.overlay_blink.start_pulse()
+            # self.overlay_blink.show_label()  # 不显示⚡图标
+            # self.overlay_blink.start_pulse()
         else:
             self.blink_timer.stop()
-            self.overlay_blink.stop_pulse()
-            self.overlay_blink.hide_label()
+            # self.overlay_blink.stop_pulse()
+            # self.overlay_blink.hide_label()
 
     def _on_blink_tick(self) -> None:
         """闪烁定时回调"""
@@ -708,12 +708,14 @@ class MainWindow(QMainWindow):
         """显示新图"""
         self.btn_show_new.setChecked(True)
         self.btn_show_old.setChecked(False)
+        self.blink_service.set_state(BlinkState.NEW)
         self._show_image("new")
 
     def _on_show_old(self) -> None:
         """显示旧图"""
         self.btn_show_new.setChecked(False)
         self.btn_show_old.setChecked(True)
+        self.blink_service.set_state(BlinkState.OLD)
         self._show_image("old")
 
     def _show_image(self, which: str) -> None:
@@ -735,8 +737,16 @@ class MainWindow(QMainWindow):
             self.overlay_state.setText(f"无{label}")
             return
 
+        # 更新直方图面板，显示当前图像的直方图
+        self.histogram_panel.set_image_data(data)
+
+        # 应用当前的直方图拉伸参数
+        black = self.histogram_panel.black_point
+        white = self.histogram_panel.white_point
+        stretched = histogram_stretch(data, black_point=black, white_point=white)
+
         self.image_viewer.set_image_data(
-            data, inverted=self.blink_service.is_inverted
+            stretched, inverted=self.blink_service.is_inverted
         )
         self.overlay_state.setText(label)
         self.overlay_state.set_state(color)
@@ -1356,10 +1366,22 @@ class MainWindow(QMainWindow):
                 model_format=self._config.model_format,
             )
             self._inference_engine = InferenceEngine(model_path=path, config=config)
-            self._inference_engine._threshold = self._config.ai_confidence
+            # 使用模型中保存的阈值（V1: t_recall, V2: threshold）
+            # 仅当用户在配置中明确设置了非默认阈值时才覆盖
+            model_threshold = self._inference_engine.threshold
+            if model_threshold <= 0 or model_threshold >= 1.0:
+                # 模型中没有有效阈值，使用配置值
+                self._inference_engine._threshold = self._config.ai_confidence
+            # 将模型实际使用的阈值同步回配置
+            self._config.ai_confidence = self._inference_engine.threshold
             self._config.model_path = path
             fmt_info = getattr(self._inference_engine, '_model_format', None)
             fmt_str = fmt_info.value if fmt_info else 'unknown'
+            ch_order = getattr(self._inference_engine, '_channel_order', (0, 1, 2))
+            self._logger.info(
+                "模型已加载: %s (格式=%s, 阈值=%.4f, 通道=%s)",
+                path, fmt_str, self._inference_engine.threshold, ch_order
+            )
             self._show_message(
                 f"模型已加载: {path} (格式={fmt_str}, 阈值={self._inference_engine.threshold:.2f})", 5000
             )
@@ -1379,6 +1401,7 @@ class MainWindow(QMainWindow):
         threshold = self._inference_engine.threshold
         fmt_info = getattr(self._inference_engine, '_model_format', None)
         fmt_str = fmt_info.value if fmt_info else 'unknown'
+        ch_order = getattr(self._inference_engine, '_channel_order', (0, 1, 2))
 
         QMessageBox.information(
             self,
@@ -1387,7 +1410,8 @@ class MainWindow(QMainWindow):
             f"<p>架构: {model.__class__.__name__}</p>"
             f"<p>模型格式: {fmt_str}</p>"
             f"<p>参数量: {total_params:,}</p>"
-            f"<p>检测阈值: {threshold:.2f}</p>"
+            f"<p>检测阈值: {threshold:.4f}</p>"
+            f"<p>通道顺序: {ch_order}</p>"
             f"<p>设备: {self._inference_engine.device}</p>",
         )
 

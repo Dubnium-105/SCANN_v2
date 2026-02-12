@@ -280,7 +280,7 @@ class AppConfig:
     model_path: str = ""
     model_format: str = "auto"  # "auto", "v1_classifier", "v2_classifier"
     ai_confidence: float = 0.50 # AI 置信度阈值
-    slice_size: int = 64        # 切片大小 (px)
+    slice_size: int = 80        # 切片大小 (px)，V1 训练使用 80x80
     batch_size: int = 64        # 推理批量大小
     compute_device: str = "auto"  # "auto", "cpu", "cuda"
     crowd_high_score: float = 0.85

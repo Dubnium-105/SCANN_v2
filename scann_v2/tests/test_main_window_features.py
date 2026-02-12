@@ -82,6 +82,8 @@ def _make_mock_window():
 
     # 直方图面板
     w.histogram_panel = Mock()
+    w.histogram_panel.black_point = 0.0
+    w.histogram_panel.white_point = 1.0
 
     # 文件列表
     w.file_list = Mock()
@@ -1066,7 +1068,11 @@ class TestAnnotationToolEntry:
 
             w._on_open_annotation()
 
-            mock_cls.assert_called_once_with(w)
+            # 验证调用，包括 config 参数
+            mock_cls.assert_called_once()
+            call_args = mock_cls.call_args
+            assert call_args[0][0] == w
+            assert 'config' in call_args[1]
             mock_dlg.show.assert_called_once()
 
     def test_on_open_annotation_stores_reference(self):

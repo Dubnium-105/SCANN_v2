@@ -103,7 +103,7 @@ def load_config(
     config.model_path = data.get("model_path", "")
     config.model_format = data.get("model_format", "auto")
     config.ai_confidence = data.get("ai_confidence", 0.50)
-    config.slice_size = data.get("slice_size", 64)
+    config.slice_size = data.get("slice_size", 80)
     config.batch_size = data.get("batch_size", 64)
     config.compute_device = data.get("compute_device", "auto")
     config.crowd_high_score = data.get("crowd_high_score", 0.85)

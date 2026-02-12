@@ -72,7 +72,7 @@ def match_new_old_pairs(
 ) -> Tuple[List[FitsImagePair], List[str], List[str]]:
     """配对新旧 FITS 文件
 
-    通过文件名主干匹配。
+    通过文件名主干匹配，支持智能前缀兼容（处理 FW_、fw_ 等前缀差异）。
 
     Args:
         new_folder: 新图文件夹
@@ -88,22 +88,62 @@ def match_new_old_pairs(
     new_map = {f.stem.lower(): f for f in new_files}
     old_map = {f.stem.lower(): f for f in old_files}
 
+    # ─── 智能配对: 处理 FW_ 等常见前缀差异 ───
+    # 与标注工具的前缀兼容机制保持一致
+    _STRIP_PREFIXES = ("FW_", "fw_", "Fw_")
+
+    def _normalize_stem(stem: str) -> str:
+        """去除常见前缀用于匹配"""
+        for prefix in _STRIP_PREFIXES:
+            if stem.startswith(prefix):
+                return stem[len(prefix):]
+        return stem
+
+    # 为旧图建立 normalized_stem → original_stem 映射
+    old_norm_map: dict[str, str] = {}
+    for stem in old_map:
+        norm = _normalize_stem(stem)
+        old_norm_map[norm] = stem
+
+    # 尝试将 new 文件与 old 文件匹配（先精确匹配，再去前缀匹配）
+    matched_old_stems: set[str] = set()
+    new_to_old: dict[str, str] = {}  # new_stem → old_stem
+    for stem in new_map:
+        if stem in old_map:
+            new_to_old[stem] = stem
+            matched_old_stems.add(stem)
+        else:
+            # 尝试 normalize 后匹配
+            norm = _normalize_stem(stem)
+            if norm in old_norm_map:
+                old_stem = old_norm_map[norm]
+                if old_stem not in matched_old_stems:
+                    new_to_old[stem] = old_stem
+                    matched_old_stems.add(old_stem)
+
     pairs = []
     only_new = []
     only_old = []
 
-    # 匹配
-    all_stems = set(new_map.keys()) | set(old_map.keys())
-    for stem in sorted(all_stems):
-        if stem in new_map and stem in old_map:
-            pairs.append(FitsImagePair(
-                name=new_map[stem].stem,  # 使用原始大小写
-                new_path=new_map[stem].path,
-                old_path=old_map[stem].path,
-            ))
-        elif stem in new_map:
-            only_new.append(new_map[stem].stem)
-        else:
-            only_old.append(old_map[stem].stem)
+    # 配对: 以 new 为主 + 未匹配的 old
+    unmatched_old = set(old_map.keys()) - matched_old_stems
+
+    # 处理配对
+    for new_stem in new_to_old:
+        old_stem = new_to_old[new_stem]
+        pairs.append(FitsImagePair(
+            name=new_map[new_stem].stem,  # 使用原始大小写
+            new_path=new_map[new_stem].path,
+            old_path=old_map[old_stem].path,
+        ))
+
+    # 处理仅新图
+    for new_stem in new_map:
+        if new_stem not in new_to_old:
+            only_new.append(new_map[new_stem].stem)
+
+    # 处理仅旧图
+    for old_stem in unmatched_old:
+        only_old.append(old_map[old_stem].stem)
 
     return pairs, only_new, only_old

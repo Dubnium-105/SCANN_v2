@@ -98,3 +98,11 @@ class BlinkService:
         """重置到初始状态 (不重置反色)"""
         self._state = BlinkState.NEW
         self._running = False
+
+    def set_state(self, state: BlinkState) -> None:
+        """手动设置当前显示状态
+
+        Args:
+            state: 要设置的状态 (NEW 或 OLD)
+        """
+        self._state = state

@@ -62,3 +62,98 @@ class TestFileManager:
             assert hasattr(f, "stem")
             assert f.path.exists()
             assert f.filename == f.path.name
+
+    def test_match_pairs_with_fw_prefix(self, tmp_dir, synth_fits_data_16bit):
+        """测试前缀兼容机制：FW_ 前缀应正确匹配"""
+        try:
+            from astropy.io import fits
+        except ImportError:
+            pytest.skip("astropy not installed")
+        from scann.data.file_manager import match_new_old_pairs
+
+        new_dir = tmp_dir / "new_prefix"
+        old_dir = tmp_dir / "old_prefix"
+        new_dir.mkdir()
+        old_dir.mkdir()
+
+        hdr = fits.Header()
+        # 新图：正常文件名
+        fits.writeto(str(new_dir / "img_001.fits"), synth_fits_data_16bit, header=hdr)
+        fits.writeto(str(new_dir / "img_002.fits"), synth_fits_data_16bit, header=hdr)
+
+        # 旧图：带 FW_ 前缀
+        fits.writeto(str(old_dir / "FW_img_001.fits"), synth_fits_data_16bit, header=hdr)
+        fits.writeto(str(old_dir / "fw_img_002.fits"), synth_fits_data_16bit, header=hdr)
+
+        pairs, only_new, only_old = match_new_old_pairs(str(new_dir), str(old_dir))
+
+        assert len(pairs) == 2, f"应配对2对，实际配对: {len(pairs)}"
+        assert len(only_new) == 0, f"不应有仅新图: {only_new}"
+        assert len(only_old) == 0, f"不应有仅旧图: {only_old}"
+
+        # 验证配对正确
+        pair_names = [p.name for p in pairs]
+        assert "img_001" in pair_names
+        assert "img_002" in pair_names
+
+    def test_match_pairs_exact_match_first(self, tmp_dir, synth_fits_data_16bit):
+        """测试精确匹配优先：应优先精确匹配，再去前缀匹配"""
+        try:
+            from astropy.io import fits
+        except ImportError:
+            pytest.skip("astropy not installed")
+        from scann.data.file_manager import match_new_old_pairs
+
+        new_dir = tmp_dir / "new_priority"
+        old_dir = tmp_dir / "old_priority"
+        new_dir.mkdir()
+        old_dir.mkdir()
+
+        hdr = fits.Header()
+        # 新图：正常文件名
+        fits.writeto(str(new_dir / "img_001.fits"), synth_fits_data_16bit, header=hdr)
+
+        # 旧图：同时存在精确匹配和前缀匹配
+        # 精确匹配优先
+        fits.writeto(str(old_dir / "img_001.fits"), synth_fits_data_16bit, header=hdr)
+        fits.writeto(str(old_dir / "FW_img_001.fits"), synth_fits_data_16bit, header=hdr)
+
+        pairs, only_new, only_old = match_new_old_pairs(str(new_dir), str(old_dir))
+
+        assert len(pairs) == 1, f"应配对1对，实际配对: {len(pairs)}"
+        assert len(only_new) == 0
+        assert len(only_old) == 1, "FW_img_001.fits 应作为仅旧图"
+
+        # 验证配对使用精确匹配
+        assert pairs[0].new_path.name == "img_001.fits"
+        assert pairs[0].old_path.name == "img_001.fits"
+
+    def test_match_pairs_case_insensitive_prefix(self, tmp_dir, synth_fits_data_16bit):
+        """测试前缀大小写不敏感：FW_、fw_、Fw_ 都应被识别"""
+        try:
+            from astropy.io import fits
+        except ImportError:
+            pytest.skip("astropy not installed")
+        from scann.data.file_manager import match_new_old_pairs
+
+        new_dir = tmp_dir / "new_case"
+        old_dir = tmp_dir / "old_case"
+        new_dir.mkdir()
+        old_dir.mkdir()
+
+        hdr = fits.Header()
+        # 新图
+        fits.writeto(str(new_dir / "test_001.fits"), synth_fits_data_16bit, header=hdr)
+        fits.writeto(str(new_dir / "test_002.fits"), synth_fits_data_16bit, header=hdr)
+        fits.writeto(str(new_dir / "test_003.fits"), synth_fits_data_16bit, header=hdr)
+
+        # 旧图：不同大小写的前缀
+        fits.writeto(str(old_dir / "FW_test_001.fits"), synth_fits_data_16bit, header=hdr)
+        fits.writeto(str(old_dir / "fw_test_002.fits"), synth_fits_data_16bit, header=hdr)
+        fits.writeto(str(old_dir / "Fw_test_003.fits"), synth_fits_data_16bit, header=hdr)
+
+        pairs, only_new, only_old = match_new_old_pairs(str(new_dir), str(old_dir))
+
+        assert len(pairs) == 3, f"应配对3对，实际配对: {len(pairs)}"
+        assert len(only_new) == 0
+        assert len(only_old) == 0
