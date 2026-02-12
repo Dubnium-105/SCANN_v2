@@ -45,6 +45,7 @@ from scann.core.annotation_models import (
     AnnotationSample,
     BBox,
 )
+from scann.core.models import AppConfig
 from scann.gui.widgets.annotation_list import AnnotationListWidget
 from scann.gui.widgets.annotation_stats import AnnotationStatsPanel
 from scann.gui.widgets.annotation_viewer import AnnotationViewer
@@ -63,7 +64,7 @@ class AnnotationDialog(QDialog):
     - v2: FITS 全图检测标注 (FitsAnnotationBackend)
     """
 
-    def __init__(self, parent: QWidget | None = None):
+    def __init__(self, parent: QWidget | None = None, config: AppConfig | None = None):
         super().__init__(parent)
         self.setWindowTitle("标注工具")
         self.setMinimumSize(900, 650)
@@ -71,13 +72,16 @@ class AnnotationDialog(QDialog):
         # 启用窗口最小化/最大化按钮
         self.setWindowFlags(self.windowFlags() | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint)
 
+        # 配置引用
+        self._config: AppConfig = config if config is not None else AppConfig()
+
         # 状态
         self._current_mode: str = "v1"
         self._backend: Optional[AnnotationBackend] = None
         self._samples: list[AnnotationSample] = []
         self._current_index: int = 0
         self._sample_count: int = 0
-        self._auto_advance: bool = True
+        self._auto_advance: bool = self._config.ann_auto_advance
         self._dataset_path: str = ""
         self._last_detail_type: Optional[str] = "asteroid"  # 上次标注类型，供新框沿用
 
@@ -95,8 +99,8 @@ class AnnotationDialog(QDialog):
         self._init_shortcuts()
         self._connect_signals()
 
-        # 默认 v1 模式
-        self.set_mode("v1")
+        # 从配置恢复 UI 状态
+        self._restore_from_config()
 
     # ─── UI 初始化 ───
 
@@ -996,6 +1000,125 @@ class AnnotationDialog(QDialog):
 
     def _on_auto_advance_changed(self, checked: bool) -> None:
         self._auto_advance = checked
+        self._config.ann_auto_advance = checked
+
+    # ─── 配置持久化 ───
+
+    def _restore_from_config(self) -> None:
+        """从 AppConfig 恢复标注工具的 UI 状态"""
+        cfg = self._config
+
+        # 窗口大小
+        self.resize(cfg.ann_window_width, cfg.ann_window_height)
+
+        # 模式
+        self.set_mode(cfg.ann_mode)
+
+        # 自动前进
+        self._chk_auto_advance.setChecked(cfg.ann_auto_advance)
+        self._auto_advance = cfg.ann_auto_advance
+
+        # 筛选
+        filter_map = {
+            "all": self._filter_all,
+            "unlabeled": self._filter_unlabeled,
+            "real": self._filter_real,
+            "bogus": self._filter_bogus,
+        }
+        rb = filter_map.get(cfg.ann_filter)
+        if rb is not None:
+            rb.setChecked(True)
+
+        # 排序
+        idx = self._sort_combo.findText(cfg.ann_sort)
+        if idx >= 0:
+            self._sort_combo.setCurrentIndex(idx)
+
+        # 边框粗细
+        # _create_bbox_width_slider 创建的是 QWidget, slider 是其子控件
+        slider = self._bbox_width_slider.findChild(QSlider)
+        if slider is not None:
+            slider.setValue(cfg.ann_bbox_width)
+            self._annotation_viewer.set_bbox_width(cfg.ann_bbox_width)
+
+        # 反色
+        if cfg.ann_invert:
+            self._btn_invert.setChecked(True)
+            self._annotation_viewer.toggle_invert()
+
+        # 分割面板比例
+        if cfg.ann_splitter_sizes:
+            self._splitter.setSizes(cfg.ann_splitter_sizes)
+
+        # 直方图拉伸参数
+        if self._histogram_panel is not None:
+            # 拉伸模式
+            mode_idx = self._histogram_panel.combo_mode.findText(cfg.ann_stretch_mode)
+            if mode_idx >= 0:
+                self._histogram_panel.combo_mode.setCurrentIndex(mode_idx)
+            # 黑白点 (需要在加载图片后才能生效，先记录到 spin)
+            self._histogram_panel.spin_black.setValue(int(cfg.ann_stretch_black))
+            self._histogram_panel.spin_white.setValue(int(cfg.ann_stretch_white))
+            # 面板可见性
+            if cfg.ann_histogram_visible:
+                self._histogram_panel.show()
+
+        # 数据集路径 (最后加载，因为它会触发 load_samples)
+        if cfg.ann_dataset_path:
+            self.load_dataset(cfg.ann_dataset_path)
+
+    def _save_to_config(self) -> None:
+        """将当前 UI 状态写回 AppConfig"""
+        cfg = self._config
+
+        # 模式
+        cfg.ann_mode = self._current_mode
+
+        # 数据集路径
+        cfg.ann_dataset_path = self._dataset_path
+
+        # 自动前进
+        cfg.ann_auto_advance = self._auto_advance
+
+        # 筛选
+        if self._filter_all.isChecked():
+            cfg.ann_filter = "all"
+        elif self._filter_unlabeled.isChecked():
+            cfg.ann_filter = "unlabeled"
+        elif self._filter_real.isChecked():
+            cfg.ann_filter = "real"
+        elif self._filter_bogus.isChecked():
+            cfg.ann_filter = "bogus"
+
+        # 排序
+        cfg.ann_sort = self._sort_combo.currentText()
+
+        # 边框粗细
+        slider = self._bbox_width_slider.findChild(QSlider)
+        if slider is not None:
+            cfg.ann_bbox_width = slider.value()
+
+        # 反色
+        cfg.ann_invert = self._btn_invert.isChecked()
+
+        # 分割面板比例
+        cfg.ann_splitter_sizes = self._splitter.sizes()
+
+        # 直方图拉伸参数
+        if self._histogram_panel is not None:
+            cfg.ann_stretch_black = self._histogram_panel.black_point
+            cfg.ann_stretch_white = self._histogram_panel.white_point
+            cfg.ann_stretch_mode = self._histogram_panel.combo_mode.currentText()
+            cfg.ann_histogram_visible = self._histogram_panel.isVisible()
+
+        # 窗口大小
+        cfg.ann_window_width = self.width()
+        cfg.ann_window_height = self.height()
+
+    def closeEvent(self, event) -> None:
+        """关闭时保存状态到配置"""
+        self._save_to_config()
+        super().closeEvent(event)
 
     def _save_annotations(self) -> None:
         """保存标注 (v2 FITS 模式自动持久化，此处为显式保存)"""
