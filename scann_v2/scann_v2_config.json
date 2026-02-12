@@ -63,20 +63,20 @@
   "window_width": 1600,
   "window_height": 986,
   "ann_mode": "v2",
-  "ann_dataset_path": "",
+  "ann_dataset_path": "G:/wksp/aikt/scann_v2/dataset",
   "ann_auto_advance": true,
   "ann_filter": "all",
   "ann_sort": "默认",
   "ann_bbox_width": 1,
   "ann_invert": false,
   "ann_splitter_sizes": [
-    866,
-    118
+    2239,
+    305
   ],
-  "ann_window_width": 1000,
-  "ann_window_height": 700,
-  "ann_stretch_black": 655.0,
-  "ann_stretch_white": 64879.0,
+  "ann_window_width": 2560,
+  "ann_window_height": 1377,
+  "ann_stretch_black": 13.0,
+  "ann_stretch_white": 180.0,
   "ann_stretch_mode": "平方根",
   "ann_histogram_visible": false
 }

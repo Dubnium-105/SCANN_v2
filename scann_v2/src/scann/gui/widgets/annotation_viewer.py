@@ -25,7 +25,12 @@ from PyQt5.QtWidgets import (
 
 import numpy as np
 
-from scann.core.annotation_models import BBox
+from scann.core.annotation_models import (
+    BBox,
+    DETAIL_TYPE_COLOR,
+    DEFAULT_BBOX_COLOR,
+    SELECTED_BBOX_COLOR,
+)
 
 
 class AnnotationViewer(QGraphicsView):
@@ -355,9 +360,22 @@ class AnnotationViewer(QGraphicsView):
 
         # 绘制标注框
         for i, bbox in enumerate(self._bboxes):
-            color = QColor("#4CAF50") if bbox.label == "real" else QColor("#F44336")
+            # 优先使用 detail_type 对应的颜色
+            if bbox.detail_type:
+                from scann.core.annotation_models import DetailType
+                try:
+                    detail_enum = DetailType(bbox.detail_type)
+                    color_hex = DETAIL_TYPE_COLOR.get(detail_enum, DEFAULT_BBOX_COLOR)
+                    color = QColor(color_hex)
+                except (ValueError, KeyError):
+                    # 如果 detail_type 无效，使用默认颜色
+                    color = QColor(DEFAULT_BBOX_COLOR)
+            else:
+                # 降级使用 label 对应的颜色
+                color = QColor("#4CAF50") if bbox.label == "real" else QColor("#F44336")
+            
             if i == self._selected_bbox_idx:
-                color = QColor("#9C27B0")  # 紫色选中
+                color = QColor(SELECTED_BBOX_COLOR)  # 紫色选中
             pen = QPen(color, self._bbox_pen_width)
             self._scene.addRect(
                 QRectF(bbox.x, bbox.y, bbox.width, bbox.height), pen
