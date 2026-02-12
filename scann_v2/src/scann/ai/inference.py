@@ -41,6 +41,7 @@ class InferenceEngine:
         self.device = self._resolve_device()
         self.model = None
         self._threshold = 0.5
+        self._channel_order = (0, 1, 2)  # 默认通道顺序
 
         if model_path:
             self._load_model(model_path)
@@ -54,6 +55,8 @@ class InferenceEngine:
 
     def _load_model(self, path: str) -> None:
         """加载模型 (自动检测 v1/v2 格式)"""
+        import logging
+        _logger = logging.getLogger(__name__)
         from scann.ai.model import ModelFormat, SCANNClassifier
 
         # 解析模型格式
@@ -67,13 +70,51 @@ class InferenceEngine:
         )
         self._model_format = fmt
 
-        # 尝试读取保存的阈值
+        # 尝试读取保存的阈值和元数据
         ckpt = torch.load(path, map_location="cpu", weights_only=False)
         if isinstance(ckpt, dict):
-            self._threshold = ckpt.get("threshold", 0.5)
-            # 如果 checkpoint 中有格式元数据，记录下来
+            # 确定实际的模型格式
             if "model_format" in ckpt:
-                self._model_format = ModelFormat(ckpt["model_format"])
+                # V2 checkpoint 中有明确的格式元数据
+                try:
+                    self._model_format = ModelFormat(ckpt["model_format"])
+                except ValueError:
+                    pass
+            elif fmt == ModelFormat.AUTO:
+                # 没有元数据，通过 state_dict 键名推断
+                state_dict = ckpt.get("state") or ckpt.get("model_state") or {}
+                if isinstance(state_dict, dict) and state_dict:
+                    from scann.ai.model import detect_model_format
+                    self._model_format = detect_model_format(state_dict)
+
+            # 读取阈值：优先 threshold (v2)，其次 t_recall (v1 训练脚本)
+            if "threshold" in ckpt and ckpt["threshold"] is not None:
+                self._threshold = float(ckpt["threshold"])
+            elif "t_recall" in ckpt and ckpt["t_recall"] is not None:
+                self._threshold = float(ckpt["t_recall"])
+                _logger.info("使用 V1 阈值 (t_recall): %.4f", self._threshold)
+            else:
+                self._threshold = 0.5
+
+            # 读取 V1 的通道顺序 (order 字段, 如 "0,1,2")
+            order_str = ckpt.get("order")
+            if order_str and isinstance(order_str, str):
+                try:
+                    self._channel_order = tuple(
+                        int(x.strip()) for x in order_str.split(",")
+                    )
+                    _logger.info("使用 V1 通道顺序: %s", self._channel_order)
+                except (ValueError, TypeError):
+                    self._channel_order = (0, 1, 2)
+            else:
+                self._channel_order = (0, 1, 2)
+
+    # V1 训练时使用的归一化常数 (来自 train_triplet_resnet_augmented.py)
+    V1_NORMALIZE_MEAN = (0.2637, 0.2819, 0.2838)
+    V1_NORMALIZE_STD = (0.0890, 0.1226, 0.1283)
+    # V2 默认归一化常数
+    V2_NORMALIZE_MEAN = (0.26, 0.27, 0.27)
+    V2_NORMALIZE_STD = (0.09, 0.11, 0.11)
 
     @property
     def is_ready(self) -> bool:
@@ -83,19 +124,35 @@ class InferenceEngine:
     def threshold(self) -> float:
         return self._threshold
 
+    @property
+    def model_format(self):
+        """当前加载的模型格式"""
+        return self._model_format
+
+    @property
+    def is_v1(self) -> bool:
+        """当前是否为 V1 模型"""
+        from scann.ai.model import ModelFormat
+        return self._model_format == ModelFormat.V1_CLASSIFIER
+
+    @property
+    def channel_order(self) -> tuple:
+        """模型训练时使用的通道顺序"""
+        return self._channel_order
+
     @torch.no_grad()
     def classify_patches(
         self,
         patches: List[np.ndarray],
-        normalize_mean: tuple = (0.26, 0.27, 0.27),
-        normalize_std: tuple = (0.09, 0.11, 0.11),
+        normalize_mean: Optional[tuple] = None,
+        normalize_std: Optional[tuple] = None,
     ) -> List[float]:
         """批量分类裁剪图
 
         Args:
             patches: 裁剪图列表, 每个 shape=(3, H, W), float32, 0~1
-            normalize_mean: 归一化均值
-            normalize_std: 归一化标准差
+            normalize_mean: 归一化均值 (None=根据模型格式自动选择)
+            normalize_std: 归一化标准差 (None=根据模型格式自动选择)
 
         Returns:
             正类概率列表
@@ -104,6 +161,15 @@ class InferenceEngine:
             raise RuntimeError("模型未加载")
         if not patches:
             return []
+
+        # 根据模型格式自动选择归一化常数
+        if normalize_mean is None or normalize_std is None:
+            if self.is_v1:
+                normalize_mean = self.V1_NORMALIZE_MEAN
+                normalize_std = self.V1_NORMALIZE_STD
+            else:
+                normalize_mean = self.V2_NORMALIZE_MEAN
+                normalize_std = self.V2_NORMALIZE_STD
 
         norm = transforms.Normalize(list(normalize_mean), list(normalize_std))
         resize = transforms.Resize((224, 224), antialias=True)

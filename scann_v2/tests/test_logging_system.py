@@ -256,11 +256,7 @@ class TestLoggingSystem:
         assert window._logger is not None
         assert isinstance(window._logger, logging.Logger)
 
-        # Mock status bar
-        mock_statusbar = Mock()
-        window.setStatusBar(mock_statusbar)
-
-        # Call _show_message
+        # Verify _show_message works without mocking status bar
         test_message = "Global logger test"
         window._show_message(test_message)
 
