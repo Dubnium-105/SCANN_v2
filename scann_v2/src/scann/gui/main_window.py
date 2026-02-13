@@ -1134,21 +1134,99 @@ class MainWindow(QMainWindow):
 
         success_count = 0
         fail_count = 0
+        total = len(self._image_pairs)
 
-        for pair in self._image_pairs:
-            try:
-                new_fits = read_fits(pair.new_path)
-                old_fits = read_fits(pair.old_path)
-                result = align(new_fits.data, old_fits.data)
+        # 进度条可视化，避免大量处理时窗口“假死”
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, total)
+        self.progress_bar.setValue(0)
+        self.btn_align.setEnabled(False)
+        self.act_align.setEnabled(False)
 
-                if result.success and result.aligned_old is not None:
-                    # 将对齐后的旧图回写
-                    write_fits(pair.old_path, result.aligned_old, old_fits.header)
-                    success_count += 1
-                else:
+        self._show_message(f"开始批量对齐: 共 {total} 对", 3000)
+
+        try:
+            for idx, pair in enumerate(self._image_pairs, start=1):
+                try:
+                    new_fits = read_fits(pair.new_path)
+                    old_fits = read_fits(pair.old_path)
+
+                    # 输入有效性校验：常量图（常见为全零）无法进行星点或特征对齐
+                    new_data = np.nan_to_num(new_fits.data.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+                    old_data = np.nan_to_num(old_fits.data.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+                    new_span = float(np.percentile(new_data, 99.5) - np.percentile(new_data, 0.5))
+                    old_span = float(np.percentile(old_data, 99.5) - np.percentile(old_data, 0.5))
+                    if new_span <= 1e-6 or old_span <= 1e-6:
+                        fail_count += 1
+                        self._logger.error(
+                            "[%s/%s] 对齐前校验失败: %s; new_span=%.6g, old_span=%.6g; new=%s old=%s",
+                            idx,
+                            total,
+                            pair.name,
+                            new_span,
+                            old_span,
+                            pair.new_path,
+                            pair.old_path,
+                        )
+                        self._show_message(
+                            f"[{idx}/{total}] 跳过无效图像: {pair.name} (新图/旧图近乎常量)",
+                            2000,
+                            level='WARNING',
+                        )
+                        self.progress_bar.setValue(idx)
+                        QApplication.processEvents()
+                        continue
+
+                    self._logger.info("[%s/%s] 开始 Siril 对齐: %s", idx, total, pair.name)
+                    self._show_message(f"[{idx}/{total}] Siril 对齐: {pair.name}", 1000)
+
+                    # 优先使用 Siril 对齐；失败时自动回退到内置对齐
+                    result = align(new_fits.data, old_fits.data, method="siril")
+                    if not result.success or result.aligned_old is None:
+                        h, w = new_fits.data.shape[:2]
+                        fallback_max_shift = max(100, int(min(h, w) * 0.45))
+                        self._logger.warning(
+                            "[%s/%s] Siril 对齐失败，回退 auto: %s; reason=%s; fallback_max_shift=%s",
+                            idx,
+                            total,
+                            pair.name,
+                            result.error_message,
+                            fallback_max_shift,
+                        )
+                        self._show_message(f"[{idx}/{total}] Siril 失败，回退内置对齐: {pair.name}", 1500, level='WARNING')
+                        result = align(
+                            new_fits.data,
+                            old_fits.data,
+                            method="auto",
+                            max_shift=fallback_max_shift,
+                        )
+
+                    if result.success and result.aligned_old is not None:
+                        # 将对齐后的旧图回写
+                        write_fits(pair.old_path, result.aligned_old, old_fits.header)
+                        success_count += 1
+                        self._logger.info("[%s/%s] 对齐成功: %s", idx, total, pair.name)
+                    else:
+                        fail_count += 1
+                        self._logger.error(
+                            "[%s/%s] 对齐失败: %s; reason=%s",
+                            idx,
+                            total,
+                            pair.name,
+                            result.error_message,
+                        )
+
+                except Exception as e:
                     fail_count += 1
-            except Exception:
-                fail_count += 1
+                    self._logger.exception("[%s/%s] 对齐异常: %s", idx, total, pair.name)
+                    self._show_message(f"[{idx}/{total}] 对齐异常: {pair.name} ({e})", 2000, level='ERROR')
+
+                self.progress_bar.setValue(idx)
+                QApplication.processEvents()
+        finally:
+            self.progress_bar.setVisible(False)
+            self.btn_align.setEnabled(True)
+            self.act_align.setEnabled(True)
 
         self._show_message(f"对齐完成: 成功 {success_count}, 失败 {fail_count}", 5000)
 
