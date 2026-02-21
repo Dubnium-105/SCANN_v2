@@ -38,6 +38,11 @@ class FitsImagePair:
 FITS_EXTENSIONS = {".fits", ".fit", ".fts", ".fts2"}
 
 
+def _is_aligned_crop_artifact(path: Path) -> bool:
+    """是否为对齐裁剪产物文件。"""
+    return path.stem.lower().endswith("__aligned_crop")
+
+
 def scan_fits_folder(folder: str) -> List[FitsFileInfo]:
     """扫描 FITS 文件夹
 
@@ -55,7 +60,11 @@ def scan_fits_folder(folder: str) -> List[FitsFileInfo]:
 
     results = []
     for f in sorted(folder_path.iterdir()):
-        if f.is_file() and f.suffix.lower() in FITS_EXTENSIONS:
+        if (
+            f.is_file()
+            and f.suffix.lower() in FITS_EXTENSIONS
+            and not _is_aligned_crop_artifact(f)
+        ):
             stat = f.stat()
             results.append(FitsFileInfo(
                 path=f,

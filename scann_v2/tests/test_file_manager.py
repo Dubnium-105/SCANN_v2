@@ -157,3 +157,51 @@ class TestFileManager:
         assert len(pairs) == 3, f"应配对3对，实际配对: {len(pairs)}"
         assert len(only_new) == 0
         assert len(only_old) == 0
+
+    def test_scan_fits_folder_ignores_aligned_crop_artifacts(self, tmp_dir, synth_fits_data_16bit):
+        """扫描列表不应显式包含 __aligned_crop 产物文件"""
+        try:
+            from astropy.io import fits
+        except ImportError:
+            pytest.skip("astropy not installed")
+        from scann.data.file_manager import scan_fits_folder
+
+        folder = tmp_dir / "scan_ignore_aligned"
+        folder.mkdir()
+        hdr = fits.Header()
+
+        fits.writeto(str(folder / "IC 196.fts"), synth_fits_data_16bit, header=hdr)
+        fits.writeto(str(folder / "IC 196__aligned_crop.fts"), synth_fits_data_16bit, header=hdr)
+
+        files = scan_fits_folder(str(folder))
+        names = [f.path.name for f in files]
+        assert "IC 196.fts" in names
+        assert "IC 196__aligned_crop.fts" not in names
+
+    def test_match_pairs_ignores_aligned_crop_artifacts(self, tmp_dir, synth_fits_data_16bit):
+        """配对列表与仅新/仅旧列表均不应显式包含 __aligned_crop 产物文件"""
+        try:
+            from astropy.io import fits
+        except ImportError:
+            pytest.skip("astropy not installed")
+        from scann.data.file_manager import match_new_old_pairs
+
+        new_dir = tmp_dir / "new_ignore_aligned"
+        old_dir = tmp_dir / "old_ignore_aligned"
+        new_dir.mkdir()
+        old_dir.mkdir()
+        hdr = fits.Header()
+
+        fits.writeto(str(new_dir / "IC 196.fts"), synth_fits_data_16bit, header=hdr)
+        fits.writeto(str(old_dir / "FW_IC 196.fit"), synth_fits_data_16bit, header=hdr)
+
+        # 历史对齐产物（应被忽略）
+        fits.writeto(str(new_dir / "IC 196__aligned_crop.fts"), synth_fits_data_16bit, header=hdr)
+        fits.writeto(str(old_dir / "FW_IC 196__aligned_crop.fit"), synth_fits_data_16bit, header=hdr)
+
+        pairs, only_new, only_old = match_new_old_pairs(str(new_dir), str(old_dir))
+
+        assert len(pairs) == 1
+        assert pairs[0].name == "IC 196"
+        assert only_new == []
+        assert only_old == []

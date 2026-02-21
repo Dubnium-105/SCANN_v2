@@ -102,14 +102,13 @@ class SuspectTableWidget(QWidget):
 
         # 列宽
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(self.COL_INDEX, QHeaderView.Fixed)
-        header.resizeSection(self.COL_INDEX, 30)
-        header.setSectionResizeMode(self.COL_SCORE, QHeaderView.Fixed)
-        header.resizeSection(self.COL_SCORE, 70)
-        header.setSectionResizeMode(self.COL_PIXEL, QHeaderView.Stretch)
-        header.setSectionResizeMode(self.COL_WCS, QHeaderView.Stretch)
-        header.setSectionResizeMode(self.COL_VERDICT, QHeaderView.Fixed)
-        header.resizeSection(self.COL_VERDICT, 60)
+        header.setSectionResizeMode(QHeaderView.Interactive)
+        header.setMinimumSectionSize(30)
+        header.resizeSection(self.COL_INDEX, 40)
+        header.resizeSection(self.COL_SCORE, 90)
+        header.resizeSection(self.COL_PIXEL, 140)
+        header.resizeSection(self.COL_WCS, 180)
+        header.resizeSection(self.COL_VERDICT, 80)
 
         layout.addWidget(self.table)
 
@@ -138,6 +137,8 @@ class SuspectTableWidget(QWidget):
         self.table.setStyleSheet(
             "QTableWidget { background-color: #252526; color: #D4D4D4; "
             "  gridline-color: #3C3C3C; }"
+            "QTableWidget::item { background-color: #252526; }"
+            "QTableWidget::item:alternate { background-color: #2D2D2D; }"
             "QTableWidget::item:selected { background-color: #094771; }"
             "QHeaderView::section { background-color: #333333; color: #D4D4D4; "
             "  border: 1px solid #3C3C3C; padding: 2px; }"

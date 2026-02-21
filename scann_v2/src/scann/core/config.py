@@ -144,6 +144,7 @@ def load_config(
     config.show_known_objects = data.get("show_known_objects", True)
     config.histogram_visible = data.get("histogram_visible", False)
     config.sidebar_collapsed = data.get("sidebar_collapsed", False)
+    config.sidebar_width = data.get("sidebar_width", 240)
 
     # 窗口几何
     config.window_width = data.get("window_width", 1600)
@@ -247,6 +248,7 @@ def save_config(
         "show_known_objects": config.show_known_objects,
         "histogram_visible": config.histogram_visible,
         "sidebar_collapsed": config.sidebar_collapsed,
+        "sidebar_width": config.sidebar_width,
         "window_width": config.window_width,
         "window_height": config.window_height,
         "ann_mode": config.ann_mode,

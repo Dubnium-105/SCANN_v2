@@ -16,6 +16,8 @@ UI/UX 设计实现:
 from __future__ import annotations
 
 from typing import Optional
+from pathlib import Path
+import math
 
 import logging
 
@@ -35,6 +37,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSplitter,
     QStatusBar,
     QVBoxLayout,
     QWidget,
@@ -199,6 +202,9 @@ class MainWindow(QMainWindow):
         self._current_pair_idx: int = -1
         self._new_fits_header: Optional[FitsHeader] = None
         self._old_fits_header: Optional[FitsHeader] = None
+        
+        # ── 候选目标缓存：key 是配对索引，value 是候选目标列表
+        self._candidates_cache: dict[int, list[Candidate]] = {}
 
         # ── AI/推理 ──
         self._inference_engine = None
@@ -364,6 +370,10 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
+        self.main_splitter = QSplitter(Qt.Horizontal)
+        self.main_splitter.setChildrenCollapsible(False)
+        self.main_splitter.setHandleWidth(6)
+
         # ── 可折叠侧边栏 ──
         self.sidebar = CollapsibleSidebar()
         sidebar_layout = self.sidebar.content_layout
@@ -404,8 +414,7 @@ class MainWindow(QMainWindow):
         # 可疑目标表格
         self.suspect_table = SuspectTableWidget()
         sidebar_layout.addWidget(self.suspect_table, 3)
-
-        main_layout.addWidget(self.sidebar)
+        self.main_splitter.addWidget(self.sidebar)
 
         # ── 右侧图像区域 ──
         right_panel = QWidget()
@@ -498,7 +507,15 @@ class MainWindow(QMainWindow):
         ctrl_layout.addWidget(self.btn_next_candidate)
 
         right_layout.addWidget(ctrl_widget)
-        main_layout.addWidget(right_panel, 1)
+
+        self.main_splitter.addWidget(right_panel)
+        self.main_splitter.setStretchFactor(0, 0)
+        self.main_splitter.setStretchFactor(1, 1)
+        self.main_splitter.setSizes(
+            [self.sidebar.preferred_width, max(1, self.width() - self.sidebar.preferred_width)]
+        )
+        self.main_splitter.splitterMoved.connect(self._on_main_splitter_moved)
+        main_layout.addWidget(self.main_splitter, 1)
 
         # ── 信号连接 ──
         # 连接已移至 __init__，确保依赖的 Dock 已初始化
@@ -660,6 +677,14 @@ class MainWindow(QMainWindow):
     # ══════════════════════════════════════════════
     #  事件处理
     # ══════════════════════════════════════════════
+
+    def _on_main_splitter_moved(self, _pos: int, _index: int) -> None:
+        """记录用户通过拖动分割器调整后的侧边栏宽度。"""
+        if not hasattr(self, "main_splitter"):
+            return
+        sizes = self.main_splitter.sizes()
+        if len(sizes) >= 2 and sizes[0] > 0 and not self.sidebar.is_collapsed:
+            self.sidebar.set_preferred_width(sizes[0])
 
     def _on_blink_toggle(self) -> None:
         """切换闪烁"""
@@ -955,7 +980,7 @@ class MainWindow(QMainWindow):
             self.file_list.setCurrentRow(current + 1)
 
     # ══════════════════════════════════════════════
-    #  TODO: 待完成的菜单 / 按钮处理方法
+    #  菜单 / 按钮处理方法
     # ══════════════════════════════════════════════
 
     # ── 文件菜单 ──
@@ -973,6 +998,7 @@ class MainWindow(QMainWindow):
         self.file_list.clear()
         self._image_pairs = []
         self._current_pair_idx = -1
+        self._candidates_cache.clear()  # 清空候选目标缓存
 
         for f in files:
             self.file_list.addItem(f.stem)
@@ -1022,6 +1048,9 @@ class MainWindow(QMainWindow):
                 self._new_folder, folder
             )
             self._image_pairs = pairs
+
+            # 清空候选目标缓存，因为配对已改变
+            self._candidates_cache.clear()
 
             # 更新文件列表显示配对状态
             self.file_list.clear()
@@ -1134,6 +1163,7 @@ class MainWindow(QMainWindow):
 
         success_count = 0
         fail_count = 0
+        skip_count = 0
         total = len(self._image_pairs)
 
         # 进度条可视化，避免大量处理时窗口“假死”
@@ -1148,6 +1178,14 @@ class MainWindow(QMainWindow):
         try:
             for idx, pair in enumerate(self._image_pairs, start=1):
                 try:
+                    if self._pair_has_aligned_artifacts(pair):
+                        skip_count += 1
+                        self._logger.info("[%s/%s] 已有对齐裁剪标记，跳过: %s", idx, total, pair.name)
+                        self._show_message(f"[{idx}/{total}] 跳过已对齐: {pair.name}", 1000)
+                        self.progress_bar.setValue(idx)
+                        QApplication.processEvents()
+                        continue
+
                     new_fits = read_fits(pair.new_path)
                     old_fits = read_fits(pair.old_path)
 
@@ -1202,10 +1240,52 @@ class MainWindow(QMainWindow):
                         )
 
                     if result.success and result.aligned_old is not None:
-                        # 将对齐后的旧图回写
-                        write_fits(pair.old_path, result.aligned_old, old_fits.header)
+                        h, w = new_data.shape[:2]
+                        crop_bounds = self._calc_overlap_crop_bounds(w=w, h=h, dx=result.dx, dy=result.dy)
+                        if crop_bounds is None:
+                            fail_count += 1
+                            self._logger.error(
+                                "[%s/%s] 对齐后无有效重叠区域: %s; dx=%.3f dy=%.3f",
+                                idx,
+                                total,
+                                pair.name,
+                                result.dx,
+                                result.dy,
+                            )
+                            self._show_message(
+                                f"[{idx}/{total}] 对齐失败(无重叠区域): {pair.name}",
+                                2000,
+                                level='WARNING',
+                            )
+                            self.progress_bar.setValue(idx)
+                            QApplication.processEvents()
+                            continue
+
+                        x0, x1, y0, y1 = crop_bounds
+                        cropped_new = new_data[y0:y1, x0:x1]
+                        cropped_old = result.aligned_old[y0:y1, x0:x1]
+
+                        new_aligned_path, old_aligned_path, new_marker_path, old_marker_path = self._aligned_artifact_paths(pair)
+                        write_fits(new_aligned_path, cropped_new, new_fits.header)
+                        write_fits(old_aligned_path, cropped_old, old_fits.header)
+                        marker_text = (
+                            "aligned=1\n"
+                            f"dx={result.dx:.6f}\n"
+                            f"dy={result.dy:.6f}\n"
+                            f"crop={x0},{x1},{y0},{y1}\n"
+                        )
+                        new_marker_path.write_text(marker_text, encoding="utf-8")
+                        old_marker_path.write_text(marker_text, encoding="utf-8")
+
                         success_count += 1
-                        self._logger.info("[%s/%s] 对齐成功: %s", idx, total, pair.name)
+                        self._logger.info(
+                            "[%s/%s] 对齐成功并保存裁剪重叠图: %s; new=%s old=%s",
+                            idx,
+                            total,
+                            pair.name,
+                            new_aligned_path,
+                            old_aligned_path,
+                        )
                     else:
                         fail_count += 1
                         self._logger.error(
@@ -1228,7 +1308,7 @@ class MainWindow(QMainWindow):
             self.btn_align.setEnabled(True)
             self.act_align.setEnabled(True)
 
-        self._show_message(f"对齐完成: 成功 {success_count}, 失败 {fail_count}", 5000)
+        self._show_message(f"对齐完成: 成功 {success_count}, 跳过 {skip_count}, 失败 {fail_count}", 5000)
 
         # 重新加载当前显示的配对
         if self._current_pair_idx >= 0:
@@ -1358,9 +1438,13 @@ class MainWindow(QMainWindow):
 
         if result.candidates:
             self.set_candidates(result.candidates)
+            # 将检测结果缓存到当前配对索引
+            self._candidates_cache[self._current_pair_idx] = result.candidates
             self._show_message(f"检测完成: 发现 {len(result.candidates)} 个候选体", 5000)
         else:
             self._show_message(f"检测完成: 未发现候选体 {result.error or ''}", 5000)
+            # 即使没有候选体，也缓存空列表，表示已检测过
+            self._candidates_cache[self._current_pair_idx] = []
 
     def _on_open_training(self) -> None:
         """打开训练对话框"""
@@ -1497,7 +1581,7 @@ class MainWindow(QMainWindow):
 
     def _on_menu_query(self, query_type: str) -> None:
         """从菜单栏触发的查询 (无坐标上下文)"""
-        # TODO: 若有选中候选体则使用其坐标查询，否则提示用户
+        # 若有选中候选体则使用其坐标查询，否则提示用户
         if self._candidates and 0 <= self._current_candidate_idx < len(self._candidates):
             cand = self._candidates[self._current_candidate_idx]
             self._do_query(query_type, int(cand.x), int(cand.y))
@@ -1724,17 +1808,74 @@ class MainWindow(QMainWindow):
         pair = self._image_pairs[index]
         self._current_pair_idx = index
 
+        # 切换图像配对时，先清空当前候选目标
+        self._candidates = []
+        self._current_candidate_idx = -1
+        self._update_markers()
+        self.suspect_table.set_candidates([])
+
         try:
-            new_fits = read_fits(pair.new_path)
-            old_fits = read_fits(pair.old_path)
+            new_path, old_path, using_aligned = self._resolve_pair_image_paths(pair)
+            new_fits = read_fits(new_path)
+            old_fits = read_fits(old_path)
             self._new_image_data = new_fits.data
             self._old_image_data = old_fits.data
             self._new_fits_header = new_fits.header
             self._old_fits_header = old_fits.header
             self._on_show_new()
             self.histogram_panel.set_image_data(new_fits.data)
+
+            if using_aligned:
+                self._logger.info("加载已对齐裁剪图像: %s", pair.name)
+            
+            # 从缓存中恢复该配对的候选目标（如果有）
+            if index in self._candidates_cache:
+                self.set_candidates(self._candidates_cache[index])
         except Exception as e:
             self._show_message(f"加载失败: {e}", 5000, level='ERROR')
+
+    def _aligned_artifact_paths(self, pair) -> tuple[Path, Path, Path, Path]:
+        """返回配对图像的对齐裁剪产物路径。
+
+        Returns:
+            (new_aligned_path, old_aligned_path, new_marker_path, old_marker_path)
+        """
+        new_path = Path(pair.new_path)
+        old_path = Path(pair.old_path)
+
+        new_aligned_path = new_path.with_name(f"{new_path.stem}__aligned_crop{new_path.suffix}")
+        old_aligned_path = old_path.with_name(f"{old_path.stem}__aligned_crop{old_path.suffix}")
+        new_marker_path = new_path.with_name(f"{new_path.stem}__aligned.marker")
+        old_marker_path = old_path.with_name(f"{old_path.stem}__aligned.marker")
+        return new_aligned_path, old_aligned_path, new_marker_path, old_marker_path
+
+    def _pair_has_aligned_artifacts(self, pair) -> bool:
+        """配对是否已有可复用的对齐裁剪结果。"""
+        new_aligned_path, old_aligned_path, new_marker_path, old_marker_path = self._aligned_artifact_paths(pair)
+        return (
+            new_aligned_path.is_file()
+            and old_aligned_path.is_file()
+            and new_marker_path.is_file()
+            and old_marker_path.is_file()
+        )
+
+    def _resolve_pair_image_paths(self, pair) -> tuple[Path, Path, bool]:
+        """解析配对应使用的图像路径（优先使用对齐裁剪图）。"""
+        if self._pair_has_aligned_artifacts(pair):
+            new_aligned_path, old_aligned_path, _, _ = self._aligned_artifact_paths(pair)
+            return new_aligned_path, old_aligned_path, True
+        return Path(pair.new_path), Path(pair.old_path), False
+
+    def _calc_overlap_crop_bounds(self, w: int, h: int, dx: float, dy: float) -> Optional[tuple[int, int, int, int]]:
+        """根据平移量计算新图与对齐后旧图的重叠裁剪区域。"""
+        x0 = max(0, int(math.ceil(dx)))
+        x1 = min(w, int(math.floor(w + dx)))
+        y0 = max(0, int(math.ceil(dy)))
+        y1 = min(h, int(math.floor(h + dy)))
+
+        if x1 <= x0 or y1 <= y0:
+            return None
+        return x0, x1, y0, y1
 
     def _on_pair_selected(self, index: int) -> None:
         """配对列表选择事件"""
@@ -1815,6 +1956,7 @@ class MainWindow(QMainWindow):
         self._config.show_known_objects = self.act_show_known.isChecked()
         self._config.histogram_visible = self.histogram_panel.isVisible()
         self._config.sidebar_collapsed = self.sidebar.is_collapsed
+        self._config.sidebar_width = self.sidebar.preferred_width
 
         # 窗口几何
         self._config.window_width = self.width()
@@ -1843,6 +1985,11 @@ class MainWindow(QMainWindow):
             )
 
         # 侧边栏折叠状态
+        self.sidebar.set_preferred_width(cfg.sidebar_width)
+        if hasattr(self, "main_splitter"):
+            self.main_splitter.setSizes(
+                [cfg.sidebar_width, max(1, self.width() - cfg.sidebar_width)]
+            )
         if cfg.sidebar_collapsed:
             self.sidebar.collapse()
 

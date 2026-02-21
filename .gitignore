@@ -1,12 +1,14 @@
-# Byte-compiled / optimized / DLL files
+# ============================================
+# Python »º´æºÍ±àÒëÎÄ¼þ
+# ============================================
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
 
-# Distribution / packaging
+# ============================================
+# Python °üºÍ·Ö·¢
+# ============================================
 .Python
 build/
 develop-eggs/
@@ -27,15 +29,15 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+# ============================================
 # PyInstaller
+# ============================================
 *.manifest
 *.spec
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
+# ============================================
+# ²âÊÔºÍ¸²¸ÇÂÊ±¨¸æ
+# ============================================
 htmlcov/
 .tox/
 .nox/
@@ -49,124 +51,120 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
-# Translations
-*.mo
-*.pot
-
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
+# ============================================
+# ÎÄµµ¹¹½¨²úÎï
+# ============================================
 docs/_build/
+/site
 
-# PyBuilder
-target/
-
+# ============================================
 # Jupyter Notebook
+# ============================================
 .ipynb_checkpoints
+*.ipynb
 
-# IPython
-profile_default/
-ipython_config.py
-
-# pyenv
-.python-version
-
-# pipenv
-Pipfile.lock
-
-# PEP 582
-__pypackages__/
-
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath parsed files
-*.sage.py
-
-# Environments
+# ============================================
+# ÐéÄâ»·¾³
+# ============================================
 .env
-.venv
-env/
+.venv/
 venv/
 ENV/
 env.bak/
 venv.bak/
 conda/
 conda-meta/
+Pipfile.lock
+.python-version
 
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pyre type checker
-.pyre/
-
-# PyTorch / Machine Learning
-*.pth
-*.pt
-*.ckpt
-*.pt.tar
-runs/
-wandb/
-lightning_logs/
-
-# IDEs
+# ============================================
+# IDE ÅäÖÃÎÄ¼þ
+# ============================================
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-.DS_Store
 *.sublime-project
 *.sublime-workspace
+.spyderproject
+.spyproject
+.ropeproject
 
-# OS
-Thumbs.db
-.DS_Store
+# ============================================
+# »úÆ÷Ñ§Ï°Ä£ÐÍºÍÑµÁ·²úÎï
+# ============================================
+*.pth
+*.pt
+*.ckpt
+*.pt.tar
+*.onnx
+*.h5
+runs/
+wandb/
+lightning_logs/
+tensorboard/
 
-# Project specific
+# ============================================
+# Êý¾Ý¼¯ºÍÊý¾ÝÎÄ¼þ
+# ============================================
 dataset/
 SCANN_Data/
 negative/
 positive/
-æ–°å»ºæ–‡ä»¶å¤¹/
+ÐÂ½¨ÎÄ¼þ¼Ð/
+*.fits
+*.fit
+*.fts
+*.ssf
+*.png
+*.jpg
+*.jpeg
+*.bmp
+*.tiff
+
+# ============================================
+# ÈÕÖ¾ºÍÁÙÊ±ÎÄ¼þ
+# ============================================
 logs/
 *.log
-
-# Temporary files
+scann.log
 *.tmp
 *.bak
 *.swp
 *~
 
-# SQLite databases
+# ============================================
+# Êý¾Ý¿â
+# ============================================
 *.db
 *.sqlite
 *.sqlite3
 
-# Output files
+# ============================================
+# Êä³öºÍ½á¹ûÎÄ¼þ
+# ============================================
 output/
 results/
+screenshots/
+
+# ============================================
+# ²Ù×÷ÏµÍ³ÎÄ¼þ
+# ============================================
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# ============================================
+# ÀàÐÍ¼ì²é
+# ============================================
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+
+# ============================================
+# ÏîÄ¿ÌØ¶¨µÄÁÙÊ±ÎÄ¼þ
+# ============================================
+model_cache/
+torch_cache/

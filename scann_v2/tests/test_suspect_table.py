@@ -15,6 +15,7 @@ import pytest
 from unittest.mock import Mock
 
 from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QHeaderView
 
 from scann.core.models import Candidate, TargetVerdict
 from scann.gui.widgets.suspect_table import SuspectTableWidget
@@ -99,6 +100,22 @@ class TestSetCandidates:
         table.set_candidates(sample_candidates)
         table.set_candidates([])
         assert table.table.rowCount() == 0
+
+
+class TestResizableColumns:
+    """测试表格列支持拖动调整宽度"""
+
+    def test_all_columns_are_interactive_resize_mode(self, table):
+        header = table.table.horizontalHeader()
+        for col in range(table.NUM_COLS):
+            assert header.sectionResizeMode(col) == QHeaderView.Interactive
+
+    def test_user_resize_section_width_takes_effect(self, table):
+        header = table.table.horizontalHeader()
+        original = header.sectionSize(table.COL_PIXEL)
+        target = original + 40
+        header.resizeSection(table.COL_PIXEL, target)
+        assert header.sectionSize(table.COL_PIXEL) == target
 
 
 class TestUpdateCandidate:

@@ -23,6 +23,7 @@ class CollapsibleSidebar(QFrame):
 
     DEFAULT_WIDTH = 240
     MIN_WIDTH = 200
+    MAX_WIDTH = 400
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -30,8 +31,8 @@ class CollapsibleSidebar(QFrame):
         self._stored_width = self.DEFAULT_WIDTH
 
         self.setFrameStyle(QFrame.StyledPanel | QFrame.Plain)
-        self.setMinimumWidth(0)  # 折叠时可到 0
-        self.setMaximumWidth(400)
+        self.setMinimumWidth(self.MIN_WIDTH)
+        self.setMaximumWidth(self.MAX_WIDTH)
 
         # 内容布局
         self._content_layout = QVBoxLayout(self)
@@ -42,8 +43,7 @@ class CollapsibleSidebar(QFrame):
         self._animation = QPropertyAnimation(self, b"maximumWidth")
         self._animation.setDuration(200)
 
-        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
-        self.setFixedWidth(self.DEFAULT_WIDTH)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
         # 暗色主题
         self.setStyleSheet(
@@ -62,6 +62,15 @@ class CollapsibleSidebar(QFrame):
     def is_collapsed(self) -> bool:
         return self._collapsed
 
+    @property
+    def preferred_width(self) -> int:
+        return self._stored_width
+
+    def set_preferred_width(self, width: int) -> None:
+        """记录用户拖动后的侧边栏宽度。"""
+        width = max(self.MIN_WIDTH, min(int(width), self.MAX_WIDTH))
+        self._stored_width = width
+
     def toggle(self) -> None:
         """切换折叠/展开"""
         if self._collapsed:
@@ -74,7 +83,10 @@ class CollapsibleSidebar(QFrame):
         if self._collapsed:
             return
         self._collapsed = True
-        self._stored_width = self.width()
+        if self.width() > 0:
+            self._stored_width = max(self.MIN_WIDTH, min(self.width(), self.MAX_WIDTH))
+
+        self.setMinimumWidth(0)
 
         self._animation.setStartValue(self._stored_width)
         self._animation.setEndValue(0)
@@ -86,6 +98,9 @@ class CollapsibleSidebar(QFrame):
         if not self._collapsed:
             return
         self._collapsed = False
+
+        self.setMinimumWidth(self.MIN_WIDTH)
+        self.setMaximumWidth(self.MAX_WIDTH)
 
         self._animation.setStartValue(0)
         self._animation.setEndValue(self._stored_width)
@@ -102,3 +117,9 @@ class CollapsibleSidebar(QFrame):
             self.collapse()
         elif window_width >= 1200 and self._collapsed:
             self.expand()
+
+    def resizeEvent(self, event) -> None:
+        """在展开状态下记住当前宽度（用于下次折叠后恢复）。"""
+        super().resizeEvent(event)
+        if not self._collapsed and self.width() >= self.MIN_WIDTH:
+            self._stored_width = min(self.width(), self.MAX_WIDTH)
