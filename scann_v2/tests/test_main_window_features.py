@@ -70,6 +70,7 @@ def _make_mock_window():
     w.btn_mark_real = Mock()
     w.btn_mark_bogus = Mock()
     w.btn_next_candidate = Mock()
+    w.btn_align = Mock()
 
     # 侧边栏
     w.sidebar = Mock()
@@ -103,6 +104,7 @@ def _make_mock_window():
     w.act_show_markers.isChecked.return_value = True
     w.act_show_mpcorb = Mock()
     w.act_show_known = Mock()
+    w.act_align = Mock()
 
     # 最近打开菜单
     w.menu_recent = Mock()
@@ -127,6 +129,7 @@ def _make_mock_window():
     w._config = AppConfig()
     w._annotation_dialog = None
     w._training_worker = None
+    w._candidates_cache = {}
 
     # logger mock（_show_message 依赖 self._logger）
     w._logger = Mock()
@@ -312,21 +315,24 @@ class TestBatchAlign:
 
     @patch("scann.gui.main_window.read_fits")
     @patch("scann.gui.main_window.align")
-    def test_batch_align_processes_pairs(self, mock_align, mock_read):
+    def test_batch_align_processes_pairs(self, mock_align, mock_read, tmp_path):
         """批量对齐应处理所有图像配对"""
         from scann.data.file_manager import FitsImagePair
         w = _make_mock_window()
 
         pair = FitsImagePair(
             name="img_001",
-            new_path=Path("/new/img_001.fits"),
-            old_path=Path("/old/img_001.fits"),
+            new_path=tmp_path / "new" / "img_001.fits",
+            old_path=tmp_path / "old" / "img_001.fits",
         )
+        pair.new_path.parent.mkdir(parents=True, exist_ok=True)
+        pair.old_path.parent.mkdir(parents=True, exist_ok=True)
         w._image_pairs = [pair]
 
-        new_data = np.zeros((64, 64), dtype=np.float32)
-        old_data = np.ones((64, 64), dtype=np.float32)
-        aligned_old = np.zeros((64, 64), dtype=np.float32)
+        yy, xx = np.mgrid[0:64, 0:64]
+        new_data = (xx + yy).astype(np.float32)
+        old_data = (xx * 0.7 + yy * 0.3).astype(np.float32)
+        aligned_old = old_data.copy()
 
         mock_read.side_effect = [
             FitsImage(data=new_data, header=FitsHeader(raw={}), path=pair.new_path),
@@ -337,6 +343,88 @@ class TestBatchAlign:
         w._on_batch_align()
 
         mock_align.assert_called_once()
+
+    @patch("scann.gui.main_window.write_fits")
+    @patch("scann.gui.main_window.read_fits")
+    @patch("scann.gui.main_window.align")
+    def test_batch_align_saves_cropped_artifacts_without_overwriting_original(
+        self,
+        mock_align,
+        mock_read,
+        mock_write,
+        tmp_path,
+    ):
+        """对齐后应保存裁剪重叠图，并保留原图不变"""
+        from scann.data.file_manager import FitsImagePair
+
+        w = _make_mock_window()
+        pair = FitsImagePair(
+            name="img_001",
+            new_path=tmp_path / "new" / "img_001.fits",
+            old_path=tmp_path / "old" / "img_001.fits",
+        )
+        pair.new_path.parent.mkdir(parents=True, exist_ok=True)
+        pair.old_path.parent.mkdir(parents=True, exist_ok=True)
+        w._image_pairs = [pair]
+
+        base = np.arange(64 * 64, dtype=np.float32).reshape(64, 64)
+        new_data = base
+        old_data = np.flip(base, axis=1).copy()
+        aligned_old = old_data.copy()
+
+        mock_read.side_effect = [
+            FitsImage(data=new_data, header=FitsHeader(raw={"OBJECT": "N"}), path=pair.new_path),
+            FitsImage(data=old_data, header=FitsHeader(raw={"OBJECT": "O"}), path=pair.old_path),
+        ]
+        mock_align.return_value = AlignResult(aligned_old=aligned_old, dx=3.0, dy=2.0, success=True)
+
+        w._on_batch_align()
+
+        written_paths = [c.args[0] for c in mock_write.call_args_list]
+        assert pair.old_path not in written_paths
+        assert pair.new_path not in written_paths
+        assert len(written_paths) == 2
+
+        new_aligned_path, old_aligned_path, new_marker_path, old_marker_path = w._aligned_artifact_paths(pair)
+        assert new_aligned_path in written_paths
+        assert old_aligned_path in written_paths
+        assert new_marker_path.exists()
+        assert old_marker_path.exists()
+
+    @patch("scann.gui.main_window.write_fits")
+    @patch("scann.gui.main_window.read_fits")
+    @patch("scann.gui.main_window.align")
+    def test_batch_align_skips_pair_when_marked(
+        self,
+        mock_align,
+        mock_read,
+        mock_write,
+        tmp_path,
+    ):
+        """已标记为对齐完成的配对应在下次对齐时跳过"""
+        from scann.data.file_manager import FitsImagePair
+
+        w = _make_mock_window()
+        pair = FitsImagePair(
+            name="img_001",
+            new_path=tmp_path / "new" / "img_001.fits",
+            old_path=tmp_path / "old" / "img_001.fits",
+        )
+        pair.new_path.parent.mkdir(parents=True, exist_ok=True)
+        pair.old_path.parent.mkdir(parents=True, exist_ok=True)
+        w._image_pairs = [pair]
+
+        new_aligned_path, old_aligned_path, new_marker_path, old_marker_path = w._aligned_artifact_paths(pair)
+        new_aligned_path.write_text("dummy", encoding="utf-8")
+        old_aligned_path.write_text("dummy", encoding="utf-8")
+        new_marker_path.write_text("aligned", encoding="utf-8")
+        old_marker_path.write_text("aligned", encoding="utf-8")
+
+        w._on_batch_align()
+
+        mock_read.assert_not_called()
+        mock_align.assert_not_called()
+        mock_write.assert_not_called()
 
     def test_batch_align_no_pairs_shows_message(self):
         """无配对时应显示提示信息"""
@@ -725,6 +813,47 @@ class TestPairListSelection:
         w._image_pairs = []
 
         w._on_pair_selected(5)  # 不应崩溃
+
+    @patch("scann.gui.main_window.read_fits")
+    def test_load_pair_prefers_aligned_cropped_files(self, mock_read, tmp_path):
+        """加载配对时应优先使用已对齐裁剪后的新旧图"""
+        from scann.data.file_manager import FitsImagePair
+
+        w = _make_mock_window()
+        pair = FitsImagePair(
+            name="img_001",
+            new_path=tmp_path / "new" / "img_001.fits",
+            old_path=tmp_path / "old" / "img_001.fits",
+        )
+        pair.new_path.parent.mkdir(parents=True, exist_ok=True)
+        pair.old_path.parent.mkdir(parents=True, exist_ok=True)
+        w._image_pairs = [pair]
+
+        new_aligned_path, old_aligned_path, new_marker_path, old_marker_path = w._aligned_artifact_paths(pair)
+        new_aligned_path.write_text("dummy", encoding="utf-8")
+        old_aligned_path.write_text("dummy", encoding="utf-8")
+        new_marker_path.write_text("aligned", encoding="utf-8")
+        old_marker_path.write_text("aligned", encoding="utf-8")
+
+        test_header = FitsHeader(raw={})
+
+        def _fake_read(path):
+            path = Path(path)
+            if path == new_aligned_path:
+                return FitsImage(data=np.ones((16, 16), dtype=np.float32), header=test_header, path=path)
+            if path == old_aligned_path:
+                return FitsImage(data=np.full((16, 16), 2.0, dtype=np.float32), header=test_header, path=path)
+            return FitsImage(data=np.zeros((64, 64), dtype=np.float32), header=test_header, path=path)
+
+        mock_read.side_effect = _fake_read
+
+        w._load_pair(0)
+
+        assert w._new_image_data.shape == (16, 16)
+        assert w._old_image_data.shape == (16, 16)
+        read_paths = [Path(c.args[0]) for c in mock_read.call_args_list]
+        assert new_aligned_path in read_paths
+        assert old_aligned_path in read_paths
 
 
 # ═══════════════════════════════════════════════

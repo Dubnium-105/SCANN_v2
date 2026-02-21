@@ -21,6 +21,10 @@ class CoordinateLabel(QLabel):
         """设置显示的坐标"""
         self.setText(f"RA: {ra}  Dec: {dec}")
 
+    def set_wcs_coordinates(self, ra: str, dec: str) -> None:
+        """设置 WCS 坐标（兼容旧调用名）。"""
+        self.set_coordinates(ra, dec)
+
     def set_pixel_coordinates(self, x: int, y: int) -> None:
         """设置像素坐标"""
         self.setText(f"X: {x}  Y: {y}")

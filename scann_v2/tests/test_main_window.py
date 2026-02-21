@@ -14,6 +14,7 @@
 import pytest
 import numpy as np
 from unittest.mock import Mock, patch, MagicMock
+from PyQt5.QtCore import Qt
 
 from scann.core.models import Candidate, TargetVerdict
 from scann.services.blink_service import BlinkState
@@ -442,3 +443,37 @@ class TestHistogramToggle:
         w.histogram_panel.isVisible.return_value = True
         w._on_toggle_histogram()
         w.histogram_panel.setVisible.assert_called_with(False)
+
+
+class TestMainWindowResizableSidebar:
+    """测试主窗口侧边栏支持拖动调整宽度"""
+
+    def test_uses_horizontal_splitter_for_sidebar(self, qapp):
+        from scann.gui.main_window import MainWindow
+
+        w = MainWindow()
+        try:
+            assert hasattr(w, "main_splitter")
+            assert w.main_splitter.orientation() == Qt.Horizontal
+            assert w.main_splitter.widget(0) is w.sidebar
+            assert w.main_splitter.count() == 2
+        finally:
+            w._config.confirm_before_close = False
+            w.close()
+
+    def test_sidebar_width_can_be_resized_via_splitter(self, qapp):
+        from scann.gui.main_window import MainWindow
+
+        w = MainWindow()
+        try:
+            sizes = w.main_splitter.sizes()
+            if len(sizes) >= 2:
+                left, right = sizes[0], sizes[1]
+                target_left = max(w.sidebar.MIN_WIDTH, left + 60)
+                target_right = max(100, right - (target_left - left))
+                w.main_splitter.setSizes([target_left, target_right])
+                qapp.processEvents()
+                assert w.main_splitter.sizes()[0] >= w.sidebar.MIN_WIDTH
+        finally:
+            w._config.confirm_before_close = False
+            w.close()

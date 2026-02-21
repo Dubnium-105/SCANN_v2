@@ -320,6 +320,7 @@ class AppConfig:
     show_known_objects: bool = True       # 显示已知天体
     histogram_visible: bool = False       # 直方图面板是否可见
     sidebar_collapsed: bool = False       # 侧边栏是否折叠
+    sidebar_width: int = 240              # 侧边栏宽度
 
     # 窗口几何
     window_width: int = 1600
