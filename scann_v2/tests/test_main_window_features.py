@@ -550,6 +550,42 @@ class TestBatchDetect:
         assert w._candidates == cands
         assert w._current_candidate_idx == 0
 
+    @patch("scann.gui.main_window.DetectionPipeline")
+    def test_batch_detect_skip_align_follows_current_pair_state(self, mock_pipeline_cls):
+        """仅在当前配对已使用对齐产物时才应 skip_align"""
+        from scann.services.detection_service import PipelineResult
+        w = _make_mock_window()
+        w._new_image_data = np.zeros((64, 64), dtype=np.float32)
+        w._old_image_data = np.ones((64, 64), dtype=np.float32)
+        w._current_pair_using_aligned = False
+
+        mock_pipeline = Mock()
+        mock_pipeline.process_pair.return_value = PipelineResult(pair_name="test", candidates=[])
+        mock_pipeline_cls.return_value = mock_pipeline
+
+        w._on_batch_detect()
+
+        kwargs = mock_pipeline.process_pair.call_args.kwargs
+        assert kwargs.get("skip_align") is False
+
+
+class TestAlignedCropBounds:
+    """测试对齐后黑边裁剪边界估计"""
+
+    def test_calc_nonzero_valid_bounds_removes_black_border(self):
+        w = _make_mock_window()
+        img = np.ones((20, 20), dtype=np.float32)
+        img[:, :3] = 0.0
+        img[:2, :] = 0.0
+
+        bounds = w._calc_nonzero_valid_bounds(img)
+        assert bounds is not None
+        x0, x1, y0, y1 = bounds
+        assert x0 >= 3
+        assert y0 >= 2
+        assert x1 <= 20
+        assert y1 <= 20
+
 
 # ═══════════════════════════════════════════════
 #  功能 6: 保存图像

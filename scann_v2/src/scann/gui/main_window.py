@@ -200,6 +200,7 @@ class MainWindow(QMainWindow):
         self._old_folder: str = ""
         self._image_pairs: list = []  # FitsImagePair 列表
         self._current_pair_idx: int = -1
+        self._current_pair_using_aligned: bool = False
         self._new_fits_header: Optional[FitsHeader] = None
         self._old_fits_header: Optional[FitsHeader] = None
         
@@ -1241,7 +1242,13 @@ class MainWindow(QMainWindow):
 
                     if result.success and result.aligned_old is not None:
                         h, w = new_data.shape[:2]
-                        crop_bounds = self._calc_overlap_crop_bounds(w=w, h=h, dx=result.dx, dy=result.dy)
+                        crop_bounds = self._calc_overlap_crop_bounds(
+                            w=w,
+                            h=h,
+                            dx=result.dx,
+                            dy=result.dy,
+                            aligned_old=result.aligned_old,
+                        )
                         if crop_bounds is None:
                             fail_count += 1
                             self._logger.error(
@@ -1433,7 +1440,8 @@ class MainWindow(QMainWindow):
             pair_name="current",
             new_data=self._new_image_data,
             old_data=old_data,
-            skip_align=True,  # 如果已对齐则跳过
+            # 仅当当前加载的是已对齐裁剪产物时才跳过对齐
+            skip_align=bool(self.__dict__.get("_current_pair_using_aligned", False)),
         )
 
         if result.candidates:
@@ -1820,10 +1828,21 @@ class MainWindow(QMainWindow):
             old_fits = read_fits(old_path)
             self._new_image_data = new_fits.data
             self._old_image_data = old_fits.data
+            self._current_pair_using_aligned = bool(using_aligned)
+
+            # 防御性修复：历史对齐产物可能仍残留 L 型黑边。
+            if using_aligned:
+                bounds = self._calc_nonzero_valid_bounds(self._old_image_data)
+                if bounds is not None:
+                    x0, x1, y0, y1 = bounds
+                    if (x1 - x0) >= 16 and (y1 - y0) >= 16:
+                        self._new_image_data = self._new_image_data[y0:y1, x0:x1]
+                        self._old_image_data = self._old_image_data[y0:y1, x0:x1]
+
             self._new_fits_header = new_fits.header
             self._old_fits_header = old_fits.header
             self._on_show_new()
-            self.histogram_panel.set_image_data(new_fits.data)
+            self.histogram_panel.set_image_data(self._new_image_data)
 
             if using_aligned:
                 self._logger.info("加载已对齐裁剪图像: %s", pair.name)
@@ -1866,12 +1885,59 @@ class MainWindow(QMainWindow):
             return new_aligned_path, old_aligned_path, True
         return Path(pair.new_path), Path(pair.old_path), False
 
-    def _calc_overlap_crop_bounds(self, w: int, h: int, dx: float, dy: float) -> Optional[tuple[int, int, int, int]]:
-        """根据平移量计算新图与对齐后旧图的重叠裁剪区域。"""
+    def _calc_nonzero_valid_bounds(self, image: np.ndarray) -> Optional[tuple[int, int, int, int]]:
+        """估计旧图有效区域边界（用于移除对齐后黑边）。"""
+        if image is None or image.size == 0:
+            return None
+
+        arr = np.nan_to_num(image.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+        mask = np.abs(arr) > 1e-6
+        if not np.any(mask):
+            return None
+
+        row_ratio = np.mean(mask, axis=1)
+        col_ratio = np.mean(mask, axis=0)
+
+        row_valid = row_ratio > 0.98
+        col_valid = col_ratio > 0.98
+        # 如果阈值过严（如存在窄黑边），回退为“该行/列存在任意有效像素”
+        if not np.any(row_valid):
+            row_valid = np.any(mask, axis=1)
+        if not np.any(col_valid):
+            col_valid = np.any(mask, axis=0)
+        if not np.any(row_valid) or not np.any(col_valid):
+            return None
+
+        ys = np.where(row_valid)[0]
+        xs = np.where(col_valid)[0]
+        y0, y1 = int(ys[0]), int(ys[-1] + 1)
+        x0, x1 = int(xs[0]), int(xs[-1] + 1)
+        if x1 <= x0 or y1 <= y0:
+            return None
+        return x0, x1, y0, y1
+
+    def _calc_overlap_crop_bounds(
+        self,
+        w: int,
+        h: int,
+        dx: float,
+        dy: float,
+        aligned_old: Optional[np.ndarray] = None,
+    ) -> Optional[tuple[int, int, int, int]]:
+        """根据平移量 + 旧图有效区域，计算新旧图重叠裁剪区域。"""
         x0 = max(0, int(math.ceil(dx)))
         x1 = min(w, int(math.floor(w + dx)))
         y0 = max(0, int(math.ceil(dy)))
         y1 = min(h, int(math.floor(h + dy)))
+
+        if aligned_old is not None:
+            valid = self._calc_nonzero_valid_bounds(aligned_old)
+            if valid is not None:
+                vx0, vx1, vy0, vy1 = valid
+                x0 = max(x0, vx0)
+                x1 = min(x1, vx1)
+                y0 = max(y0, vy0)
+                y1 = min(y1, vy1)
 
         if x1 <= x0 or y1 <= y0:
             return None

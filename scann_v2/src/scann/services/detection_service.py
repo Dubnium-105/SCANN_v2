@@ -26,6 +26,32 @@ DEFAULT_PATCH_SIZE = 80
 MODEL_INPUT_SIZE = 224
 
 
+def _robust_to_uint8(image: np.ndarray) -> np.ndarray:
+    """将任意数值范围图像稳健映射到 uint8。
+
+    目标：让 v1 模型看到与历史 PNG 三联图更接近的 8-bit 输入分布。
+    """
+    if image.dtype == np.uint8:
+        return image
+
+    img = np.nan_to_num(image.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+    if img.size == 0:
+        return np.zeros_like(img, dtype=np.uint8)
+
+    # 稳健百分位拉伸，减少极端值影响
+    p_low = float(np.percentile(img, 1.0))
+    p_high = float(np.percentile(img, 99.0))
+    if not np.isfinite(p_low) or not np.isfinite(p_high) or p_high <= p_low:
+        p_low = float(np.min(img))
+        p_high = float(np.max(img))
+        if p_high <= p_low:
+            return np.zeros_like(img, dtype=np.uint8)
+
+    scaled = (img - p_low) / (p_high - p_low)
+    scaled = np.clip(scaled, 0.0, 1.0)
+    return (scaled * 255.0).astype(np.uint8)
+
+
 @dataclass
 class PipelineResult:
     """管线处理结果"""
@@ -104,6 +130,10 @@ class DetectionPipeline:
                     error=f"对齐失败: {align_result.error_message}",
                 )
 
+        # 类型与运行时双保险：对齐成功但未返回图像时回退旧图
+        if aligned_old is None:
+            aligned_old = old_data
+
         # 2. 候选检测 (CV)
         candidates = detect_candidates(
             new_data, aligned_old, params=self.detection_params
@@ -129,10 +159,17 @@ class DetectionPipeline:
                 relaxed_params.topk,
             )
 
+        # v1 模型输入适配：将 FITS 强度先稳健映射到 8-bit，再走三联图推理
+        ai_new_data = new_data
+        ai_old_data = aligned_old
+        if ai_available and self._is_v1_model():
+            ai_new_data = _robust_to_uint8(new_data)
+            ai_old_data = _robust_to_uint8(aligned_old)
+
         # 2c. 若仍无结果且 AI 可用，使用滑动窗口全图扫描
         if not candidates and ai_available:
             candidates = self._sliding_window_detect(
-                new_data, aligned_old
+                ai_new_data, ai_old_data
             )
             logger.info(
                 "AI滑动窗口检测: 发现 %d 个候选体", len(candidates)
@@ -140,8 +177,16 @@ class DetectionPipeline:
 
         # 3. AI 评分 + 阈值过滤
         if ai_available and candidates:
-            threshold = self.inference_engine.threshold
-            candidates = self._ai_score(candidates, new_data, aligned_old)
+            engine = self.inference_engine
+            if engine is None:
+                return PipelineResult(
+                    pair_name=pair_name,
+                    candidates=candidates,
+                    align_result=align_result,
+                )
+
+            threshold = engine.threshold
+            candidates = self._ai_score(candidates, ai_new_data, ai_old_data)
             # 按阈值过滤，仅保留 AI 认为 "真" 的候选
             candidates = [c for c in candidates if c.ai_score >= threshold]
             logger.info(
@@ -217,6 +262,13 @@ class DetectionPipeline:
 
         for cy in range(half, h - half, stride):
             for cx in range(half, w - half, stride):
+                # v1 对齐后旧图边缘可能有黑边（L 型），这些窗口直接跳过
+                if self._is_v1_model():
+                    old_patch = self._extract_patch(old_data, cx, cy, size)
+                    valid_ratio = float(np.mean(np.abs(old_patch.astype(np.float32)) > 1e-6))
+                    if valid_ratio < 0.90:
+                        continue
+
                 patch_3ch = self._prepare_triplet_patch(
                     new_data, old_data, cx, cy, size,
                     channel_order=channel_order,
@@ -426,11 +478,21 @@ class DetectionPipeline:
 
             # 确保 uint8 范围
             p_diff = patch_diff.astype(np.float32) / 255.0
-            p_new = patch_new.astype(np.float32) / 255.0
-            p_old = patch_old.astype(np.float32) / 255.0  # Ref = Old
+            p_new = np.clip(patch_new.astype(np.float32), 0.0, 255.0) / 255.0
+            p_old = np.clip(patch_old.astype(np.float32), 0.0, 255.0) / 255.0  # Ref = Old
 
-            # V1 通道顺序固定: [Diff, New, Ref(Old)]
-            patch_3ch = np.stack([p_diff, p_new, p_old], axis=0).astype(np.float32)
+            # V1 基础语义: [Diff, New, Ref(Old)]，再按 checkpoint 的 order 重排
+            # 兼容历史训练时的 channel_order 设置
+            if (
+                not isinstance(channel_order, (tuple, list))
+                or len(channel_order) != 3
+                or sorted(channel_order) != [0, 1, 2]
+            ):
+                channel_order = (0, 1, 2)
+
+            channels = [p_diff, p_new, p_old]
+            ordered_channels = [channels[i] for i in channel_order]
+            patch_3ch = np.stack(ordered_channels, axis=0).astype(np.float32)
         else:
             # ── V2 模式 ──
             # 计算差分

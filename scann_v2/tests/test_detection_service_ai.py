@@ -166,6 +166,7 @@ class TestAIScoring:
         """测试：process_pair 应该调用 AI 评分"""
         mock_engine = Mock()
         mock_engine.is_ready = True
+        mock_engine.threshold = 0.5
         mock_engine.classify_patches.return_value = [0.8]
 
         pipeline = DetectionPipeline(inference_engine=mock_engine)
@@ -186,3 +187,80 @@ class TestAIScoring:
         # 断言：候选体应该有 AI 分数
         assert len(result.candidates) == 1
         assert result.candidates[0].ai_score == pytest.approx(0.8)
+
+
+class TestV1InputCompatibility:
+    """v1 三联图输入兼容性测试"""
+
+    def test_prepare_triplet_patch_v1_respects_channel_order(self):
+        """v1 模式下应按 [Diff, New, Ref] 基础语义并支持 order 重排"""
+        mock_engine = Mock()
+        mock_engine.is_ready = True
+        mock_engine.is_v1 = True
+        pipeline = DetectionPipeline(inference_engine=mock_engine, patch_size=8)
+
+        # 构造可控输入：new 全 200，old 全 50
+        # 则 diff=150，归一化后: old(50/255) < diff(150/255) < new(200/255)
+        new_data = np.zeros((224, 224), dtype=np.uint8)
+        old_data = np.zeros((224, 224), dtype=np.uint8)
+
+        def fake_extract(image, x, y, size):
+            if image is new_data:
+                return np.full((size, size), 200, dtype=np.uint8)
+            return np.full((size, size), 50, dtype=np.uint8)
+
+        pipeline._extract_patch = fake_extract
+
+        # 通道顺序反转: [old, new, diff]
+        patch = pipeline._prepare_triplet_patch(
+            new_data,
+            old_data,
+            x=112,
+            y=112,
+            size=224,
+            channel_order=(2, 1, 0),
+        )
+
+        assert patch.shape == (3, 224, 224)
+        assert np.all(patch >= 0) and np.all(patch <= 1)
+
+        m0 = float(patch[0].mean())  # old
+        m1 = float(patch[1].mean())  # new
+        m2 = float(patch[2].mean())  # diff
+        # 反转后应是 old < new 且 diff 介于两者之间
+        assert m0 < m1
+        assert m0 < m2 < m1
+
+    def test_process_pair_v1_uses_robust_uint8_inputs(self):
+        """v1 模式 process_pair 应先做稳健 uint8 映射再推理"""
+        mock_engine = Mock()
+        mock_engine.is_ready = True
+        mock_engine.is_v1 = True
+        mock_engine.threshold = 0.2
+
+        captured = []
+
+        def capture_patches(patches, **kwargs):
+            captured.extend(patches)
+            return [0.9 for _ in patches]
+
+        mock_engine.classify_patches.side_effect = capture_patches
+
+        pipeline = DetectionPipeline(inference_engine=mock_engine, patch_size=8)
+
+        # 使用明显超出 8-bit 的数据，验证流程会被映射到 0~1
+        new_data = (np.random.rand(64, 64).astype(np.float32) * 50000.0) - 1000.0
+        old_data = (np.random.rand(64, 64).astype(np.float32) * 50000.0) - 1000.0
+
+        # 强制走滑窗路径：CV 始终返回空
+        with pytest.MonkeyPatch().context() as m:
+            def mock_detect(new, old, **kwargs):
+                return []
+            m.setattr("scann.services.detection_service.detect_candidates", mock_detect)
+            result = pipeline.process_pair("test_v1", new_data, old_data, skip_align=True)
+
+        assert isinstance(result, PipelineResult)
+        assert len(captured) > 0
+        for p in captured[:5]:
+            assert p.shape == (3, 224, 224)
+            assert np.all(p >= 0) and np.all(p <= 1)

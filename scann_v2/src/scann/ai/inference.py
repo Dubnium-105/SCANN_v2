@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 import numpy as np
 import torch
@@ -161,6 +161,7 @@ class InferenceEngine:
             raise RuntimeError("模型未加载")
         if not patches:
             return []
+        assert self.model is not None
 
         # 根据模型格式自动选择归一化常数
         if normalize_mean is None or normalize_std is None:
@@ -189,8 +190,13 @@ class InferenceEngine:
             stack = torch.stack(tensors).to(self.device)
 
             if self.config.use_amp and self.device.type == "cuda":
-                with torch.amp.autocast("cuda"):
-                    logits = self.model(stack)
+                amp_mod = getattr(torch, "amp", None)
+                if amp_mod is not None and hasattr(amp_mod, "autocast"):
+                    with amp_mod.autocast("cuda"):
+                        logits = self.model(stack)
+                else:
+                    with torch.cuda.amp.autocast():
+                        logits = self.model(stack)
             else:
                 logits = self.model(stack)
 
@@ -199,19 +205,107 @@ class InferenceEngine:
 
         return all_probs
 
+    @staticmethod
+    def _robust_to_uint8(image: np.ndarray) -> np.ndarray:
+        """将任意动态范围图像稳健映射到 uint8。"""
+        if image.dtype == np.uint8:
+            return image
+
+        img = np.nan_to_num(image.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+        if img.size == 0:
+            return np.zeros_like(img, dtype=np.uint8)
+
+        p_low = float(np.percentile(img, 1.0))
+        p_high = float(np.percentile(img, 99.0))
+        if not np.isfinite(p_low) or not np.isfinite(p_high) or p_high <= p_low:
+            p_low = float(np.min(img))
+            p_high = float(np.max(img))
+            if p_high <= p_low:
+                return np.zeros_like(img, dtype=np.uint8)
+
+        scaled = (img - p_low) / (p_high - p_low)
+        scaled = np.clip(scaled, 0.0, 1.0)
+        return (scaled * 255.0).astype(np.uint8)
+
+    @staticmethod
+    def _extract_patch_2d(image: np.ndarray, x: int, y: int, size: int) -> np.ndarray:
+        """从 2D 图像中按中心点提取 patch，越界补零。"""
+        half = size // 2
+        y0 = max(0, y - half)
+        y1 = min(image.shape[0], y + half)
+        x0 = max(0, x - half)
+        x1 = min(image.shape[1], x + half)
+
+        patch = np.zeros((size, size), dtype=image.dtype)
+        ph = y1 - y0
+        pw = x1 - x0
+        py0 = half - (y - y0)
+        px0 = half - (x - x0)
+        patch[py0:py0 + ph, px0:px0 + pw] = image[y0:y1, x0:x1]
+        return patch
+
+    def _prepare_v1_triplet_patch(
+        self,
+        new_u8: np.ndarray,
+        old_u8: np.ndarray,
+        x: int,
+        y: int,
+        patch_size: int,
+    ) -> np.ndarray:
+        """按 v1 训练语义构造单个三联图 patch: [Diff, New, Ref(Old)]。"""
+        p_new = self._extract_patch_2d(new_u8, x, y, patch_size)
+        p_old = self._extract_patch_2d(old_u8, x, y, patch_size)
+        p_diff = np.clip(
+            p_new.astype(np.float32) - p_old.astype(np.float32),
+            0,
+            255,
+        ).astype(np.uint8)
+
+        c_diff = p_diff.astype(np.float32) / 255.0
+        c_new = p_new.astype(np.float32) / 255.0
+        c_old = p_old.astype(np.float32) / 255.0
+
+        order = self._channel_order
+        if (
+            not isinstance(order, (tuple, list))
+            or len(order) != 3
+            or sorted(order) != [0, 1, 2]
+        ):
+            order = (0, 1, 2)
+
+        channels = [c_diff, c_new, c_old]
+        ordered = [channels[i] for i in order]
+        return np.stack(ordered, axis=0).astype(np.float32)
+
+    @staticmethod
+    def _pad_to_min_size(image: np.ndarray, min_h: int, min_w: int) -> np.ndarray:
+        """将 2D 图像右下补零到至少 (min_h, min_w)。"""
+        h, w = image.shape[:2]
+        if h >= min_h and w >= min_w:
+            return image
+        out = np.zeros((max(h, min_h), max(w, min_w)), dtype=image.dtype)
+        out[:h, :w] = image
+        return out
+
     def detect_full_image(
         self,
         image: np.ndarray,
+        old_image: Optional[np.ndarray] = None,
         patch_size: int = 224,
         stride: int = 112,
         iou_threshold: float = 0.5,
     ) -> List[Detection]:
         """全图检测 (v2 新功能)
 
-        使用滑动窗口在整幅图像上进行检测，并使用 NMS 合并重叠结果
+        使用滑动窗口在整幅图像上进行检测，并使用 NMS 合并重叠结果。
+
+        兼容逻辑:
+        - v1 模型: 需要 new/old 两张图，按 [Diff, New, Ref] 生成三联图输入。
+        - v2 模型: 保持单图滑窗（灰度复制为 3 通道）。
 
         Args:
-            image: 完整天文图像 (H, W)
+            image: 完整天文图像（v1 时表示 new 图，v2 时表示单图输入）
+            old_image: v1 模式下的 old 图（可选；缺失时退化为零背景）
             patch_size: 滑动窗口大小（默认 224）
             stride: 滑动步长（默认 112，50% 重叠）
             iou_threshold: NMS IoU 阈值（默认 0.5）
@@ -219,11 +313,10 @@ class InferenceEngine:
         Returns:
             检测结果列表
         """
-        from skimage.transform import resize
-
         if self.model is None:
             return []
 
+        image = np.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0)
         height, width = image.shape[:2]
 
         # 如果图像小于窗口大小，先进行填充
@@ -233,53 +326,74 @@ class InferenceEngine:
             image = padded
             height, width = patch_size, patch_size
 
+        centers = []
+        patches: List[np.ndarray] = []
+
+        if self.is_v1:
+            if old_image is None:
+                old_work = np.zeros_like(image)
+            else:
+                old_work = np.nan_to_num(old_image, nan=0.0, posinf=0.0, neginf=0.0)
+
+            # v1 也保证两张图都至少达到 patch_size，避免小图没有滑窗
+            image = self._pad_to_min_size(image, patch_size, patch_size)
+            old_work = self._pad_to_min_size(old_work, patch_size, patch_size)
+            height, width = image.shape[:2]
+
+            # 尺寸不一致时裁到公共区域（与对齐后输入语义一致）
+            h2, w2 = old_work.shape[:2]
+            h = min(height, h2)
+            w = min(width, w2)
+            new_work = image[:h, :w]
+            old_work = old_work[:h, :w]
+
+            new_u8 = self._robust_to_uint8(new_work)
+            old_u8 = self._robust_to_uint8(old_work)
+
+            half = patch_size // 2
+            for cy in range(half, h - half + 1, stride):
+                for cx in range(half, w - half + 1, stride):
+                    patch_3ch = self._prepare_v1_triplet_patch(
+                        new_u8,
+                        old_u8,
+                        cx,
+                        cy,
+                        patch_size,
+                    )
+                    patches.append(patch_3ch)
+                    centers.append((cx, cy))
+        else:
+            # v2: 单图滑窗，窗口独立 min-max，再复制为 3 通道
+            for y in range(0, height - patch_size + 1, stride):
+                for x in range(0, width - patch_size + 1, stride):
+                    patch = image[y:y + patch_size, x:x + patch_size].astype(np.float32)
+                    if patch.max() > patch.min():
+                        patch = (patch - patch.min()) / (patch.max() - patch.min())
+                    else:
+                        patch = patch - patch.min()
+
+                    patch_3ch = np.stack([patch, patch, patch], axis=0).astype(np.float32)
+                    patches.append(patch_3ch)
+                    centers.append((int(x + patch_size / 2.0), int(y + patch_size / 2.0)))
+
+        if not patches:
+            return []
+
+        probs = self.classify_patches(patches)
+
         # 收集所有窗口的检测结果
         all_detections = []
-
-        # 滑动窗口遍历
-        for y in range(0, height - patch_size + 1, stride):
-            for x in range(0, width - patch_size + 1, stride):
-                # 提取窗口
-                patch = image[y:y+patch_size, x:x+patch_size]
-
-                # 归一化
-                if patch.max() > patch.min():
-                    patch = (patch - patch.min()) / (patch.max() - patch.min())
-
-                # 转换为张量并添加 batch 和 channel 维度
-                patch_tensor = torch.from_numpy(patch).float()
-                patch_tensor = patch_tensor.unsqueeze(0).unsqueeze(0)  # (1, 1, H, W)
-
-                # 重复为 3 通道（如果模型期望 RGB 输入）
-                patch_tensor = patch_tensor.repeat(1, 3, 1, 1)
-
-                # 推理
-                with torch.no_grad():
-                    patch_tensor = patch_tensor.to(self.device)
-                    output = self.model(patch_tensor)
-
-                # 获取概率
-                probs = torch.softmax(output, dim=1)[0, 1].cpu().item()
-
-                # 如果置信度超过阈值，添加到结果
-                if probs > self._threshold:
-                    # 计算窗口中心坐标
-                    center_x = int(x + patch_size / 2.0)
-                    center_y = int(y + patch_size / 2.0)
-
-                    # 边界框大小
-                    bbox_width = patch_size
-                    bbox_height = patch_size
-
-                    detection = Detection(
-                        x=center_x,
-                        y=center_y,
-                        width=bbox_width,
-                        height=bbox_height,
-                        confidence=probs,
-                        marker_type=MarkerType.BOUNDING_BOX
-                    )
-                    all_detections.append(detection)
+        for (center_x, center_y), score in zip(centers, probs):
+            if score > self._threshold:
+                detection = Detection(
+                    x=int(center_x),
+                    y=int(center_y),
+                    width=patch_size,
+                    height=patch_size,
+                    confidence=float(score),
+                    marker_type=MarkerType.BOUNDING_BOX,
+                )
+                all_detections.append(detection)
 
         # 应用 NMS 合并重叠检测
         if len(all_detections) > 1:
@@ -336,7 +450,7 @@ class InferenceEngine:
 
         return keep
 
-    def _calculate_iou(self, bbox1: List[float], bbox2: List[float]) -> float:
+    def _calculate_iou(self, bbox1: Sequence[float], bbox2: Sequence[float]) -> float:
         """计算两个边界框的 IoU (Intersection over Union)
 
         Args:

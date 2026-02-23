@@ -9,6 +9,7 @@
 import pytest
 import numpy as np
 import torch
+from typing import Any, cast
 from unittest.mock import Mock, patch
 
 from scann.ai.inference import InferenceEngine, InferenceConfig
@@ -63,9 +64,10 @@ class TestSlidingWindowDetection:
 
         mock_model.side_effect = mock_forward
 
-        with patch("scann.ai.model.SCANNClassifier.load_from_checkpoint", return_value=mock_model):
-            config = InferenceConfig(batch_size=32)
-            engine = InferenceEngine("dummy_path.pt", config=config)
+        with patch("torch.load", return_value={"threshold": 0.5}):
+            with patch("scann.ai.model.SCANNClassifier.load_from_checkpoint", return_value=mock_model):
+                config = InferenceConfig(batch_size=32)
+                engine = InferenceEngine("dummy_path.pt", config=config)
 
         # 创建较大的测试图像
         test_image = np.random.rand(512, 512).astype(np.float32)
@@ -88,16 +90,21 @@ class TestSlidingWindowDetection:
             batch_size = x.shape[0]
             probs = torch.zeros(batch_size, 2)
             # 第一个和第三个窗口有目标
-            probs[0, 1] = 0.85
-            probs[2, 1] = 0.90
-            probs[1, 0] = 0.95
-            probs[3:, 0] = 0.95
+            if batch_size > 0:
+                probs[0, 1] = 0.85
+            if batch_size > 2:
+                probs[2, 1] = 0.90
+            if batch_size > 1:
+                probs[1, 0] = 0.95
+            if batch_size > 3:
+                probs[3:, 0] = 0.95
             return probs
 
         mock_model.side_effect = mock_forward
 
-        with patch("scann.ai.model.SCANNClassifier.load_from_checkpoint", return_value=mock_model):
-            engine = InferenceEngine("dummy_path.pt")
+        with patch("torch.load", return_value={"threshold": 0.5}):
+            with patch("scann.ai.model.SCANNClassifier.load_from_checkpoint", return_value=mock_model):
+                engine = InferenceEngine("dummy_path.pt")
 
         test_image = np.random.rand(256, 256).astype(np.float32)
 
@@ -121,8 +128,9 @@ class TestSlidingWindowDetection:
 
         mock_model.side_effect = mock_forward
 
-        with patch("scann.ai.model.SCANNClassifier.load_from_checkpoint", return_value=mock_model):
-            engine = InferenceEngine("dummy_path.pt")
+        with patch("torch.load", return_value={"threshold": 0.5}):
+            with patch("scann.ai.model.SCANNClassifier.load_from_checkpoint", return_value=mock_model):
+                engine = InferenceEngine("dummy_path.pt")
 
         test_image = np.random.rand(256, 256).astype(np.float32)
 
@@ -130,6 +138,104 @@ class TestSlidingWindowDetection:
 
         # 应该没有检测结果（低于阈值）
         assert len(detections) == 0
+
+    def test_detect_full_image_v1_uses_triplet_semantics(self):
+        """测试：v1 模型应使用 [Diff, New, Old] 三联图语义输入"""
+        mock_model = Mock()
+        mock_model.eval.return_value = None
+
+        # 返回全背景，重点验证输入 patch 语义
+        def mock_forward(x):
+            batch_size = x.shape[0]
+            probs = torch.zeros(batch_size, 2)
+            probs[:, 0] = 0.95
+            return probs
+
+        mock_model.side_effect = mock_forward
+
+        ckpt_meta = {
+            "model_format": "v1_classifier",
+            "threshold": 0.5,
+            "order": "0,1,2",
+        }
+
+        with patch("torch.load", return_value=ckpt_meta):
+            with patch("scann.ai.model.SCANNClassifier.load_from_checkpoint", return_value=mock_model):
+                engine = InferenceEngine("dummy_path.pt")
+
+        captured = []
+
+        def capture_classify(patches, **kwargs):
+            captured.extend(patches)
+            return [0.1 for _ in patches]
+
+        setattr(engine, "classify_patches", capture_classify)
+
+        # 用 uint8 便于验证通道均值关系
+        new_image = np.full((128, 128), 200, dtype=np.uint8)
+        old_image = np.full((128, 128), 50, dtype=np.uint8)
+
+        _ = cast(Any, engine).detect_full_image(
+            new_image,
+            old_image=old_image,
+            patch_size=64,
+            stride=64,
+        )
+
+        assert len(captured) > 0
+        first_patch = captured[0]
+        assert first_patch.shape[0] == 3
+
+        # [Diff, New, Old] => new > diff > old
+        m0 = float(first_patch[0].mean())  # diff
+        m1 = float(first_patch[1].mean())  # new
+        m2 = float(first_patch[2].mean())  # old
+        assert m1 > m0 > m2
+
+    def test_detect_full_image_v1_small_image_still_generates_windows(self):
+        """测试：v1 模式下小图也应至少生成一个滑窗 patch"""
+        mock_model = Mock()
+        mock_model.eval.return_value = None
+
+        def mock_forward(x):
+            batch_size = x.shape[0]
+            probs = torch.zeros(batch_size, 2)
+            probs[:, 0] = 0.95
+            return probs
+
+        mock_model.side_effect = mock_forward
+
+        ckpt_meta = {
+            "model_format": "v1_classifier",
+            "threshold": 0.5,
+            "order": "0,1,2",
+        }
+
+        with patch("torch.load", return_value=ckpt_meta):
+            with patch("scann.ai.model.SCANNClassifier.load_from_checkpoint", return_value=mock_model):
+                engine = InferenceEngine("dummy_path.pt")
+
+        captured = []
+
+        def capture_classify(patches, **kwargs):
+            captured.extend(patches)
+            return [0.1 for _ in patches]
+
+        setattr(engine, "classify_patches", capture_classify)
+
+        # 小于 patch_size
+        new_image = np.full((40, 40), 180, dtype=np.uint8)
+        old_image = np.full((40, 40), 60, dtype=np.uint8)
+
+        _ = cast(Any, engine).detect_full_image(
+            new_image,
+            old_image=old_image,
+            patch_size=64,
+            stride=64,
+        )
+
+        assert len(captured) >= 1
+        assert captured[0].shape == (3, 64, 64)
 
 
 class TestResultMerging:
@@ -145,16 +251,21 @@ class TestResultMerging:
             batch_size = x.shape[0]
             probs = torch.zeros(batch_size, 2)
             # 多个窗口检测到同一目标
-            probs[0, 1] = 0.9
-            probs[1, 1] = 0.85
-            probs[2, 1] = 0.8
-            probs[3:, 0] = 0.95
+            if batch_size > 0:
+                probs[0, 1] = 0.9
+            if batch_size > 1:
+                probs[1, 1] = 0.85
+            if batch_size > 2:
+                probs[2, 1] = 0.8
+            if batch_size > 3:
+                probs[3:, 0] = 0.95
             return probs
 
         mock_model.side_effect = mock_forward
 
-        with patch("scann.ai.model.SCANNClassifier.load_from_checkpoint", return_value=mock_model):
-            engine = InferenceEngine("dummy_path.pt")
+        with patch("torch.load", return_value={"threshold": 0.5}):
+            with patch("scann.ai.model.SCANNClassifier.load_from_checkpoint", return_value=mock_model):
+                engine = InferenceEngine("dummy_path.pt")
 
         test_image = np.random.rand(256, 256).astype(np.float32)
 
@@ -179,8 +290,9 @@ class TestResultMerging:
 
         mock_model.side_effect = mock_forward
 
-        with patch("scann.ai.model.SCANNClassifier.load_from_checkpoint", return_value=mock_model):
-            engine = InferenceEngine("dummy_path.pt")
+        with patch("torch.load", return_value={"threshold": 0.5}):
+            with patch("scann.ai.model.SCANNClassifier.load_from_checkpoint", return_value=mock_model):
+                engine = InferenceEngine("dummy_path.pt")
 
         test_image = np.random.rand(256, 256).astype(np.float32)
 
@@ -206,8 +318,9 @@ class TestBoundaryHandling:
 
         mock_model.side_effect = mock_forward
 
-        with patch("scann.ai.model.SCANNClassifier.load_from_checkpoint", return_value=mock_model):
-            engine = InferenceEngine("dummy_path.pt")
+        with patch("torch.load", return_value={"threshold": 0.5}):
+            with patch("scann.ai.model.SCANNClassifier.load_from_checkpoint", return_value=mock_model):
+                engine = InferenceEngine("dummy_path.pt")
 
         # 小于窗口大小的图像
         test_image = np.random.rand(100, 100).astype(np.float32)
@@ -229,8 +342,9 @@ class TestBoundaryHandling:
 
         mock_model.side_effect = mock_forward
 
-        with patch("scann.ai.model.SCANNClassifier.load_from_checkpoint", return_value=mock_model):
-            engine = InferenceEngine("dummy_path.pt")
+        with patch("torch.load", return_value={"threshold": 0.5}):
+            with patch("scann.ai.model.SCANNClassifier.load_from_checkpoint", return_value=mock_model):
+                engine = InferenceEngine("dummy_path.pt")
 
         # 宽高比不同的图像
         test_image = np.random.rand(400, 600).astype(np.float32)
@@ -251,8 +365,9 @@ class TestBoundaryHandling:
 
         mock_model.side_effect = mock_forward
 
-        with patch("scann.ai.model.SCANNClassifier.load_from_checkpoint", return_value=mock_model):
-            engine = InferenceEngine("dummy_path.pt")
+        with patch("torch.load", return_value={"threshold": 0.5}):
+            with patch("scann.ai.model.SCANNClassifier.load_from_checkpoint", return_value=mock_model):
+                engine = InferenceEngine("dummy_path.pt")
 
         # 全零图像
         test_image = np.zeros((256, 256), dtype=np.float32)
