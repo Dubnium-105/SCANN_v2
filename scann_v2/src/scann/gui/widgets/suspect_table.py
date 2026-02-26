@@ -18,6 +18,7 @@ from PyQt5.QtWidgets import (
     QAbstractItemView,
     QAction,
     QApplication,
+    QDoubleSpinBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -69,6 +70,8 @@ class SuspectTableWidget(QWidget):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self._candidates: List[Candidate] = []
+        self._visible_indices: List[int] = []
+        self._ai_filter_threshold: float = 0.0
 
         self._init_ui()
 
@@ -84,9 +87,18 @@ class SuspectTableWidget(QWidget):
         header_layout.addWidget(title)
         header_layout.addStretch()
 
-        self.btn_export = QPushButton("导出CSV")
-        self.btn_export.setFixedHeight(24)
-        header_layout.addWidget(self.btn_export)
+        lbl_filter = QLabel("AI过滤阈值")
+        header_layout.addWidget(lbl_filter)
+
+        self.spin_ai_threshold = QDoubleSpinBox()
+        self.spin_ai_threshold.setRange(0.0, 1.0)
+        self.spin_ai_threshold.setSingleStep(0.05)
+        self.spin_ai_threshold.setDecimals(2)
+        self.spin_ai_threshold.setValue(0.0)
+        self.spin_ai_threshold.setFixedHeight(24)
+        self.spin_ai_threshold.setFixedWidth(72)
+        self.spin_ai_threshold.setToolTip("仅显示 AI 评分大于等于该阈值的候选体")
+        header_layout.addWidget(self.spin_ai_threshold)
         layout.addLayout(header_layout)
 
         # 表格
@@ -132,6 +144,7 @@ class SuspectTableWidget(QWidget):
         self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
         self.table.customContextMenuRequested.connect(self._on_context_menu)
         self.btn_copy.clicked.connect(self._on_copy_coord)
+        self.spin_ai_threshold.valueChanged.connect(self._on_threshold_changed)
 
         # 暗色主题样式
         self.table.setStyleSheet(
@@ -152,13 +165,24 @@ class SuspectTableWidget(QWidget):
     def update_candidate(self, index: int) -> None:
         """更新单个候选体的显示 (例如判决更新后)"""
         if 0 <= index < len(self._candidates):
-            self._update_row(index, self._candidates[index])
+            # 阈值过滤开启时，候选体可见性可能变化，统一全量刷新更稳妥
+            self._refresh_table()
+
+    def _on_threshold_changed(self, value: float) -> None:
+        """AI 过滤阈值变化"""
+        self._ai_filter_threshold = float(value)
+        self._refresh_table()
 
     def _refresh_table(self) -> None:
         """刷新整个表格"""
-        self.table.setRowCount(len(self._candidates))
-        for i, cand in enumerate(self._candidates):
-            self._update_row(i, cand)
+        self._visible_indices = [
+            idx
+            for idx, cand in enumerate(self._candidates)
+            if cand.ai_score >= self._ai_filter_threshold
+        ]
+        self.table.setRowCount(len(self._visible_indices))
+        for row, src_idx in enumerate(self._visible_indices):
+            self._update_row(row, self._candidates[src_idx])
 
     def _update_row(self, row: int, cand: Candidate) -> None:
         """更新某一行"""
@@ -206,30 +230,33 @@ class SuspectTableWidget(QWidget):
                     item.setForeground(QColor("#757575"))
 
     def _on_cell_clicked(self, row: int, _col: int) -> None:
-        if 0 <= row < len(self._candidates):
-            cand = self._candidates[row]
+        if 0 <= row < len(self._visible_indices):
+            src_idx = self._visible_indices[row]
+            cand = self._candidates[src_idx]
             self.lbl_coord.setText(f"📋 坐标: X={cand.x}  Y={cand.y}")
-            self.candidate_selected.emit(row)
+            self.candidate_selected.emit(src_idx)
 
     def _on_cell_double_clicked(self, row: int, _col: int) -> None:
-        if 0 <= row < len(self._candidates):
-            self.candidate_double_clicked.emit(row)
+        if 0 <= row < len(self._visible_indices):
+            self.candidate_double_clicked.emit(self._visible_indices[row])
 
     def _on_copy_coord(self) -> None:
         row = self.table.currentRow()
-        if 0 <= row < len(self._candidates):
-            cand = self._candidates[row]
+        if 0 <= row < len(self._visible_indices):
+            src_idx = self._visible_indices[row]
+            cand = self._candidates[src_idx]
             text = f"{cand.x}, {cand.y}"
             QApplication.clipboard().setText(text)
-            self.copy_coordinates_requested.emit(row)
+            self.copy_coordinates_requested.emit(src_idx)
 
     def _on_context_menu(self, pos) -> None:
         """右键上下文菜单"""
         row = self.table.rowAt(pos.y())
-        if row < 0 or row >= len(self._candidates):
+        if row < 0 or row >= len(self._visible_indices):
             return
 
-        cand = self._candidates[row]
+        src_idx = self._visible_indices[row]
+        cand = self._candidates[src_idx]
         menu = QMenu(self)
 
         # 查询菜单
@@ -248,7 +275,7 @@ class SuspectTableWidget(QWidget):
 
         menu.addSeparator()
         act_report = menu.addAction("📝 生成 MPC 80列报告")
-        act_report.triggered.connect(lambda: self.mpc_report_requested.emit(row))
+        act_report.triggered.connect(lambda: self.mpc_report_requested.emit(src_idx))
 
         menu.addSeparator()
         act_copy_pixel = menu.addAction("📋 复制像素坐标")
@@ -268,4 +295,6 @@ class SuspectTableWidget(QWidget):
     def selected_index(self) -> int:
         """当前选中行索引"""
         row = self.table.currentRow()
-        return row if 0 <= row < len(self._candidates) else -1
+        if 0 <= row < len(self._visible_indices):
+            return self._visible_indices[row]
+        return -1

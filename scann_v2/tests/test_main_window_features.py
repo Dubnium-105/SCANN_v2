@@ -467,6 +467,24 @@ class TestLoadModel:
         w.statusBar().showMessage.assert_called()
 
     @patch("scann.gui.main_window.QFileDialog.getOpenFileName")
+    @patch("scann.gui.main_window.InferenceEngine")
+    def test_load_model_applies_gui_confidence_threshold(self, mock_engine_cls, mock_dialog):
+        """加载模型后应优先应用 GUI 配置阈值到运行时引擎"""
+        w = _make_mock_window()
+        w._config.ai_confidence = 0.23
+        mock_dialog.return_value = ("/path/to/model.pth", "")
+
+        mock_engine = Mock()
+        mock_engine.is_ready = True
+        mock_engine.threshold = 0.5  # 模型自带阈值
+        mock_engine_cls.return_value = mock_engine
+
+        w._on_load_model()
+
+        assert mock_engine.threshold == pytest.approx(0.23)
+        assert w._config.ai_confidence == pytest.approx(0.23)
+
+    @patch("scann.gui.main_window.QFileDialog.getOpenFileName")
     def test_load_model_cancelled(self, mock_dialog):
         """取消不应改变状态"""
         w = _make_mock_window()
@@ -567,6 +585,33 @@ class TestBatchDetect:
 
         kwargs = mock_pipeline.process_pair.call_args.kwargs
         assert kwargs.get("skip_align") is False
+
+
+class TestPreferencesRuntimeSync:
+    """测试首选项保存后与运行态同步"""
+
+    @patch("scann.core.config.save_config")
+    @patch("scann.gui.dialogs.settings_dialog.SettingsDialog")
+    def test_open_preferences_updates_runtime_inference_params(self, mock_dialog_cls, _mock_save):
+        w = _make_mock_window()
+        w._inference_engine = Mock()
+        w._inference_engine.is_ready = True
+        w._inference_engine.threshold = 0.5
+        w._inference_engine.config = Mock()
+        w._inference_engine.config.batch_size = 64
+
+        # 模拟用户在首选项中改了阈值和 batch size
+        w._config.ai_confidence = 0.17
+        w._config.batch_size = 128
+
+        dlg = Mock()
+        dlg.exec_.return_value = True
+        mock_dialog_cls.return_value = dlg
+
+        w._on_open_preferences()
+
+        assert w._inference_engine.threshold == pytest.approx(0.17)
+        assert w._inference_engine.config.batch_size == 128
 
 
 class TestAlignedCropBounds:

@@ -109,6 +109,9 @@ def convert_state_dict_v1_to_v2(
     """
     converted = {}
     for k, v in state_dict.items():
+        # 跳过非权重元数据
+        if not isinstance(v, torch.Tensor):
+            continue
         # 移除 module. 前缀
         name = k[7:] if k.startswith("module.") else k
         # 添加 backbone. 前缀
@@ -176,7 +179,6 @@ class SCANNClassifier(nn.Module):
         if device is None:
             device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-        model = SCANNClassifier(pretrained=False)
         ckpt = torch.load(path, map_location=device, weights_only=False)
 
         # 提取 state_dict
@@ -199,20 +201,38 @@ class SCANNClassifier(nn.Module):
 
         logger.info("检测到模型格式: %s", model_format.value)
 
-        # 根据格式转换 state_dict
-        if model_format == ModelFormat.V1_CLASSIFIER:
-            state_dict = convert_state_dict_v1_to_v2(state_dict)
-            logger.info("已将 v1 state_dict 转换为 v2 格式")
-        else:
-            # v2 格式: 仅清理 module. 前缀
-            clean_state = {}
-            for k, v in state_dict.items():
-                name = k[7:] if k.startswith("module.") else k
-                clean_state[name] = v
-            state_dict = clean_state
+        # 清理 state_dict：移除 module. 前缀，过滤非 Tensor 元数据项
+        clean_state: Dict[str, torch.Tensor] = {}
+        for k, v in state_dict.items():
+            if not isinstance(v, torch.Tensor):
+                continue
+            name = k[7:] if k.startswith("module.") else k
+            clean_state[name] = v
 
-        # 过滤掉 num_batches_tracked 以防 strict=False 时的警告
-        model.load_state_dict(state_dict, strict=False)
+        # v1: 原生加载（不做 key 转换）
+        if model_format == ModelFormat.V1_CLASSIFIER:
+            model = SCANNClassifier(pretrained=False)
+            try:
+                model.backbone.load_state_dict(clean_state, strict=True)
+                logger.info("使用 v1 原生权重加载（未进行 v1->v2 key 转换）")
+            except RuntimeError:
+                # 兼容少数“误标 v1 但实际是 v2 键”的文件
+                v2_like = {}
+                for k, v in clean_state.items():
+                    if k.startswith("backbone."):
+                        v2_like[k] = v
+                if v2_like:
+                    model.load_state_dict(v2_like, strict=False)
+                    logger.warning("检测到 v1 格式但权重为 v2 键名，已兼容加载")
+                else:
+                    raise
+            model.to(device)
+            model.eval()
+            return model
+
+        # v2: 正常加载（支持 backbone. 前缀）
+        model = SCANNClassifier(pretrained=False)
+        model.load_state_dict(clean_state, strict=False)
         model.to(device)
         model.eval()
         return model

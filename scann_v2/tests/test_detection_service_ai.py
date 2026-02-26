@@ -264,3 +264,23 @@ class TestV1InputCompatibility:
         for p in captured[:5]:
             assert p.shape == (3, 224, 224)
             assert np.all(p >= 0) and np.all(p <= 1)
+
+    def test_sliding_window_detect_v1_exact_patch_size_has_window(self):
+        """v1: 当图像尺寸恰好等于 patch_size 时，也应至少有一个滑窗。"""
+        mock_engine = Mock()
+        mock_engine.is_ready = True
+        mock_engine.is_v1 = True
+        mock_engine.threshold = 0.2
+        mock_engine._channel_order = (0, 1, 2)
+        mock_engine.classify_patches.return_value = [0.9]
+
+        size = 80
+        pipeline = DetectionPipeline(inference_engine=mock_engine, patch_size=size)
+
+        new_data = np.full((size, size), 180, dtype=np.uint8)
+        old_data = np.full((size, size), 80, dtype=np.uint8)
+
+        cands = pipeline._sliding_window_detect(new_data, old_data)
+
+        assert len(cands) >= 1
+        assert cands[0].ai_score >= 0.2

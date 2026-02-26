@@ -33,7 +33,7 @@
   "kill_dipole": true,
   "model_path": "G:/wksp/aikt/best_model.pth",
   "model_format": "auto",
-  "ai_confidence": 0.21286535263061523,
+  "ai_confidence": 0.5,
   "slice_size": 80,
   "batch_size": 64,
   "compute_device": "auto",

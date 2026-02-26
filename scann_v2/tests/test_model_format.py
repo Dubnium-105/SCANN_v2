@@ -300,6 +300,32 @@ class TestModelLoadCompatibility:
         finally:
             Path(path).unlink(missing_ok=True)
 
+    def test_load_v1_does_not_convert_to_v2_keys(self):
+        """v1 加载应走原生路径，不应调用 v1->v2 键转换。"""
+        from scann.ai.model import SCANNClassifier
+
+        with tempfile.NamedTemporaryFile(suffix=".pth", delete=False) as f:
+            path = f.name
+
+        try:
+            self._create_v1_checkpoint(path)
+            with pytest.MonkeyPatch().context() as m:
+                called = {"flag": False}
+
+                def _mark_called(state_dict):
+                    called["flag"] = True
+                    return state_dict
+
+                m.setattr("scann.ai.model.convert_state_dict_v1_to_v2", _mark_called)
+                model = SCANNClassifier.load_from_checkpoint(
+                    path, device=torch.device("cpu")
+                )
+
+            assert model is not None
+            assert called["flag"] is False
+        finally:
+            Path(path).unlink(missing_ok=True)
+
 
 # ──────────────────── 保存带格式元数据 ────────────────────
 

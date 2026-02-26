@@ -14,6 +14,7 @@ from typing import List, Optional, Sequence
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torchvision import transforms
 
 from scann.core.models import Candidate, Detection, MarkerType
@@ -54,7 +55,11 @@ class InferenceEngine:
         return torch.device(self.config.device)
 
     def _load_model(self, path: str) -> None:
-        """加载模型 (自动检测 v1/v2 格式)"""
+        """加载模型 (自动检测 v1/v2 格式)
+
+        v1: 使用原生 ResNet18 权重加载（不做 key 格式转换）
+        v2: 使用 SCANNClassifier 兼容加载
+        """
         import logging
         _logger = logging.getLogger(__name__)
         from scann.ai.model import ModelFormat, SCANNClassifier
@@ -65,13 +70,14 @@ class InferenceEngine:
         except ValueError:
             fmt = ModelFormat.AUTO
 
-        self.model = SCANNClassifier.load_from_checkpoint(
-            path, self.device, model_format=fmt
-        )
+        # 先读取 checkpoint 元数据，确定真实格式
+        ckpt = torch.load(path, map_location="cpu", weights_only=False)
         self._model_format = fmt
 
-        # 尝试读取保存的阈值和元数据
-        ckpt = torch.load(path, map_location="cpu", weights_only=False)
+        # 默认阈值/通道顺序（后续可被 checkpoint 覆盖）
+        self._threshold = 0.5
+        self._channel_order = (0, 1, 2)
+
         if isinstance(ckpt, dict):
             # 确定实际的模型格式
             if "model_format" in ckpt:
@@ -88,30 +94,65 @@ class InferenceEngine:
                     self._model_format = detect_model_format(state_dict)
 
             # 读取阈值：优先 threshold (v2)，其次 t_recall (v1 训练脚本)
-            if "threshold" in ckpt and ckpt["threshold"] is not None:
-                self._threshold = float(ckpt["threshold"])
-            elif "t_recall" in ckpt and ckpt["t_recall"] is not None:
-                self._threshold = float(ckpt["t_recall"])
+            if ckpt.get("threshold") is not None:
+                self.threshold = float(ckpt["threshold"])
+            elif ckpt.get("t_recall") is not None:
+                self.threshold = float(ckpt["t_recall"])
                 _logger.info("使用 V1 阈值 (t_recall): %.4f", self._threshold)
-            else:
-                self._threshold = 0.5
 
             # 读取 V1 的通道顺序 (order 字段, 如 "0,1,2")
             order_str = ckpt.get("order")
             if order_str and isinstance(order_str, str):
                 try:
-                    self._channel_order = tuple(
-                        int(x.strip()) for x in order_str.split(",")
-                    )
-                    _logger.info("使用 V1 通道顺序: %s", self._channel_order)
+                    order = tuple(int(x.strip()) for x in order_str.split(","))
+                    if len(order) == 3 and sorted(order) == [0, 1, 2]:
+                        self._channel_order = order
+                        _logger.info("使用 V1 通道顺序: %s", self._channel_order)
                 except (ValueError, TypeError):
-                    self._channel_order = (0, 1, 2)
-            else:
-                self._channel_order = (0, 1, 2)
+                    pass
 
-    # V1 训练时使用的归一化常数 (来自 train_triplet_resnet_augmented.py)
-    V1_NORMALIZE_MEAN = (0.2637, 0.2819, 0.2838)
-    V1_NORMALIZE_STD = (0.0890, 0.1226, 0.1283)
+        # 再按真实格式加载模型
+        if self._model_format == ModelFormat.V1_CLASSIFIER:
+            from torchvision import models as tv_models
+
+            # 提取并清理 state_dict（仅去 module. 前缀，不做 v1->v2 转换）
+            state_dict = ckpt.get("state") or ckpt.get("model_state") or ckpt if isinstance(ckpt, dict) else ckpt
+            clean_state = {}
+            if isinstance(state_dict, dict):
+                for k, v in state_dict.items():
+                    name = k[7:] if k.startswith("module.") else k
+                    # 兼容少数带 backbone. 前缀的权重
+                    if name.startswith("backbone."):
+                        name = name[len("backbone."):]
+                    clean_state[name] = v
+
+            has_weight_keys = any(
+                k.startswith(("conv1.", "bn1.", "layer1.", "layer2.", "layer3.", "layer4.", "fc."))
+                for k in clean_state.keys()
+            )
+
+            if has_weight_keys:
+                model = tv_models.resnet18(weights=None)
+                model.fc = torch.nn.Linear(model.fc.in_features, 2)
+                model.load_state_dict(clean_state, strict=True)
+                model.to(self.device)
+                model.eval()
+                self.model = model
+                _logger.info("使用 v1 原生权重加载（未进行 v1->v2 key 转换）")
+            else:
+                # 仅元数据或无法识别权重时，回退兼容加载路径
+                _logger.warning("v1 checkpoint 未找到可识别权重键，回退兼容加载")
+                self.model = SCANNClassifier.load_from_checkpoint(
+                    path, self.device, model_format=self._model_format
+                )
+        else:
+            self.model = SCANNClassifier.load_from_checkpoint(
+                path, self.device, model_format=self._model_format
+            )
+
+    # V1 归一化常数（按 SCANN.py 迁移）
+    V1_NORMALIZE_MEAN = (0.2601623164967817, 0.2682929013103806, 0.26861570225529907)
+    V1_NORMALIZE_STD = (0.09133092247248126, 0.10773878132887775, 0.10867911864809723)
     # V2 默认归一化常数
     V2_NORMALIZE_MEAN = (0.26, 0.27, 0.27)
     V2_NORMALIZE_STD = (0.09, 0.11, 0.11)
@@ -123,6 +164,14 @@ class InferenceEngine:
     @property
     def threshold(self) -> float:
         return self._threshold
+
+    @threshold.setter
+    def threshold(self, value: float) -> None:
+        """设置推理阈值（自动夹紧到 [0, 1]）。"""
+        v = float(value)
+        if not np.isfinite(v):
+            return
+        self._threshold = max(0.0, min(1.0, v))
 
     @property
     def model_format(self):
@@ -183,8 +232,19 @@ class InferenceEngine:
             tensors = []
             for p in batch_raw:
                 t = torch.from_numpy(p).float()
-                t = resize(t)
-                t = norm(t)
+                if self.is_v1:
+                    # v1 原生路径：与 SCANN.py 一致，先插值再归一化
+                    t = t.unsqueeze(0)  # [1, 3, H, W]
+                    t = F.interpolate(
+                        t,
+                        size=(224, 224),
+                        mode="bilinear",
+                        align_corners=False,
+                    ).squeeze(0)
+                    t = norm(t)
+                else:
+                    t = resize(t)
+                    t = norm(t)
                 tensors.append(t)
 
             stack = torch.stack(tensors).to(self.device)

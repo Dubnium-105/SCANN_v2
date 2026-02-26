@@ -26,6 +26,21 @@ DEFAULT_PATCH_SIZE = 80
 MODEL_INPUT_SIZE = 224
 
 
+def _img_brief_stats(name: str, img: np.ndarray) -> str:
+    """生成轻量图像统计字符串，用于日志诊断。"""
+    arr = np.nan_to_num(img.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+    if arr.size == 0:
+        return f"{name}:empty"
+    nz = float(np.mean(np.abs(arr) > 1e-6))
+    p1 = float(np.percentile(arr, 1.0))
+    p50 = float(np.percentile(arr, 50.0))
+    p99 = float(np.percentile(arr, 99.0))
+    return (
+        f"{name}:shape={arr.shape},dtype={img.dtype},"
+        f"nz={nz:.3f},p1={p1:.3f},p50={p50:.3f},p99={p99:.3f}"
+    )
+
+
 def _robust_to_uint8(image: np.ndarray) -> np.ndarray:
     """将任意数值范围图像稳健映射到 uint8。
 
@@ -114,6 +129,20 @@ class DetectionPipeline:
             self.inference_engine is not None
             and self.inference_engine.is_ready
         )
+        is_v1 = self._is_v1_model() if ai_available else False
+
+        if ai_available:
+            ch = getattr(self.inference_engine, '_channel_order', (0, 1, 2))
+            th = getattr(self.inference_engine, 'threshold', 0.5)
+            logger.info(
+                "AI推理配置: pair=%s, model=%s, threshold=%.4f, patch_size=%d, skip_align=%s, channel_order=%s",
+                pair_name,
+                "v1" if is_v1 else "v2",
+                float(th),
+                self.patch_size,
+                skip_align,
+                ch,
+            )
 
         # 1. 对齐
         align_result = None
@@ -162,9 +191,19 @@ class DetectionPipeline:
         # v1 模型输入适配：将 FITS 强度先稳健映射到 8-bit，再走三联图推理
         ai_new_data = new_data
         ai_old_data = aligned_old
-        if ai_available and self._is_v1_model():
+        if ai_available and is_v1:
+            logger.info(
+                "v1输入预处理前: %s | %s",
+                _img_brief_stats("new", new_data),
+                _img_brief_stats("old", aligned_old),
+            )
             ai_new_data = _robust_to_uint8(new_data)
             ai_old_data = _robust_to_uint8(aligned_old)
+            logger.info(
+                "v1输入预处理后: %s | %s",
+                _img_brief_stats("new_u8", ai_new_data),
+                _img_brief_stats("old_u8", ai_old_data),
+            )
 
         # 2c. 若仍无结果且 AI 可用，使用滑动窗口全图扫描
         if not candidates and ai_available:
@@ -251,8 +290,19 @@ class DetectionPipeline:
         size = self.patch_size
         stride = max(size // 2, 1)  # 50% 重叠
         threshold = self.inference_engine.threshold
+        is_v1 = self._is_v1_model()
         channel_order = getattr(
             self.inference_engine, '_channel_order', (0, 1, 2)
+        )
+        logger.info(
+            "滑窗参数: model=%s, image=%dx%d, patch=%d, stride=%d, threshold=%.4f, channel_order=%s",
+            "v1" if is_v1 else "v2",
+            w,
+            h,
+            size,
+            stride,
+            float(threshold),
+            channel_order,
         )
 
         # 收集所有窗口中心及对应的 patch
@@ -260,23 +310,72 @@ class DetectionPipeline:
         patches = []
         half = size // 2
 
-        for cy in range(half, h - half, stride):
-            for cx in range(half, w - half, stride):
-                # v1 对齐后旧图边缘可能有黑边（L 型），这些窗口直接跳过
-                if self._is_v1_model():
-                    old_patch = self._extract_patch(old_data, cx, cy, size)
-                    valid_ratio = float(np.mean(np.abs(old_patch.astype(np.float32)) > 1e-6))
-                    if valid_ratio < 0.90:
-                        continue
+        # 保证小图/临界尺寸也至少有一个窗口中心
+        if h <= size:
+            y_positions = [max(0, h // 2)]
+        else:
+            y_positions = list(range(half, h - half + 1, stride))
 
-                patch_3ch = self._prepare_triplet_patch(
-                    new_data, old_data, cx, cy, size,
-                    channel_order=channel_order,
-                )
-                patches.append(patch_3ch)
-                centers.append((cx, cy))
+        if w <= size:
+            x_positions = [max(0, w // 2)]
+        else:
+            x_positions = list(range(half, w - half + 1, stride))
+
+        total_window_count = len(x_positions) * len(y_positions)
+        logger.info(
+            "滑窗网格: x_positions=%d, y_positions=%d, total_windows=%d",
+            len(x_positions),
+            len(y_positions),
+            total_window_count,
+        )
+
+        skipped_by_valid = 0
+
+        def collect_windows(apply_valid_filter: bool) -> None:
+            nonlocal skipped_by_valid
+            for cy in y_positions:
+                for cx in x_positions:
+                    # v1 对齐后旧图边缘可能有黑边（L 型），过滤无效窗口
+                    if is_v1 and apply_valid_filter and h > size and w > size:
+                        old_patch = self._extract_patch(old_data, cx, cy, size)
+                        valid_ratio = float(np.mean(np.abs(old_patch.astype(np.float32)) > 1e-6))
+                        if valid_ratio < 0.85:
+                            skipped_by_valid += 1
+                            continue
+
+                    patch_3ch = self._prepare_triplet_patch(
+                        new_data, old_data, cx, cy, size,
+                        channel_order=channel_order,
+                    )
+                    patches.append(patch_3ch)
+                    centers.append((cx, cy))
+
+        collect_windows(apply_valid_filter=True)
+        logger.info(
+            "滑窗采样结果(首轮): kept=%d, skipped_by_valid=%d",
+            len(patches),
+            skipped_by_valid,
+        )
+
+        # 若 v1 被黑边过滤到 0，回退一次不过滤，避免误伤真实目标
+        if not patches and is_v1 and skipped_by_valid > 0:
+            logger.info("v1 滑窗有效区过滤后无候选窗口，回退为不过滤模式重试")
+            collect_windows(apply_valid_filter=False)
+            logger.info(
+                "滑窗采样结果(回退): kept=%d, skipped_by_valid=%d",
+                len(patches),
+                skipped_by_valid,
+            )
 
         if not patches:
+            logger.warning(
+                "滑窗采样后无可推理窗口: image=%dx%d, patch=%d, stride=%d, is_v1=%s",
+                w,
+                h,
+                size,
+                stride,
+                is_v1,
+            )
             return []
 
         # 批量推理
@@ -285,6 +384,17 @@ class DetectionPipeline:
         except Exception as e:
             logger.warning("滑动窗口推理失败: %s", e)
             return []
+
+        if scores:
+            s = np.asarray(scores, dtype=np.float32)
+            logger.info(
+                "滑窗推理分数统计: n=%d, min=%.4f, p50=%.4f, p95=%.4f, max=%.4f",
+                s.size,
+                float(np.min(s)),
+                float(np.percentile(s, 50.0)),
+                float(np.percentile(s, 95.0)),
+                float(np.max(s)),
+            )
 
         # 收集超过阈值的窗口
         candidates = []
@@ -295,6 +405,12 @@ class DetectionPipeline:
                     features=CandidateFeatures(),
                     ai_score=float(score),
                 ))
+        logger.info(
+            "滑窗阈值过滤: pass=%d/%d (threshold=%.4f)",
+            len(candidates),
+            len(scores),
+            float(threshold),
+        )
 
         # 简单 NMS: 合并过于接近的候选体 (保留分数最高的)
         if len(candidates) > 1:

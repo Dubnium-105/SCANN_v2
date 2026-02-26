@@ -102,6 +102,29 @@ class TestSetCandidates:
         assert table.table.rowCount() == 0
 
 
+class TestAiFilterThreshold:
+    """测试 AI 过滤阈值"""
+
+    def test_export_button_removed(self, table):
+        assert not hasattr(table, "btn_export")
+
+    def test_filter_rows_by_threshold(self, table, sample_candidates):
+        table.set_candidates(sample_candidates)
+        table.spin_ai_threshold.setValue(0.8)
+        assert table.table.rowCount() == 1
+        assert "0.95" in table.table.item(0, table.COL_SCORE).text()
+
+    def test_click_emits_original_candidate_index(self, table, sample_candidates):
+        table.set_candidates(sample_candidates)
+        table.spin_ai_threshold.setValue(0.7)
+
+        received = []
+        table.candidate_selected.connect(lambda idx: received.append(idx))
+        table._on_cell_clicked(1, 0)  # 可见第2行对应原始索引1
+
+        assert received == [1]
+
+
 class TestResizableColumns:
     """测试表格列支持拖动调整宽度"""
 
