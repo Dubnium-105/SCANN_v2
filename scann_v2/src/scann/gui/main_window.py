@@ -55,10 +55,12 @@ from scann.core.observation_report import generate_mpc_report, Observation
 from scann.logger_config import get_logger
 from scann.services.query_service import QueryService, QueryResult
 from scann.gui.dialogs.query_result_popup import QueryResultPopup
+from scann.gui.controllers import PairController
 from scann.gui.presenters import CandidatePresenter, StatusPresenter
 from scann.data.file_manager import scan_fits_folder, match_new_old_pairs
 from scann.ai.inference import InferenceEngine
 from scann.services.detection_service import DetectionPipeline
+from scann.services.pair_service import PairService
 from scann.gui.image_viewer import FitsImageViewer
 from scann.gui.widgets.blink_speed_slider import BlinkSpeedSlider
 from scann.gui.widgets.collapsible_sidebar import CollapsibleSidebar
@@ -220,6 +222,7 @@ class MainWindow(QMainWindow):
         self._init_central_ui()
         self._init_status_bar()
         self._init_presenters()
+        self._init_controllers()
         self._init_histogram_dock()
         self._connect_signals()
         self._init_shortcuts()
@@ -242,6 +245,11 @@ class MainWindow(QMainWindow):
             self.suspect_table,
             self.image_viewer,
         )
+
+    def _init_controllers(self) -> None:
+        """初始化主窗口控制器。"""
+        self.pair_service = PairService()
+        self.pair_controller = PairController(self, self.pair_service)
 
     def _show_message(self, message: str, timeout: int = 3000, level: str = 'INFO') -> None:
         """统一的消息输出方法，同时输出到状态栏和日志
@@ -973,12 +981,20 @@ class MainWindow(QMainWindow):
 
     def _on_prev_pair(self) -> None:
         """上一组图像配对"""
+        self.pair_controller.prev_pair()
+
+    def _prev_pair_impl(self) -> None:
+        """上一组图像配对的现有实现。"""
         current = self.file_list.currentRow()
         if current > 0:
             self.file_list.setCurrentRow(current - 1)
 
     def _on_next_pair(self) -> None:
         """下一组图像配对"""
+        self.pair_controller.next_pair()
+
+    def _next_pair_impl(self) -> None:
+        """下一组图像配对的现有实现。"""
         current = self.file_list.currentRow()
         if current < self.file_list.count() - 1:
             self.file_list.setCurrentRow(current + 1)
@@ -991,6 +1007,10 @@ class MainWindow(QMainWindow):
 
     def _on_open_new_folder(self) -> None:
         """打开新图文件夹"""
+        self.pair_controller.open_new_folder()
+
+    def _open_new_folder_impl(self) -> None:
+        """打开新图文件夹的现有实现。"""
         folder = QFileDialog.getExistingDirectory(self, "选择新图文件夹")
         if not folder:
             return
@@ -1023,27 +1043,35 @@ class MainWindow(QMainWindow):
 
         # 同步到配置并加入最近打开
         self._config.new_folder = folder
-        self._add_recent_folder(folder)
+        self.pair_controller.add_recent_folder(folder)
 
     def _add_recent_folder(self, folder: str) -> None:
         """添加文件夹到最近打开列表"""
+        self.pair_controller.add_recent_folder(folder)
+
+    def _add_recent_folder_impl(self, folder: str) -> None:
+        """添加文件夹到最近打开列表的现有实现。"""
         if folder in self._config.recent_folders:
             self._config.recent_folders.remove(folder)
         self._config.recent_folders.insert(0, folder)
         # 限制数量
         max_count = self._config.max_recent_count
         self._config.recent_folders = self._config.recent_folders[:max_count]
-        self._on_update_recent_menu()
+        self.pair_controller.update_recent_menu()
 
     def _on_open_old_folder(self) -> None:
         """打开旧图文件夹"""
+        self.pair_controller.open_old_folder()
+
+    def _open_old_folder_impl(self) -> None:
+        """打开旧图文件夹的现有实现。"""
         folder = QFileDialog.getExistingDirectory(self, "选择旧图文件夹")
         if not folder:
             return
 
         self._old_folder = folder
         self._config.old_folder = folder
-        self._add_recent_folder(folder)
+        self.pair_controller.add_recent_folder(folder)
         old_files = scan_fits_folder(folder)
 
         # 如果已有新图文件夹，自动配对
@@ -1119,6 +1147,10 @@ class MainWindow(QMainWindow):
 
     def _on_update_recent_menu(self) -> None:
         """更新最近打开菜单"""
+        self.pair_controller.update_recent_menu()
+
+    def _update_recent_menu_impl(self) -> None:
+        """更新最近打开菜单的现有实现。"""
         self.menu_recent.clear()
         recent = self._config.recent_folders
         if not recent:
@@ -1132,6 +1164,10 @@ class MainWindow(QMainWindow):
 
     def _open_recent_folder(self, folder: str) -> None:
         """从最近打开列表恢复文件夹"""
+        self.pair_controller.open_recent_folder(folder)
+
+    def _open_recent_folder_impl(self, folder: str) -> None:
+        """从最近打开列表恢复文件夹的现有实现。"""
         from pathlib import Path
         if not Path(folder).exists():
             self._show_message(f"文件夹不存在: {folder}", 5000, level='WARNING')
@@ -1967,6 +2003,10 @@ class MainWindow(QMainWindow):
 
     def _on_pair_selected(self, index: int) -> None:
         """配对列表选择事件"""
+        self.pair_controller.select_pair(index)
+
+    def _select_pair_impl(self, index: int) -> None:
+        """配对列表选择事件的现有实现。"""
         if index < 0 or index >= len(self._image_pairs):
             return
         self._load_pair(index)

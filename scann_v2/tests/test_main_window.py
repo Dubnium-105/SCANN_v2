@@ -27,7 +27,9 @@ from scann.services.blink_service import BlinkState
 def _make_mock_window():
     """创建一个跳过 __init__ 的 MainWindow, 手动挂载 Mock 属性"""
     from scann.gui.main_window import MainWindow
+    from scann.gui.controllers import PairController
     from scann.gui.presenters import CandidatePresenter, StatusPresenter
+    from scann.services.pair_service import PairService
 
     with patch("scann.gui.main_window.QMainWindow.__init__"):
         w = MainWindow.__new__(MainWindow)
@@ -107,6 +109,9 @@ def _make_mock_window():
     # 配置对象 (避免 RuntimeError: super-class __init__ was never called)
     w._config = Mock()
     w._config.blink_speed_ms = 500
+
+    w.pair_service = PairService()
+    w.pair_controller = PairController(w, w.pair_service)
 
     return w
 

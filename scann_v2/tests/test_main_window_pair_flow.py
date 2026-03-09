@@ -10,6 +10,9 @@ from scann.services.blink_service import BlinkState
 
 def _make_mock_window():
     from scann.gui.main_window import MainWindow
+    from scann.gui.controllers import PairController
+    from scann.gui.presenters import CandidatePresenter, StatusPresenter
+    from scann.services.pair_service import PairService
 
     with patch("scann.gui.main_window.QMainWindow.__init__"):
         window = MainWindow.__new__(MainWindow)
@@ -43,6 +46,8 @@ def _make_mock_window():
     window.act_show_markers = Mock()
     window.act_show_markers.isChecked.return_value = True
     window._logger = Mock()
+    window.status_presenter = StatusPresenter(window.statusBar(), window._logger)
+    window.candidate_presenter = CandidatePresenter(window.suspect_table, window.image_viewer)
     window._config = SimpleNamespace(
         blink_speed_ms=500,
         new_folder="",
@@ -62,6 +67,8 @@ def _make_mock_window():
     window._current_candidate_idx = -1
     window._candidates_cache = {}
     window.menu_recent = Mock()
+    window.pair_service = PairService()
+    window.pair_controller = PairController(window, window.pair_service)
     return window
 
 

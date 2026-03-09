@@ -41,6 +41,8 @@ class _Menu:
 
 def _make_mock_window():
     from scann.gui.main_window import MainWindow
+    from scann.gui.controllers import PairController
+    from scann.services.pair_service import PairService
 
     with patch("scann.gui.main_window.QMainWindow.__init__"):
         window = MainWindow.__new__(MainWindow)
@@ -54,6 +56,8 @@ def _make_mock_window():
     window._candidates = []
     window._current_candidate_idx = -1
     window._config = SimpleNamespace()
+    window.pair_service = PairService()
+    window.pair_controller = PairController(window, window.pair_service)
     return window
 
 
