@@ -36,7 +36,7 @@
 1. 建立回归保护网（已完成）
 2. 引入状态与候选 Presenter 骨架（已完成）
 3. 主窗口接入 Presenter（已完成）
-4. 引入 PairService 骨架
+4. 引入 PairService 骨架（已完成）
 5. 引入 PairController 骨架并接线
 6. 迁移配对加载逻辑到 PairController
 7. 引入 ImageSessionController 并迁移显示状态
@@ -184,6 +184,10 @@
 ---
 
 ## 提交 4：引入 PairService 骨架
+
+### 当前状态
+
+- 已完成
 
 ### 目标
 

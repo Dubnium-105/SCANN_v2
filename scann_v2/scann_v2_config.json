@@ -1,6 +1,6 @@
 {
-  "new_folder": "",
-  "old_folder": "",
+  "new_folder": "C:/wksp/SCANNv2/SCANN_v2/dataset/new",
+  "old_folder": "C:/wksp/SCANNv2/SCANN_v2/dataset/old",
   "save_folder": "",
   "telescope": {
     "pixel_size_um": 9.0,
@@ -47,14 +47,17 @@
   "blink_speed_ms": 181,
   "mpcorb_path": "",
   "limit_magnitude": 20.0,
-  "recent_folders": [],
+  "recent_folders": [
+    "C:/wksp/SCANNv2/SCANN_v2/dataset/old",
+    "C:/wksp/SCANNv2/SCANN_v2/dataset/new"
+  ],
   "max_recent_count": 10,
   "max_threads": 4,
   "auto_save_annotations": false,
   "auto_collapse_sidebar": true,
   "confirm_before_close": false,
-  "stretch_black_point": 0.0,
-  "stretch_white_point": 65535.0,
+  "stretch_black_point": 72.0,
+  "stretch_white_point": 32767.0,
   "stretch_mode": "平方根",
   "show_markers": true,
   "show_mpcorb": true,
@@ -63,7 +66,7 @@
   "sidebar_collapsed": false,
   "sidebar_width": 374,
   "window_width": 2560,
-  "window_height": 1377,
+  "window_height": 1316,
   "ann_mode": "v2",
   "ann_dataset_path": "C:/wksp/SCANNv2/SCANN_v2/dataset",
   "ann_auto_advance": true,
