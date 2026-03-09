@@ -70,6 +70,7 @@ tests/test_blink_speed_slider.py
 tests/test_candidate_detector.py
 tests/test_collapsible_sidebar.py
 tests/test_config.py
+tests/test_coordinate_label.py
 tests/test_database.py
 tests/test_detection_pipeline.py
 tests/test_detection_service_ai.py

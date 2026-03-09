@@ -166,7 +166,45 @@ def load_config(
     config.ann_stretch_mode = data.get("ann_stretch_mode", "线性")
     config.ann_histogram_visible = data.get("ann_histogram_visible", False)
 
+    # 验证并清理无效路径
+    _validate_paths(config)
+
     return config
+
+
+def _validate_paths(config: AppConfig) -> None:
+    """验证路径是否存在，清理无效路径
+
+    新设备迁移时，旧配置中的路径可能不存在，需要清理避免报错
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # 需要验证的路径属性列表
+    path_attrs = [
+        ("new_folder", "新文件夹路径"),
+        ("old_folder", "旧文件夹路径"),
+        ("model_path", "模型路径"),
+        ("ann_dataset_path", "标注数据集路径"),
+        ("mpcorb_path", "MPCORB路径"),
+        ("database_path", "数据库路径"),
+    ]
+
+    for attr, desc in path_attrs:
+        value = getattr(config, attr, "")
+        if value and not Path(value).exists():
+            logger.warning(f"{desc}不存在，已清除: {value}")
+            setattr(config, attr, "")
+
+    # 清理 recent_folders 中的无效路径
+    valid_recents = []
+    for folder in config.recent_folders:
+        if folder and Path(folder).exists():
+            valid_recents.append(folder)
+    if len(valid_recents) != len(config.recent_folders):
+        removed = len(config.recent_folders) - len(valid_recents)
+        logger.info(f"已从最近打开列表中移除 {removed} 个无效路径")
+    config.recent_folders = valid_recents
 
 
 def save_config(

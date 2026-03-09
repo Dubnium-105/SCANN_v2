@@ -1065,7 +1065,15 @@ class AnnotationDialog(QDialog):
 
         # 数据集路径 (最后加载，因为它会触发 load_samples)
         if cfg.ann_dataset_path:
-            self.load_dataset(cfg.ann_dataset_path)
+            if Path(cfg.ann_dataset_path).exists():
+                self.load_dataset(cfg.ann_dataset_path)
+            else:
+                # 路径不存在，清除旧配置，让用户重新选择
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"数据集路径不存在，已清除: {cfg.ann_dataset_path}"
+                )
+                cfg.ann_dataset_path = ""
 
     def _save_to_config(self) -> None:
         """将当前 UI 状态写回 AppConfig"""
