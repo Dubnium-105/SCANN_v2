@@ -24,6 +24,7 @@ def mock_config():
     cfg.thresh = 5
     cfg.min_area = 3
     cfg.ai_confidence = 0.5
+    cfg.model_backbone = "ViT_B_16"
     return cfg
 
 
@@ -109,6 +110,11 @@ class TestAITab:
         assert "cpu" in items
         assert "cuda" in items
 
+    def test_model_backbone_combo(self, dialog):
+        items = [dialog.combo_model_backbone.itemText(i) for i in range(dialog.combo_model_backbone.count())]
+        assert any(x.startswith("auto") for x in items)
+        assert "ViT_B_16" in items
+
 
 class TestPathsTab:
     """测试保存/路径标签页"""
@@ -146,6 +152,9 @@ class TestLoadFromConfig:
     def test_sigma_loaded(self, dialog, mock_config):
         assert dialog.spin_sigma.value() == 5.0
 
+    def test_model_backbone_loaded(self, dialog, mock_config):
+        assert dialog.combo_model_backbone.currentText() == "ViT_B_16"
+
 
 class TestSaveToConfig:
     """测试写回 Config"""
@@ -159,6 +168,11 @@ class TestSaveToConfig:
         dialog.spin_confidence.setValue(0.75)
         dialog._save_to_config()
         assert mock_config.ai_confidence == 0.75
+
+    def test_save_updates_model_backbone(self, dialog, mock_config):
+        dialog.combo_model_backbone.setCurrentText("ResNet50")
+        dialog._save_to_config()
+        assert mock_config.model_backbone == "ResNet50"
 
 
 class TestSettingsChangedSignal:

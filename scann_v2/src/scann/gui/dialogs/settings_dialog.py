@@ -206,6 +206,21 @@ class SettingsDialog(QDialog):
         )
         model_form.addRow("模型格式:", self.combo_model_format)
 
+        self.combo_model_backbone = QComboBox()
+        self.combo_model_backbone.addItems([
+            "auto (优先读取模型元数据)",
+            "ResNet18",
+            "ResNet34",
+            "ResNet50",
+            "ViT_B_16",
+        ])
+        self.combo_model_backbone.setToolTip(
+            "推理主干网络提示\n"
+            "auto: 优先使用 checkpoint 的 backbone 元数据\n"
+            "其余选项: 强制按指定架构加载 v2 模型"
+        )
+        model_form.addRow("模型架构:", self.combo_model_backbone)
+
         layout.addWidget(grp_model)
 
         # 推理参数
@@ -324,6 +339,15 @@ class SettingsDialog(QDialog):
         format_map = {"auto": 0, "v1_classifier": 1, "v2_classifier": 2}
         self.combo_model_format.setCurrentIndex(format_map.get(cfg.model_format, 0))
 
+        backbone_map = {
+            "auto": 0,
+            "ResNet18": 1,
+            "ResNet34": 2,
+            "ResNet50": 3,
+            "ViT_B_16": 4,
+        }
+        self.combo_model_backbone.setCurrentIndex(backbone_map.get(cfg.model_backbone, 0))
+
         # 计算设备
         device_map = {"auto": 0, "cpu": 1, "cuda": 2}
         self.combo_device.setCurrentIndex(device_map.get(cfg.compute_device, 0))
@@ -375,6 +399,9 @@ class SettingsDialog(QDialog):
         # 模型格式
         format_values = ["auto", "v1_classifier", "v2_classifier"]
         cfg.model_format = format_values[self.combo_model_format.currentIndex()]
+
+        backbone_values = ["auto", "ResNet18", "ResNet34", "ResNet50", "ViT_B_16"]
+        cfg.model_backbone = backbone_values[self.combo_model_backbone.currentIndex()]
 
         # 计算设备
         device_values = ["auto", "cpu", "cuda"]

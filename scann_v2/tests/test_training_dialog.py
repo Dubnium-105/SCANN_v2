@@ -54,6 +54,7 @@ class TestTrainingDialogInit:
     def test_backbone_options(self, dialog):
         items = [dialog.combo_backbone.itemText(i) for i in range(dialog.combo_backbone.count())]
         assert "ResNet18" in items
+        assert "ViT_B_16" in items
 
     def test_device_options_and_default(self, dialog):
         items = [dialog.combo_device.itemText(i) for i in range(dialog.combo_device.count())]

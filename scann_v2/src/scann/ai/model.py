@@ -148,14 +148,61 @@ class SCANNClassifier(nn.Module):
     输出: [B, 2] (二分类 logits)
     """
 
-    def __init__(self, pretrained: bool = True):
+    SUPPORTED_BACKBONES = ("ResNet18", "ResNet34", "ResNet50", "ViT_B_16")
+
+    @staticmethod
+    def _normalize_backbone_name(backbone_name: str) -> str:
+        name = str(backbone_name or "").strip()
+        if not name or name.lower() == "auto":
+            return "ResNet18"
+
+        normalized = name.replace("-", "_").upper()
+        mapping = {
+            "RESNET18": "ResNet18",
+            "RESNET34": "ResNet34",
+            "RESNET50": "ResNet50",
+            "VIT_B_16": "ViT_B_16",
+        }
+        return mapping.get(normalized, "ResNet18")
+
+    @staticmethod
+    def _detect_backbone_from_state_dict(state_dict: Dict[str, torch.Tensor]) -> str:
+        if not state_dict:
+            return "ResNet18"
+
+        keys = [k[7:] if k.startswith("module.") else k for k in state_dict.keys()]
+        stripped = [k[len("backbone."):] if k.startswith("backbone.") else k for k in keys]
+
+        # torchvision ViT 常见键: conv_proj / encoder.layers / heads.head
+        if any(k.startswith(("conv_proj.", "encoder.layers.", "heads.")) for k in stripped):
+            return "ViT_B_16"
+
+        return "ResNet18"
+
+    def __init__(self, pretrained: bool = True, backbone_name: str = "ResNet18"):
         super().__init__()
-        if pretrained:
-            self.backbone = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+        self.backbone_name = self._normalize_backbone_name(backbone_name)
+
+        if self.backbone_name == "ResNet34":
+            weights = models.ResNet34_Weights.DEFAULT if pretrained else None
+            self.backbone = models.resnet34(weights=weights)
+            num_features = self.backbone.fc.in_features
+            self.backbone.fc = nn.Linear(num_features, 2)
+        elif self.backbone_name == "ResNet50":
+            weights = models.ResNet50_Weights.DEFAULT if pretrained else None
+            self.backbone = models.resnet50(weights=weights)
+            num_features = self.backbone.fc.in_features
+            self.backbone.fc = nn.Linear(num_features, 2)
+        elif self.backbone_name == "ViT_B_16":
+            weights = models.ViT_B_16_Weights.DEFAULT if pretrained else None
+            self.backbone = models.vit_b_16(weights=weights)
+            num_features = self.backbone.heads.head.in_features
+            self.backbone.heads.head = nn.Linear(num_features, 2)
         else:
-            self.backbone = models.resnet18(weights=None)
-        num_features = self.backbone.fc.in_features
-        self.backbone.fc = nn.Linear(num_features, 2)
+            weights = models.ResNet18_Weights.DEFAULT if pretrained else None
+            self.backbone = models.resnet18(weights=weights)
+            num_features = self.backbone.fc.in_features
+            self.backbone.fc = nn.Linear(num_features, 2)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.backbone(x)
@@ -165,6 +212,7 @@ class SCANNClassifier(nn.Module):
         path: str,
         device: Optional[torch.device] = None,
         model_format: ModelFormat = ModelFormat.AUTO,
+        backbone_name: str = "auto",
     ) -> "SCANNClassifier":
         """从 checkpoint 加载模型，自动兼容 v1/v2 格式
 
@@ -172,6 +220,7 @@ class SCANNClassifier(nn.Module):
             path: 模型文件路径
             device: 目标设备
             model_format: 模型格式 (AUTO=自动检测, V1_CLASSIFIER, V2_CLASSIFIER)
+            backbone_name: 模型主干网络（auto=自动检测/回退）
 
         Returns:
             加载好的模型 (eval mode)
@@ -201,6 +250,17 @@ class SCANNClassifier(nn.Module):
 
         logger.info("检测到模型格式: %s", model_format.value)
 
+        resolved_backbone = SCANNClassifier._normalize_backbone_name(backbone_name)
+        if str(backbone_name).strip().lower() == "auto":
+            if isinstance(ckpt, dict) and isinstance(ckpt.get("backbone"), str):
+                resolved_backbone = SCANNClassifier._normalize_backbone_name(ckpt["backbone"])
+            else:
+                resolved_backbone = SCANNClassifier._detect_backbone_from_state_dict(state_dict)
+
+        # v1 原生格式固定是 ResNet 语义
+        if model_format == ModelFormat.V1_CLASSIFIER:
+            resolved_backbone = "ResNet18"
+
         # 清理 state_dict：移除 module. 前缀，过滤非 Tensor 元数据项
         clean_state: Dict[str, torch.Tensor] = {}
         for k, v in state_dict.items():
@@ -211,7 +271,7 @@ class SCANNClassifier(nn.Module):
 
         # v1: 原生加载（不做 key 转换）
         if model_format == ModelFormat.V1_CLASSIFIER:
-            model = SCANNClassifier(pretrained=False)
+            model = SCANNClassifier(pretrained=False, backbone_name=resolved_backbone)
             try:
                 model.backbone.load_state_dict(clean_state, strict=True)
                 logger.info("使用 v1 原生权重加载（未进行 v1->v2 key 转换）")
@@ -231,7 +291,7 @@ class SCANNClassifier(nn.Module):
             return model
 
         # v2: 正常加载（支持 backbone. 前缀）
-        model = SCANNClassifier(pretrained=False)
+        model = SCANNClassifier(pretrained=False, backbone_name=resolved_backbone)
         model.load_state_dict(clean_state, strict=False)
         model.to(device)
         model.eval()
@@ -264,6 +324,7 @@ class SCANNClassifier(nn.Module):
             "state": state_dict,
             "threshold": threshold,
             "model_format": model_format.value,
+            "backbone": getattr(model, "backbone_name", "ResNet18"),
             **extra_metadata,
         }
         torch.save(ckpt, path)

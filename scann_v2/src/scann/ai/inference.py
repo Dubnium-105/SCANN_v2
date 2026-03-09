@@ -28,6 +28,7 @@ class InferenceConfig:
     use_amp: bool = True       # 混合精度
     device: str = "auto"       # "auto", "cuda:0", "cpu"
     model_format: str = "auto" # "auto", "v1_classifier", "v2_classifier"
+    model_backbone: str = "auto"  # "auto", "ResNet18", "ResNet34", "ResNet50", "ViT_B_16"
 
 
 class InferenceEngine:
@@ -73,6 +74,7 @@ class InferenceEngine:
         # 先读取 checkpoint 元数据，确定真实格式
         ckpt = torch.load(path, map_location="cpu", weights_only=False)
         self._model_format = fmt
+        self._model_backbone = str(getattr(self.config, "model_backbone", "auto") or "auto")
 
         # 默认阈值/通道顺序（后续可被 checkpoint 覆盖）
         self._threshold = 0.5
@@ -92,6 +94,11 @@ class InferenceEngine:
                 if isinstance(state_dict, dict) and state_dict:
                     from scann.ai.model import detect_model_format
                     self._model_format = detect_model_format(state_dict)
+
+            # 若推理配置未显式指定 backbone，则优先使用 checkpoint 的 backbone 元数据
+            ckpt_backbone = ckpt.get("backbone")
+            if self._model_backbone.lower() == "auto" and isinstance(ckpt_backbone, str):
+                self._model_backbone = ckpt_backbone
 
             # 读取阈值：优先 threshold (v2)，其次 t_recall (v1 训练脚本)
             if ckpt.get("threshold") is not None:
@@ -143,11 +150,17 @@ class InferenceEngine:
                 # 仅元数据或无法识别权重时，回退兼容加载路径
                 _logger.warning("v1 checkpoint 未找到可识别权重键，回退兼容加载")
                 self.model = SCANNClassifier.load_from_checkpoint(
-                    path, self.device, model_format=self._model_format
+                    path,
+                    self.device,
+                    model_format=self._model_format,
+                    backbone_name=self._model_backbone,
                 )
         else:
             self.model = SCANNClassifier.load_from_checkpoint(
-                path, self.device, model_format=self._model_format
+                path,
+                self.device,
+                model_format=self._model_format,
+                backbone_name=self._model_backbone,
             )
 
     # V1 归一化常数（按 SCANN.py 迁移）
@@ -177,6 +190,11 @@ class InferenceEngine:
     def model_format(self):
         """当前加载的模型格式"""
         return self._model_format
+
+    @property
+    def model_backbone(self) -> str:
+        """当前加载模型的骨干网络提示。"""
+        return getattr(self, "_model_backbone", "auto")
 
     @property
     def is_v1(self) -> bool:

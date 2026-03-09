@@ -102,6 +102,7 @@ def load_config(
     # AI 参数
     config.model_path = data.get("model_path", "")
     config.model_format = data.get("model_format", "auto")
+    config.model_backbone = data.get("model_backbone", "auto")
     config.ai_confidence = data.get("ai_confidence", 0.50)
     config.slice_size = data.get("slice_size", 80)
     config.batch_size = data.get("batch_size", 64)
@@ -259,6 +260,7 @@ def save_config(
         "kill_dipole": config.kill_dipole,
         "model_path": config.model_path,
         "model_format": config.model_format,
+        "model_backbone": config.model_backbone,
         "ai_confidence": config.ai_confidence,
         "slice_size": config.slice_size,
         "batch_size": config.batch_size,

@@ -279,6 +279,7 @@ class AppConfig:
     # AI 参数
     model_path: str = ""
     model_format: str = "auto"  # "auto", "v1_classifier", "v2_classifier"
+    model_backbone: str = "auto"  # "auto", "ResNet18", "ResNet34", "ResNet50", "ViT_B_16"
     ai_confidence: float = 0.50 # AI 置信度阈值
     slice_size: int = 80        # 切片大小 (px)，V1 训练使用 80x80
     batch_size: int = 64        # 推理批量大小

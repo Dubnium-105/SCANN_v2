@@ -114,7 +114,7 @@ class TrainingDialog(QDialog):
         hyper_form.addRow("优化器:", self.combo_optimizer)
 
         self.combo_backbone = QComboBox()
-        self.combo_backbone.addItems(["ResNet18", "ResNet34", "ResNet50"])
+        self.combo_backbone.addItems(["ResNet18", "ResNet34", "ResNet50", "ViT_B_16"])
         hyper_form.addRow("骨干网络:", self.combo_backbone)
 
         # 设备选择

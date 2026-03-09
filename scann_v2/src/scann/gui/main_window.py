@@ -1534,6 +1534,7 @@ class MainWindow(QMainWindow):
                 batch_size=self._config.batch_size,
                 device=self._config.compute_device,
                 model_format=self._config.model_format,
+                model_backbone=getattr(self._config, "model_backbone", "auto"),
             )
             self._inference_engine = InferenceEngine(model_path=path, config=config)
 
@@ -1547,18 +1548,20 @@ class MainWindow(QMainWindow):
             self._config.model_path = path
             fmt_info = getattr(self._inference_engine, '_model_format', None)
             fmt_str = fmt_info.value if fmt_info else 'unknown'
+            backbone_str = getattr(self._inference_engine, 'model_backbone', 'auto')
             ch_order = getattr(self._inference_engine, '_channel_order', (0, 1, 2))
             self._logger.info(
-                "模型已加载: %s (格式=%s, 模型阈值=%.4f, GUI阈值=%.4f, 生效阈值=%.4f, 通道=%s)",
+                "模型已加载: %s (格式=%s, backbone=%s, 模型阈值=%.4f, GUI阈值=%.4f, 生效阈值=%.4f, 通道=%s)",
                 path,
                 fmt_str,
+                backbone_str,
                 model_threshold,
                 gui_threshold,
                 self._inference_engine.threshold,
                 ch_order,
             )
             self._show_message(
-                f"模型已加载: {path} (格式={fmt_str}, 阈值={self._inference_engine.threshold:.2f})", 5000
+                f"模型已加载: {path} (格式={fmt_str}, backbone={backbone_str}, 阈值={self._inference_engine.threshold:.2f})", 5000
             )
         except Exception as e:
             self._inference_engine = None
@@ -1576,6 +1579,7 @@ class MainWindow(QMainWindow):
         threshold = self._inference_engine.threshold
         fmt_info = getattr(self._inference_engine, '_model_format', None)
         fmt_str = fmt_info.value if fmt_info else 'unknown'
+        backbone_str = getattr(self._inference_engine, 'model_backbone', 'auto')
         ch_order = getattr(self._inference_engine, '_channel_order', (0, 1, 2))
 
         QMessageBox.information(
@@ -1584,6 +1588,7 @@ class MainWindow(QMainWindow):
             f"<h3>AI 模型信息</h3>"
             f"<p>架构: {model.__class__.__name__}</p>"
             f"<p>模型格式: {fmt_str}</p>"
+            f"<p>模型主干: {backbone_str}</p>"
             f"<p>参数量: {total_params:,}</p>"
             f"<p>检测阈值: {threshold:.4f}</p>"
             f"<p>通道顺序: {ch_order}</p>"

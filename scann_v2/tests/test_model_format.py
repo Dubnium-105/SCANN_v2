@@ -412,6 +412,14 @@ class TestInferenceEngineFormat:
         assert hasattr(config, "model_format")
         assert config.model_format == ModelFormat.AUTO.value
 
+    def test_inference_config_has_backbone_field(self):
+        """InferenceConfig 应有 model_backbone 字段"""
+        from scann.ai.inference import InferenceConfig
+
+        config = InferenceConfig()
+        assert hasattr(config, "model_backbone")
+        assert config.model_backbone == "auto"
+
     def test_inference_engine_with_explicit_format(self):
         """显式指定格式加载"""
         from scann.ai.inference import InferenceConfig, InferenceEngine
@@ -427,3 +435,37 @@ class TestInferenceEngineFormat:
             assert engine.is_ready
         finally:
             Path(path).unlink(missing_ok=True)
+
+    def test_inference_engine_uses_checkpoint_backbone_hint(self, monkeypatch):
+        """推理加载应将 checkpoint 的 backbone 元数据传给分类器加载器"""
+        from scann.ai.inference import InferenceConfig, InferenceEngine
+
+        class _FakeModel:
+            def to(self, _device):
+                return self
+
+            def eval(self):
+                return self
+
+        captured = {}
+
+        def fake_torch_load(_path, map_location=None, weights_only=False):
+            return {
+                "model_format": "v2_classifier",
+                "backbone": "ViT_B_16",
+                "state": {},
+                "threshold": 0.5,
+            }
+
+        def fake_loader(path, device=None, model_format=None, backbone_name="auto"):
+            captured["backbone_name"] = backbone_name
+            return _FakeModel()
+
+        monkeypatch.setattr(torch, "load", fake_torch_load)
+        monkeypatch.setattr("scann.ai.model.SCANNClassifier.load_from_checkpoint", fake_loader)
+
+        config = InferenceConfig(device="cpu")
+        engine = InferenceEngine(model_path="dummy.pth", config=config)
+
+        assert engine.is_ready
+        assert captured["backbone_name"] == "ViT_B_16"

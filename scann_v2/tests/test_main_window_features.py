@@ -485,6 +485,24 @@ class TestLoadModel:
         assert w._config.ai_confidence == pytest.approx(0.23)
 
     @patch("scann.gui.main_window.QFileDialog.getOpenFileName")
+    @patch("scann.gui.main_window.InferenceEngine")
+    def test_load_model_passes_model_backbone_to_inference_config(self, mock_engine_cls, mock_dialog):
+        """加载模型时应把配置中的 model_backbone 传入推理配置"""
+        w = _make_mock_window()
+        w._config.model_backbone = "ViT_B_16"
+        mock_dialog.return_value = ("/path/to/model.pth", "")
+
+        mock_engine = Mock()
+        mock_engine.is_ready = True
+        mock_engine.threshold = 0.5
+        mock_engine_cls.return_value = mock_engine
+
+        w._on_load_model()
+
+        config = mock_engine_cls.call_args.kwargs["config"]
+        assert getattr(config, "model_backbone", "auto") == "ViT_B_16"
+
+    @patch("scann.gui.main_window.QFileDialog.getOpenFileName")
     def test_load_model_cancelled(self, mock_dialog):
         """取消不应改变状态"""
         w = _make_mock_window()
@@ -825,6 +843,23 @@ class TestModelInfo:
 
         # 不应崩溃
         w._on_model_info()
+
+    @patch("scann.gui.main_window.QMessageBox")
+    def test_model_info_contains_backbone_hint(self, mock_msgbox_cls):
+        """模型信息弹窗应包含 backbone 提示"""
+        w = _make_mock_window()
+        w._inference_engine = Mock()
+        w._inference_engine.is_ready = True
+        w._inference_engine.model = Mock()
+        w._inference_engine.threshold = 0.5
+        w._inference_engine.device = "cpu"
+        w._inference_engine.model_backbone = "ViT_B_16"
+        w._inference_engine.model.parameters.return_value = [Mock(numel=Mock(return_value=100))]
+
+        w._on_model_info()
+
+        args = mock_msgbox_cls.information.call_args.args
+        assert "ViT_B_16" in args[2]
 
 
 # ═══════════════════════════════════════════════

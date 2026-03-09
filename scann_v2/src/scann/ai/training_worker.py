@@ -172,21 +172,18 @@ class TrainingWorker(QThread):
             )
 
             # === 2. 模型 ===
-            backbone_cls = {
-                "ResNet18": models.resnet18,
-                "ResNet34": models.resnet34,
-                "ResNet50": models.resnet50,
-            }.get(backbone_name, models.resnet18)
-
-            if backbone_name == "ResNet18":
-                weights = models.ResNet18_Weights.DEFAULT
-            elif backbone_name == "ResNet34":
-                weights = models.ResNet34_Weights.DEFAULT
+            if backbone_name == "ResNet34":
+                model = models.resnet34(weights=models.ResNet34_Weights.DEFAULT)
+                model.fc = nn.Linear(model.fc.in_features, 2)
+            elif backbone_name == "ResNet50":
+                model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+                model.fc = nn.Linear(model.fc.in_features, 2)
+            elif backbone_name == "ViT_B_16":
+                model = models.vit_b_16(weights=models.ViT_B_16_Weights.DEFAULT)
+                model.heads.head = nn.Linear(model.heads.head.in_features, 2)
             else:
-                weights = models.ResNet50_Weights.DEFAULT
-
-            model = backbone_cls(weights=weights)
-            model.fc = nn.Linear(model.fc.in_features, 2)
+                model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+                model.fc = nn.Linear(model.fc.in_features, 2)
             model = model.to(device)
 
             # === 3. 损失和优化器 ===
@@ -275,12 +272,20 @@ class TrainingWorker(QThread):
 
                     # 确定保存格式
                     model_format = ModelFormat.V1_CLASSIFIER if save_format == "v1_classifier" else ModelFormat.V2_CLASSIFIER
+                    if backbone_name == "ViT_B_16" and model_format == ModelFormat.V1_CLASSIFIER:
+                        logger.warning("ViT_B_16 不支持保存为 v1_classifier，已自动切换为 v2_classifier")
+                        model_format = ModelFormat.V2_CLASSIFIER
 
                     # 使用 SCANNClassifier 包装保存
-                    wrapper = SCANNClassifier(pretrained=False)
+                    wrapper = SCANNClassifier(pretrained=False, backbone_name=backbone_name)
                     wrapper.backbone = model
+                    wrapper.backbone_name = backbone_name
                     SCANNClassifier.save_checkpoint(
-                        wrapper, save_path, threshold=best_threshold, model_format=model_format
+                        wrapper,
+                        save_path,
+                        threshold=best_threshold,
+                        model_format=model_format,
+                        backbone=backbone_name,
                     )
                     logger.info(f"保存最佳模型 (epoch={epoch+1}, F2={best_f2:.4f})")
 
