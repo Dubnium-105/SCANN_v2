@@ -19,8 +19,6 @@ from typing import Optional
 from pathlib import Path
 import math
 
-import logging
-
 import numpy as np
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QKeySequence
@@ -57,6 +55,7 @@ from scann.core.observation_report import generate_mpc_report, Observation
 from scann.logger_config import get_logger
 from scann.services.query_service import QueryService, QueryResult
 from scann.gui.dialogs.query_result_popup import QueryResultPopup
+from scann.gui.presenters import CandidatePresenter, StatusPresenter
 from scann.data.file_manager import scan_fits_folder, match_new_old_pairs
 from scann.ai.inference import InferenceEngine
 from scann.services.detection_service import DetectionPipeline
@@ -220,6 +219,7 @@ class MainWindow(QMainWindow):
         self._init_menu_bar()
         self._init_central_ui()
         self._init_status_bar()
+        self._init_presenters()
         self._init_histogram_dock()
         self._connect_signals()
         self._init_shortcuts()
@@ -235,20 +235,23 @@ class MainWindow(QMainWindow):
     #  日志和消息输出
     # ══════════════════════════════════════════════
 
+    def _init_presenters(self) -> None:
+        """初始化主窗口展示职责委托对象。"""
+        self.status_presenter = StatusPresenter(self.statusBar(), self._logger)
+        self.candidate_presenter = CandidatePresenter(
+            self.suspect_table,
+            self.image_viewer,
+        )
+
     def _show_message(self, message: str, timeout: int = 3000, level: str = 'INFO') -> None:
-        """统一的消息输出方法，同时输出到状态栏、终端和日志
+        """统一的消息输出方法，同时输出到状态栏和日志
 
         Args:
             message: 消息内容
             timeout: 状态栏显示超时时间（毫秒）
             level: 日志级别 (DEBUG, INFO, WARNING, ERROR, CRITICAL)
         """
-        # 输出到状态栏（左下角）
-        self.statusBar().showMessage(message, timeout)
-
-        # 输出到终端和日志
-        log_level = getattr(logging, level.upper(), logging.INFO)
-        self._logger.log(log_level, message)
+        self.status_presenter.show_message(message, timeout=timeout, level=level)
 
     # ══════════════════════════════════════════════
     #  菜单栏
@@ -836,10 +839,10 @@ class MainWindow(QMainWindow):
     def _update_markers(self) -> None:
         """刷新候选标记"""
         show = self.act_show_markers.isChecked()
-        self.image_viewer.draw_markers(
+        self.candidate_presenter.refresh_markers(
             self._candidates,
             selected_idx=self._current_candidate_idx,
-            hide_all=not show,
+            show_markers=show,
         )
 
     def _on_toggle_histogram(self) -> None:
@@ -1805,7 +1808,7 @@ class MainWindow(QMainWindow):
         )
         self._candidates.append(candidate)
         self._current_candidate_idx = len(self._candidates) - 1
-        self.suspect_table.set_candidates(self._candidates)
+        self.candidate_presenter.set_candidates(self._candidates)
         self._update_markers()
         self._show_message(f"已添加手动候选体 ({x}, {y})")
 
@@ -1839,7 +1842,7 @@ class MainWindow(QMainWindow):
         self._candidates = []
         self._current_candidate_idx = -1
         self._update_markers()
-        self.suspect_table.set_candidates([])
+        self.candidate_presenter.set_candidates([])
 
         try:
             new_path, old_path, using_aligned = self._resolve_pair_image_paths(pair)
@@ -1987,7 +1990,7 @@ class MainWindow(QMainWindow):
         """设置检测到的候选体列表"""
         self._candidates = candidates
         self._current_candidate_idx = 0 if candidates else -1
-        self.suspect_table.set_candidates(candidates)
+        self.candidate_presenter.set_candidates(candidates)
         self._update_markers()
 
     # ══════════════════════════════════════════════
