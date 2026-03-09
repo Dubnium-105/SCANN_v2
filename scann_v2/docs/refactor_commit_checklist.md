@@ -34,8 +34,8 @@
 建议总计 14 次提交完成第一轮结构重构。
 
 1. 建立回归保护网（已完成）
-2. 引入状态与候选 Presenter 骨架
-3. 主窗口接入 Presenter
+2. 引入状态与候选 Presenter 骨架（已完成）
+3. 主窗口接入 Presenter（已完成）
 4. 引入 PairService 骨架
 5. 引入 PairController 骨架并接线
 6. 迁移配对加载逻辑到 PairController
@@ -143,7 +143,11 @@
 
 ---
 
-## 提交 3：主窗口接入 Presenter
+## 提交 3：主窗口接入 Presenter（已完成）
+
+### 当前状态
+
+- 已完成
 
 ### 目标
 
