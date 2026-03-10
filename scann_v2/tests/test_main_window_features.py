@@ -49,10 +49,12 @@ def _make_mock_window():
         ImageSessionController,
         ModelController,
         PairController,
+        PreferencesController,
         QueryController,
         TrainingController,
     )
     from scann.gui.presenters import CandidatePresenter, StatusPresenter
+    from scann.services.config_service import ConfigService
     from scann.services.model_service import ModelService
     from scann.services.pair_service import PairService
 
@@ -133,6 +135,7 @@ def _make_mock_window():
     w.status_presenter = StatusPresenter(w.statusBar(), w._logger)
     w.candidate_presenter = CandidatePresenter(w.suspect_table, w.image_viewer)
     w.model_service = ModelService()
+    w.config_service = ConfigService()
     w.pair_service = PairService(
         scan_folder_fn=main_window.scan_fits_folder,
         match_pairs_fn=main_window.match_new_old_pairs,
@@ -144,6 +147,7 @@ def _make_mock_window():
     w.training_controller = TrainingController(w)
     w.detection_controller = DetectionController(w)
     w.query_controller = QueryController(w)
+    w.preferences_controller = PreferencesController(w, w.config_service)
 
     # 数据
     w._candidates = []

@@ -55,6 +55,7 @@ from scann.gui.controllers import (
     ImageSessionController,
     ModelController,
     PairController,
+    PreferencesController,
     QueryController,
     TrainingController,
 )
@@ -62,6 +63,7 @@ from scann.gui.presenters import CandidatePresenter, StatusPresenter
 from scann.data.file_manager import scan_fits_folder, match_new_old_pairs
 from scann.ai.inference import InferenceEngine
 from scann.services.detection_service import DetectionPipeline
+from scann.services.config_service import ConfigService
 from scann.services.model_service import ModelService
 from scann.services.pair_service import PairService
 from scann.gui.image_viewer import FitsImageViewer
@@ -179,8 +181,8 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         # ── 配置 (最先加载，后续初始化依赖它) ──
-        from scann.core.config import load_config
-        self._config = load_config()
+        self.config_service = ConfigService()
+        self._config = self.config_service.load_config()
 
         self.setWindowTitle("SCANN v2 - Star/Source Classification and Analysis Neural Network")
         self.resize(self._config.window_width, self._config.window_height)
@@ -260,6 +262,7 @@ class MainWindow(QMainWindow):
         self.training_controller = TrainingController(self)
         self.detection_controller = DetectionController(self)
         self.query_controller = QueryController(self)
+        self.preferences_controller = PreferencesController(self, self.config_service)
 
     @property
     def _inference_engine(self):
@@ -1103,42 +1106,11 @@ class MainWindow(QMainWindow):
 
     def _on_open_preferences(self) -> None:
         """打开首选项对话框"""
-        from scann.gui.dialogs.settings_dialog import SettingsDialog
-        from scann.core.config import save_config
-        dlg = SettingsDialog(self._config, parent=self)
-        if dlg.exec_():
-            # 保存配置到磁盘
-            try:
-                save_config(self._config)
-            except Exception as e:
-                self._logger.error(f"保存配置失败: {e}")
-            # 同步运行时状态
-            self.blink_service.speed_ms = self._config.blink_speed_ms
-            self.model_controller.apply_runtime_config()
-            self._show_message("设置已保存")
+        self.preferences_controller.open_preferences()
 
     def _on_select_mpcorb_file(self) -> None:
         """选择 MPCORB 数据文件"""
-        path, _ = QFileDialog.getOpenFileName(
-            self, "选择 MPCORB 文件", "", "DAT 文件 (*.dat);;所有文件 (*)"
-        )
-        if not path:
-            return
-
-        self._config.mpcorb_path = path
-        # 立即持久化保存 MPCORB 路径
-        try:
-            from scann.core.config import save_config as _save_cfg
-            _save_cfg(self._config)
-        except Exception:
-            pass
-        try:
-            from scann.core.mpcorb import MpcorbParser
-            parser = MpcorbParser(path)
-            count = parser.load()
-            self._show_message(f"已加载 MPCORB: {count} 个小行星", 5000)
-        except Exception as e:
-            self._show_message(f"MPCORB 加载失败: {e}", 5000, level='ERROR')
+        self.preferences_controller.select_mpcorb_file()
 
     def _on_open_scheduler(self) -> None:
         """打开计划任务设置"""
@@ -1265,98 +1237,19 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         """窗口关闭 → 自动保存配置"""
-        if self._config.confirm_before_close:
-            from PyQt5.QtWidgets import QMessageBox
-            reply = QMessageBox.question(
-                self, "确认退出",
-                "确定要退出 SCANN v2 吗？",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if reply != QMessageBox.Yes:
-                event.ignore()
-                return
-
-        # 将运行时状态回写到配置
-        self._save_runtime_state()
-
-        # 持久化保存到磁盘
-        try:
-            from scann.core.config import save_config
-            save_config(self._config)
-            self._logger.info("配置已自动保存")
-        except Exception as e:
-            self._logger.error(f"退出时保存配置失败: {e}")
-
+        if not self.preferences_controller.handle_close_event(event):
+            return
         super().closeEvent(event)
 
     def _save_runtime_state(self) -> None:
         """将运行时状态同步到配置对象"""
-        self._config.new_folder = self._new_folder
-        self._config.old_folder = self._old_folder
-        self._config.blink_speed_ms = self.blink_service.speed_ms
-
-        # 直方图拉伸参数
-        self._config.stretch_black_point = self.histogram_panel.black_point
-        self._config.stretch_white_point = self.histogram_panel.white_point
-        mode_names = ["线性", "对数", "平方根", "Asinh", "自动拉伸"]
-        mode_idx = self.histogram_panel.combo_mode.currentIndex()
-        if 0 <= mode_idx < len(mode_names):
-            self._config.stretch_mode = mode_names[mode_idx]
-
-        # 视图开关
-        self._config.show_markers = self.act_show_markers.isChecked()
-        self._config.show_mpcorb = self.act_show_mpcorb.isChecked()
-        self._config.show_known_objects = self.act_show_known.isChecked()
-        self._config.histogram_visible = self.histogram_panel.isVisible()
-        self._config.sidebar_collapsed = self.sidebar.is_collapsed
-        self._config.sidebar_width = self.sidebar.preferred_width
-
-        # 窗口几何
-        self._config.window_width = self.width()
-        self._config.window_height = self.height()
+        self.preferences_controller.save_runtime_state()
 
     def _restore_ui_state(self) -> None:
         """从配置恢复 UI 状态 (在构建 UI 后调用)"""
-        cfg = self._config
-
-        # 闪烁速度滑块
-        self.blink_speed.speed_ms = cfg.blink_speed_ms
-
-        # 视图菜单开关
-        self.act_show_markers.setChecked(cfg.show_markers)
-        self.act_show_mpcorb.setChecked(cfg.show_mpcorb)
-        self.act_show_known.setChecked(cfg.show_known_objects)
-
-        # 直方图面板可见性
-        self.histogram_panel.setVisible(cfg.histogram_visible)
-
-        # 直方图拉伸预设模式
-        mode_names = ["线性", "对数", "平方根", "Asinh", "自动拉伸"]
-        if cfg.stretch_mode in mode_names:
-            self.histogram_panel.combo_mode.setCurrentIndex(
-                mode_names.index(cfg.stretch_mode)
-            )
-
-        # 侧边栏折叠状态
-        self.sidebar.set_preferred_width(cfg.sidebar_width)
-        if hasattr(self, "main_splitter"):
-            self.main_splitter.setSizes(
-                [cfg.sidebar_width, max(1, self.width() - cfg.sidebar_width)]
-            )
-        if cfg.sidebar_collapsed:
-            self.sidebar.collapse()
+        self.preferences_controller.restore_ui_state()
 
     def resizeEvent(self, event) -> None:
         """窗口大小变化 → 自动折叠侧边栏"""
         super().resizeEvent(event)
-        if self._config.auto_collapse_sidebar:
-            self.sidebar.auto_collapse_check(self.width())
-        else:
-            pass  # 不自动折叠
-
-        # 重新定位浮层标签
-        self.overlay_state.move(10, 10)
-        vw = self.image_viewer.width()
-        self.overlay_inv.move(vw - 60, self.image_viewer.height() - 36)
-        self.overlay_blink.move(vw - 100, self.image_viewer.height() - 36)
+        self.preferences_controller.handle_resize_event()
