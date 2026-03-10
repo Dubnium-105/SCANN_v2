@@ -1,6 +1,6 @@
 {
-  "new_folder": "",
-  "old_folder": "",
+  "new_folder": "C:/wksp/SCANNv2/SCANN_v2/dataset/new",
+  "old_folder": "C:/wksp/SCANNv2/SCANN_v2/dataset/old",
   "save_folder": "",
   "telescope": {
     "pixel_size_um": 9.0,
@@ -31,7 +31,7 @@
   "topk": 20,
   "kill_flat": true,
   "kill_dipole": true,
-  "model_path": "",
+  "model_path": "C:/wksp/SCANNv2/SCANN_v2/best_model.pth",
   "model_format": "auto",
   "model_backbone": "auto",
   "ai_confidence": 0.17,
@@ -47,14 +47,17 @@
   "blink_speed_ms": 500,
   "mpcorb_path": "",
   "limit_magnitude": 20.0,
-  "recent_folders": [],
+  "recent_folders": [
+    "C:/wksp/SCANNv2/SCANN_v2/dataset/old",
+    "C:/wksp/SCANNv2/SCANN_v2/dataset/new"
+  ],
   "max_recent_count": 10,
   "max_threads": 4,
   "auto_save_annotations": false,
   "auto_collapse_sidebar": true,
   "confirm_before_close": true,
   "stretch_black_point": 0.0,
-  "stretch_white_point": 65535.0,
+  "stretch_white_point": 32767.0,
   "stretch_mode": "线性",
   "show_markers": true,
   "show_mpcorb": true,
