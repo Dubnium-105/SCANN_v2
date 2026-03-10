@@ -67,18 +67,21 @@
   "sidebar_width": 240,
   "window_width": 1600,
   "window_height": 1000,
-  "ann_mode": "v1",
-  "ann_dataset_path": "",
+  "ann_mode": "v2",
+  "ann_dataset_path": "C:/wksp/SCANNv2/SCANN_v2/dataset",
   "ann_auto_advance": true,
   "ann_filter": "all",
   "ann_sort": "默认",
   "ann_bbox_width": 2,
   "ann_invert": false,
-  "ann_splitter_sizes": [],
+  "ann_splitter_sizes": [
+    861,
+    123
+  ],
   "ann_window_width": 1000,
   "ann_window_height": 700,
   "ann_stretch_black": 0.0,
-  "ann_stretch_white": 65535.0,
+  "ann_stretch_white": 47829.0,
   "ann_stretch_mode": "线性",
   "ann_histogram_visible": false
 }
