@@ -46,7 +46,12 @@
 11. 拆分 QueryService 为 utils 与 clients（已完成）
 12. 引入 QueryController 并迁移查询入口（已完成）
 13. 引入 ModelService、ModelController、TrainingController（已完成）
-14. 引入 ConfigService、PreferencesController 并清理主窗口（已完成）
+14. 引入 ConfigService、PreferencesController 并清理主窗口（已完成，第一轮）
+
+第一轮 14 次提交完成后，若按终态标准继续收口，请转入以下文档：
+
+- `refactor_closure_plan.md`
+- `refactor_closure_commit_checklist.md`
 
 如果希望风险更低，可以把第 13 和第 14 再各自拆成两次提交。
 
@@ -645,6 +650,7 @@
 ### 当前状态
 
 - 已完成
+- 备注：配置链路拆分已完成，但主窗口终态收口尚未全部完成；后续工作转入 `refactor_closure_commit_checklist.md`
 
 ### 目标
 

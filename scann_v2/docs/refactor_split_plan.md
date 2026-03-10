@@ -2,7 +2,7 @@
 
 > 最后更新：2026年3月10日
 
-> 当前执行进度：已完成提交 14（引入 ConfigService、PreferencesController 并清理主窗口）
+> 当前执行进度：已完成提交 14（引入 ConfigService、PreferencesController 并清理主窗口），但按终态标准仍需进行第二轮收口；详见 `refactor_closure_plan.md`
 
 本文档给出 SCANN v2 当前代码结构的完整重构拆分方案，目标是降低 GUI 热点类的复杂度，恢复 Core → Service → GUI 的单向依赖，降低跨层直接耦合，同时保证功能连续可用、测试可逐步迁移。
 
@@ -833,6 +833,21 @@ class ModelService:
 - 检测、查询、模型管理、配置管理均具备独立 service/controller 边界
 - 重构后主流程测试与人工回归通过
 - `docs/architecture.md` 已更新为新的实际架构，而不是旧目标架构
+
+### 当前补充说明
+
+截至 2026年3月10日，第一轮 14 次提交已完成主要边界拆分，但尚未完全满足本节终态标准。
+
+剩余差距主要包括：
+
+- `main_window.py` 仍保留大量 UI 构建与辅助动作职责
+- 兼容壳方法与残留 direct import 尚未完全清理
+- `gui/composition/` 层尚未实际落地
+
+后续修正方案见：
+
+- `docs/refactor_closure_plan.md`
+- `docs/refactor_closure_commit_checklist.md`
 
 ---
 

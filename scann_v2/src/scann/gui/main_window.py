@@ -21,23 +21,12 @@ import math
 
 import numpy as np
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
     QFileDialog,
-    QHBoxLayout,
-    QLabel,
-    QListWidget,
     QMainWindow,
-    QMenuBar,
     QMessageBox,
-    QProgressBar,
-    QPushButton,
-    QSplitter,
-    QStatusBar,
-    QVBoxLayout,
-    QWidget,
 )
 
 from scann.core.fits_io import read_fits, write_fits
@@ -59,6 +48,7 @@ from scann.gui.controllers import (
     QueryController,
     TrainingController,
 )
+from scann.gui.composition import MainWindowBuilder
 from scann.gui.presenters import CandidatePresenter, StatusPresenter
 from scann.data.file_manager import scan_fits_folder, match_new_old_pairs
 from scann.ai.inference import InferenceEngine
@@ -66,14 +56,7 @@ from scann.services.detection_service import DetectionPipeline
 from scann.services.config_service import ConfigService
 from scann.services.model_service import ModelService
 from scann.services.pair_service import PairService
-from scann.gui.image_viewer import FitsImageViewer
-from scann.gui.widgets.blink_speed_slider import BlinkSpeedSlider
-from scann.gui.widgets.collapsible_sidebar import CollapsibleSidebar
-from scann.gui.widgets.coordinate_label import CoordinateLabel
-from scann.gui.widgets.histogram_panel import HistogramPanel
 from scann.gui.widgets.no_scroll_spinbox import NoScrollDoubleSpinBox, NoScrollSpinBox
-from scann.gui.widgets.overlay_label import OverlayLabel
-from scann.gui.widgets.suspect_table import SuspectTableWidget
 from scann.services.blink_service import BlinkService
 
 
@@ -220,12 +203,10 @@ class MainWindow(QMainWindow):
         self.blink_service = BlinkService(speed_ms=self._config.blink_speed_ms)
 
         # ── 构建 UI ──
-        self._init_menu_bar()
-        self._init_central_ui()
-        self._init_status_bar()
+        self.ui_parts = MainWindowBuilder(self).build()
+        self.ui_parts.attach(self)
         self._init_presenters()
         self._init_controllers()
-        self._init_histogram_dock()
         self._connect_signals()
         self._init_shortcuts()
 
@@ -330,315 +311,6 @@ class MainWindow(QMainWindow):
     # ══════════════════════════════════════════════
     #  菜单栏
     # ══════════════════════════════════════════════
-
-    def _init_menu_bar(self) -> None:
-        """初始化菜单栏: 文件 | 处理 | AI | 查询 | 视图 | 设置 | 帮助"""
-        mb = self.menuBar()
-
-        # ── 文件 ──
-        file_menu = mb.addMenu("文件(&F)")
-
-        self.act_open_new = file_menu.addAction("打开新图文件夹")
-        self.act_open_new.setShortcut(QKeySequence("Ctrl+O"))
-
-        self.act_open_old = file_menu.addAction("打开旧图文件夹")
-        self.act_open_old.setShortcut(QKeySequence("Ctrl+Shift+O"))
-
-        file_menu.addSeparator()
-
-        self.act_save = file_menu.addAction("保存当前图像")
-        self.act_save.setShortcut(QKeySequence("Ctrl+S"))
-
-        self.act_save_marked = file_menu.addAction("另存为标记图...")
-        self.act_save_marked.setShortcut(QKeySequence("Ctrl+Shift+S"))
-
-        file_menu.addSeparator()
-
-        self.menu_recent = file_menu.addMenu("最近打开")
-
-        file_menu.addSeparator()
-        self.act_exit = file_menu.addAction("退出")
-        self.act_exit.setShortcut(QKeySequence("Alt+F4"))
-        self.act_exit.triggered.connect(self.close)
-
-        # ── 处理 ──
-        proc_menu = mb.addMenu("处理(&P)")
-        self.act_align = proc_menu.addAction("批量对齐")
-        proc_menu.addSeparator()
-        self.act_batch_process = proc_menu.addAction("批量降噪/伪平场...")
-        proc_menu.addSeparator()
-        self.act_histogram = proc_menu.addAction("直方图拉伸")
-
-        # ── AI ──
-        ai_menu = mb.addMenu("AI(&A)")
-        self.act_detect = ai_menu.addAction("批量检测")
-        self.act_detect.setShortcut(QKeySequence("F5"))
-        ai_menu.addSeparator()
-        self.act_train = ai_menu.addAction("训练模型...")
-        self.act_load_model = ai_menu.addAction("加载模型...")
-        self.act_model_info = ai_menu.addAction("模型信息")
-        ai_menu.addSeparator()
-        self.act_annotation = ai_menu.addAction("🏷️ 标注工具...")
-        self.act_annotation.setShortcut(QKeySequence("Ctrl+L"))
-
-        # ── 查询 ──
-        query_menu = mb.addMenu("查询(&Q)")
-        self.act_query_vsx = query_menu.addAction("查询 VSX")
-        self.act_query_mpc = query_menu.addAction("查询 MPC")
-        self.act_query_simbad = query_menu.addAction("查询 SIMBAD")
-        self.act_query_tns = query_menu.addAction("查询 TNS")
-        self.act_query_satellite = query_menu.addAction("人造卫星查询")
-        query_menu.addSeparator()
-        self.act_mpc_report = query_menu.addAction("生成 MPC 80列报告")
-        self.act_mpc_report.setShortcut(QKeySequence("Ctrl+E"))
-
-        # ── 视图 ──
-        view_menu = mb.addMenu("视图(&V)")
-        self.act_toggle_sidebar = view_menu.addAction("切换侧边栏")
-        self.act_toggle_sidebar.setShortcut(QKeySequence("Ctrl+B"))
-
-        view_menu.addSeparator()
-
-        self.act_fit_view = view_menu.addAction("适配窗口")
-        self.act_zoom_actual = view_menu.addAction("实际大小")
-        self.act_zoom_actual.setShortcut(QKeySequence("Ctrl+0"))
-        self.act_zoom_in = view_menu.addAction("放大")
-        self.act_zoom_in.setShortcut(QKeySequence("Ctrl++"))
-        self.act_zoom_out = view_menu.addAction("缩小")
-        self.act_zoom_out.setShortcut(QKeySequence("Ctrl+-"))
-
-        view_menu.addSeparator()
-
-        self.act_show_markers = view_menu.addAction("显示候选标记")
-        self.act_show_markers.setCheckable(True)
-        self.act_show_markers.setChecked(True)
-
-        self.act_show_mpcorb = view_menu.addAction("显示 MPCORB 叠加")
-        self.act_show_mpcorb.setCheckable(True)
-        self.act_show_mpcorb.setChecked(True)
-
-        self.act_show_known = view_menu.addAction("显示已知天体")
-        self.act_show_known.setCheckable(True)
-        self.act_show_known.setChecked(True)
-
-        # ── 设置 ──
-        settings_menu = mb.addMenu("设置(&S)")
-        self.act_preferences = settings_menu.addAction("首选项...")
-        self.act_preferences.setShortcut(QKeySequence("Ctrl+,"))
-        settings_menu.addSeparator()
-        self.act_mpcorb_file = settings_menu.addAction("MPCORB 文件...")
-        self.act_scheduler = settings_menu.addAction("计划任务...")
-
-        # ── 帮助 ──
-        help_menu = mb.addMenu("帮助(&H)")
-        self.act_shortcut_help = help_menu.addAction("快捷键列表")
-        self.act_docs = help_menu.addAction("使用文档")
-        help_menu.addSeparator()
-        self.act_about = help_menu.addAction("关于 SCANN v2")
-
-    # ══════════════════════════════════════════════
-    #  中央区域
-    # ══════════════════════════════════════════════
-
-    def _init_central_ui(self) -> None:
-        """初始化中央布局: 侧边栏 | 图像区域"""
-        central = QWidget()
-        self.setCentralWidget(central)
-        main_layout = QHBoxLayout(central)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
-
-        self.main_splitter = QSplitter(Qt.Horizontal)
-        self.main_splitter.setChildrenCollapsible(False)
-        self.main_splitter.setHandleWidth(6)
-
-        # ── 可折叠侧边栏 ──
-        self.sidebar = CollapsibleSidebar()
-        sidebar_layout = self.sidebar.content_layout
-
-        # 文件夹按钮
-        btn_layout = QHBoxLayout()
-        self.btn_new_folder = QPushButton("📂 新图")
-        self.btn_old_folder = QPushButton("📂 旧图")
-        btn_layout.addWidget(self.btn_new_folder)
-        btn_layout.addWidget(self.btn_old_folder)
-        sidebar_layout.addLayout(btn_layout)
-
-        # 功能按钮
-        func_layout = QHBoxLayout()
-        self.btn_align = QPushButton("🔗 对齐")
-        self.btn_detect = QPushButton("⚡ 检测")
-        self.btn_detect.setStyleSheet(
-            "QPushButton { background-color: #FFEB3B; color: #1E1E1E; font-weight: bold; }"
-            "QPushButton:hover { background-color: #FFF176; }"
-        )
-        func_layout.addWidget(self.btn_align)
-        func_layout.addWidget(self.btn_detect)
-        sidebar_layout.addLayout(func_layout)
-
-        # 进度条
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-        self.progress_bar.setFixedHeight(16)
-        sidebar_layout.addWidget(self.progress_bar)
-
-        # 图像配对列表
-        lbl_pairs = QLabel("📁 图像配对:")
-        lbl_pairs.setStyleSheet("font-weight: bold;")
-        sidebar_layout.addWidget(lbl_pairs)
-        self.file_list = QListWidget()
-        sidebar_layout.addWidget(self.file_list, 2)
-
-        # 可疑目标表格
-        self.suspect_table = SuspectTableWidget()
-        sidebar_layout.addWidget(self.suspect_table, 3)
-        self.main_splitter.addWidget(self.sidebar)
-
-        # ── 右侧图像区域 ──
-        right_panel = QWidget()
-        right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(0)
-
-        # 图像查看器 (弹性填充)
-        self.image_viewer = FitsImageViewer()
-        right_layout.addWidget(self.image_viewer, 1)
-
-        # 浮层标签 (覆盖在 image_viewer 上)
-        self.overlay_state = OverlayLabel("准备就绪", parent=self.image_viewer)
-        self.overlay_state.move(10, 10)
-        self.overlay_state.set_state("new")
-
-        self.overlay_inv = OverlayLabel("INV", parent=self.image_viewer)
-        self.overlay_inv.set_state("inv")
-        self.overlay_inv.hide_label()
-
-        self.overlay_blink = OverlayLabel("⚡", parent=self.image_viewer)
-        self.overlay_blink.set_state("blink")
-        self.overlay_blink.hide_label()
-
-        # ── 控制栏 (固定 40px) ──
-        ctrl_widget = QWidget()
-        ctrl_widget.setFixedHeight(40)
-        ctrl_widget.setStyleSheet("background-color: #252526; border-top: 1px solid #3C3C3C;")
-        ctrl_layout = QHBoxLayout(ctrl_widget)
-        ctrl_layout.setContentsMargins(4, 2, 4, 2)
-        ctrl_layout.setSpacing(4)
-
-        # 新/旧图切换
-        self.btn_show_new = QPushButton("[1] 新图")
-        self.btn_show_old = QPushButton("[2] 旧图")
-        self.btn_show_new.setCheckable(True)
-        self.btn_show_old.setCheckable(True)
-        self.btn_show_new.setChecked(True)
-        ctrl_layout.addWidget(self.btn_show_new)
-        ctrl_layout.addWidget(self.btn_show_old)
-
-        # 分隔
-        sep1 = QLabel("|")
-        sep1.setStyleSheet("color: #3C3C3C;")
-        ctrl_layout.addWidget(sep1)
-
-        # 闪烁
-        self.btn_blink = QPushButton("✨ 闪烁 (R)")
-        self.btn_blink.setCheckable(True)
-        ctrl_layout.addWidget(self.btn_blink)
-
-        # 闪烁速度
-        self.blink_speed = BlinkSpeedSlider()
-        ctrl_layout.addWidget(self.blink_speed)
-
-        # 分隔
-        sep2 = QLabel("|")
-        sep2.setStyleSheet("color: #3C3C3C;")
-        ctrl_layout.addWidget(sep2)
-
-        # 反色
-        self.btn_invert = QPushButton("🔄 反色 (I)")
-        self.btn_invert.setCheckable(True)
-        ctrl_layout.addWidget(self.btn_invert)
-
-        # 直方图拉伸
-        self.btn_histogram = QPushButton("📊 拉伸")
-        ctrl_layout.addWidget(self.btn_histogram)
-
-        # 弹性空间
-        ctrl_layout.addStretch()
-
-        # 标记按钮
-        self.btn_mark_real = QPushButton("✅ 真 (Y)")
-        self.btn_mark_real.setStyleSheet(
-            "QPushButton { background-color: #4CAF50; color: white; font-weight: bold; }"
-            "QPushButton:hover { background-color: #66BB6A; }"
-            "QPushButton:disabled { background-color: #2A2A2A; color: #555; }"
-        )
-        self.btn_mark_bogus = QPushButton("❌ 假 (N)")
-        self.btn_mark_bogus.setStyleSheet(
-            "QPushButton { background-color: #F44336; color: white; font-weight: bold; }"
-            "QPushButton:hover { background-color: #EF5350; }"
-            "QPushButton:disabled { background-color: #2A2A2A; color: #555; }"
-        )
-        self.btn_next_candidate = QPushButton("➡ 下一个")
-
-        ctrl_layout.addWidget(self.btn_mark_real)
-        ctrl_layout.addWidget(self.btn_mark_bogus)
-        ctrl_layout.addWidget(self.btn_next_candidate)
-
-        right_layout.addWidget(ctrl_widget)
-
-        self.main_splitter.addWidget(right_panel)
-        self.main_splitter.setStretchFactor(0, 0)
-        self.main_splitter.setStretchFactor(1, 1)
-        self.main_splitter.setSizes(
-            [self.sidebar.preferred_width, max(1, self.width() - self.sidebar.preferred_width)]
-        )
-        self.main_splitter.splitterMoved.connect(self._on_main_splitter_moved)
-        main_layout.addWidget(self.main_splitter, 1)
-
-        # ── 信号连接 ──
-        # 连接已移至 __init__，确保依赖的 Dock 已初始化
-
-    # ══════════════════════════════════════════════
-    #  状态栏
-    # ══════════════════════════════════════════════
-
-    def _init_status_bar(self) -> None:
-        """初始化状态栏: 当前图 | 像素坐标 | 天球坐标 | 缩放"""
-        sb = QStatusBar()
-        self.setStatusBar(sb)
-
-        self.status_image_type = QLabel("准备就绪")
-        self.status_image_type.setMinimumWidth(80)
-        sb.addWidget(self.status_image_type)
-
-        sep = QLabel("|")
-        sep.setStyleSheet("color: rgba(255,255,255,0.3);")
-        sb.addWidget(sep)
-
-        self.status_pixel_coord = CoordinateLabel("X: --  Y: --")
-        self.status_pixel_coord.setMinimumWidth(120)
-        sb.addWidget(self.status_pixel_coord)
-
-        sep2 = QLabel("|")
-        sep2.setStyleSheet("color: rgba(255,255,255,0.3);")
-        sb.addWidget(sep2)
-
-        self.status_wcs_coord = CoordinateLabel("RA: --  Dec: --")
-        self.status_wcs_coord.setMinimumWidth(200)
-        sb.addWidget(self.status_wcs_coord)
-
-        self.status_zoom = QLabel("100%")
-        sb.addPermanentWidget(self.status_zoom)
-
-    # ══════════════════════════════════════════════
-    #  直方图 Dock
-    # ══════════════════════════════════════════════
-
-    def _init_histogram_dock(self) -> None:
-        """初始化直方图拉伸面板 (可停靠 DockWidget)"""
-        self.histogram_panel = HistogramPanel(self)
-        self.addDockWidget(Qt.BottomDockWidgetArea, self.histogram_panel)
-        self.histogram_panel.setVisible(False)
 
     # ══════════════════════════════════════════════
     #  信号连接
