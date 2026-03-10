@@ -42,7 +42,7 @@
 7. 引入 ImageSessionController 并迁移显示状态（已完成）
 8. 引入 DetectionController 骨架（已完成）
 9. 拆分 DetectionPipeline 辅助模块（已完成）
-10. 迁移检测工作流到 DetectionController
+10. 迁移检测工作流到 DetectionController（已完成）
 11. 拆分 QueryService 为 utils 与 clients
 12. 引入 QueryController 并迁移查询入口
 13. 引入 ModelService、ModelController、TrainingController
@@ -454,6 +454,10 @@
 ---
 
 ## 提交 10：迁移检测工作流到 DetectionController
+
+### 当前状态
+
+- 已完成
 
 ### 目标
 

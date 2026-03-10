@@ -332,8 +332,8 @@ class TestStretchChanged:
 class TestBatchAlign:
     """测试批量对齐功能"""
 
-    @patch("scann.gui.main_window.read_fits")
-    @patch("scann.gui.main_window.align")
+    @patch("scann.gui.controllers.detection_controller.read_fits")
+    @patch("scann.gui.controllers.detection_controller.align")
     def test_batch_align_processes_pairs(self, mock_align, mock_read, tmp_path):
         """批量对齐应处理所有图像配对"""
         from scann.data.file_manager import FitsImagePair
@@ -363,9 +363,9 @@ class TestBatchAlign:
 
         mock_align.assert_called_once()
 
-    @patch("scann.gui.main_window.write_fits")
-    @patch("scann.gui.main_window.read_fits")
-    @patch("scann.gui.main_window.align")
+    @patch("scann.gui.controllers.detection_controller.write_fits")
+    @patch("scann.gui.controllers.detection_controller.read_fits")
+    @patch("scann.gui.controllers.detection_controller.align")
     def test_batch_align_saves_cropped_artifacts_without_overwriting_original(
         self,
         mock_align,
@@ -410,9 +410,9 @@ class TestBatchAlign:
         assert new_marker_path.exists()
         assert old_marker_path.exists()
 
-    @patch("scann.gui.main_window.write_fits")
-    @patch("scann.gui.main_window.read_fits")
-    @patch("scann.gui.main_window.align")
+    @patch("scann.gui.controllers.detection_controller.write_fits")
+    @patch("scann.gui.controllers.detection_controller.read_fits")
+    @patch("scann.gui.controllers.detection_controller.align")
     def test_batch_align_skips_pair_when_marked(
         self,
         mock_align,
@@ -564,7 +564,7 @@ class TestBatchDetect:
 
         w.statusBar().showMessage.assert_called()
 
-    @patch("scann.gui.main_window.DetectionPipeline")
+    @patch("scann.gui.controllers.detection_controller.DetectionPipeline")
     def test_batch_detect_with_data(self, mock_pipeline_cls):
         """有图像数据时应执行检测管线"""
         from scann.services.detection_service import PipelineResult
@@ -585,7 +585,7 @@ class TestBatchDetect:
         assert len(w._candidates) > 0
         w.suspect_table.set_candidates.assert_called()
 
-    @patch("scann.gui.main_window.DetectionPipeline")
+    @patch("scann.gui.controllers.detection_controller.DetectionPipeline")
     def test_batch_detect_updates_candidates(self, mock_pipeline_cls):
         """检测结果应正确设置到界面"""
         from scann.services.detection_service import PipelineResult
@@ -605,7 +605,7 @@ class TestBatchDetect:
         assert w._candidates == cands
         assert w._current_candidate_idx == 0
 
-    @patch("scann.gui.main_window.DetectionPipeline")
+    @patch("scann.gui.controllers.detection_controller.DetectionPipeline")
     def test_batch_detect_skip_align_follows_current_pair_state(self, mock_pipeline_cls):
         """仅在当前配对已使用对齐产物时才应 skip_align"""
         from scann.services.detection_service import PipelineResult
@@ -1008,8 +1008,8 @@ class TestBatchProcess:
             w._on_batch_process()
             mock_dlg.assert_called_once()
 
-    @patch("scann.gui.main_window.write_fits")
-    @patch("scann.gui.main_window.read_fits")
+    @patch("scann.gui.controllers.detection_controller.write_fits")
+    @patch("scann.gui.controllers.detection_controller.read_fits")
     def test_batch_process_denoise(self, mock_read, mock_write):
         """process_started 信号应触发降噪处理"""
         w = _make_mock_window()
@@ -1020,8 +1020,8 @@ class TestBatchProcess:
         test_header = FitsHeader(raw={})
         mock_read.return_value = FitsImage(data=test_data, header=test_header, path="/fake/f.fits")
 
-        with patch("scann.gui.main_window.scan_fits_folder", return_value=[Path("/fake/f.fits")]):
-            with patch("scann.gui.main_window.denoise") as mock_denoise:
+        with patch("scann.gui.controllers.detection_controller.scan_fits_folder", return_value=[Path("/fake/f.fits")]):
+            with patch("scann.gui.controllers.detection_controller.denoise") as mock_denoise:
                 mock_denoise.return_value = test_data
                 w._run_batch_process({
                     "input_dir": "/fake/new",
@@ -1036,8 +1036,8 @@ class TestBatchProcess:
                 })
                 mock_denoise.assert_called_once()
 
-    @patch("scann.gui.main_window.write_fits")
-    @patch("scann.gui.main_window.read_fits")
+    @patch("scann.gui.controllers.detection_controller.write_fits")
+    @patch("scann.gui.controllers.detection_controller.read_fits")
     def test_batch_process_flat_field(self, mock_read, mock_write):
         """process_started 信号应触发伪平场校正"""
         w = _make_mock_window()
@@ -1047,8 +1047,8 @@ class TestBatchProcess:
         test_header = FitsHeader(raw={})
         mock_read.return_value = FitsImage(data=test_data, header=test_header, path="/fake/f.fits")
 
-        with patch("scann.gui.main_window.scan_fits_folder", return_value=[Path("/fake/f.fits")]):
-            with patch("scann.gui.main_window.pseudo_flat_field") as mock_flat:
+        with patch("scann.gui.controllers.detection_controller.scan_fits_folder", return_value=[Path("/fake/f.fits")]):
+            with patch("scann.gui.controllers.detection_controller.pseudo_flat_field") as mock_flat:
                 mock_flat.return_value = test_data
                 w._run_batch_process({
                     "input_dir": "/fake/new",

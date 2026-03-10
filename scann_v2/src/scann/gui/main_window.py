@@ -742,16 +742,7 @@ class MainWindow(QMainWindow):
 
     def _on_mark_real_impl(self) -> None:
         """标记当前候选为真目标的兼容实现。"""
-        if not self._candidates or self._current_candidate_idx < 0:
-            return
-        if self._current_candidate_idx >= len(self._candidates):
-            return
-
-        candidate = self._candidates[self._current_candidate_idx]
-        candidate.verdict = TargetVerdict.REAL
-        self.suspect_table.update_candidate(self._current_candidate_idx)
-        self._update_markers()
-        self._show_message(f"候选 #{self._current_candidate_idx + 1} → 真目标")
+        self.detection_controller.mark_real()
 
     def _on_mark_bogus(self) -> None:
         """标记当前候选为假目标"""
@@ -759,16 +750,7 @@ class MainWindow(QMainWindow):
 
     def _on_mark_bogus_impl(self) -> None:
         """标记当前候选为假目标的兼容实现。"""
-        if not self._candidates or self._current_candidate_idx < 0:
-            return
-        if self._current_candidate_idx >= len(self._candidates):
-            return
-
-        candidate = self._candidates[self._current_candidate_idx]
-        candidate.verdict = TargetVerdict.BOGUS
-        self.suspect_table.update_candidate(self._current_candidate_idx)
-        self._update_markers()
-        self._show_message(f"候选 #{self._current_candidate_idx + 1} → 假目标")
+        self.detection_controller.mark_bogus()
 
     def _on_next_candidate(self) -> None:
         """跳转到下一个候选体"""
@@ -776,12 +758,7 @@ class MainWindow(QMainWindow):
 
     def _on_next_candidate_impl(self) -> None:
         """跳转到下一个候选体的兼容实现。"""
-        if not self._candidates:
-            return
-        self._current_candidate_idx = (
-            (self._current_candidate_idx + 1) % len(self._candidates)
-        )
-        self._focus_candidate(self._current_candidate_idx)
+        self.detection_controller.next_candidate()
 
     def _on_candidate_selected(self, index: int) -> None:
         """候选表格单击选中"""
@@ -789,8 +766,7 @@ class MainWindow(QMainWindow):
 
     def _on_candidate_selected_impl(self, index: int) -> None:
         """候选表格单击选中的兼容实现。"""
-        self._current_candidate_idx = index
-        self._focus_candidate(index)
+        self.detection_controller.candidate_selected(index)
 
     def _on_candidate_double_clicked(self, index: int) -> None:
         """候选表格双击 → 放大到候选体"""
@@ -798,10 +774,7 @@ class MainWindow(QMainWindow):
 
     def _on_candidate_double_clicked_impl(self, index: int) -> None:
         """候选表格双击的兼容实现。"""
-        if 0 <= index < len(self._candidates):
-            cand = self._candidates[index]
-            self._current_candidate_idx = index
-            self.image_viewer.center_on_point(cand.x, cand.y, zoom_to=200)
+        self.detection_controller.candidate_double_clicked(index)
 
     def _focus_candidate(self, index: int) -> None:
         """聚焦某个候选体"""
@@ -809,11 +782,7 @@ class MainWindow(QMainWindow):
 
     def _focus_candidate_impl(self, index: int) -> None:
         """聚焦某个候选体的兼容实现。"""
-        if 0 <= index < len(self._candidates):
-            cand = self._candidates[index]
-            self.image_viewer.center_on_point(cand.x, cand.y)
-            self._update_markers()
-            self.status_pixel_coord.set_pixel_coordinates(cand.x, cand.y)
+        self.detection_controller.focus_candidate(index)
 
     def _update_markers(self) -> None:
         """刷新候选标记"""
@@ -1046,168 +1015,7 @@ class MainWindow(QMainWindow):
 
     def _on_batch_align_impl(self) -> None:
         """批量对齐的兼容实现。"""
-        if not self._image_pairs:
-            self._show_message("请先加载新旧图文件夹配对")
-            return
-
-        success_count = 0
-        fail_count = 0
-        skip_count = 0
-        total = len(self._image_pairs)
-
-        # 进度条可视化，避免大量处理时窗口“假死”
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, total)
-        self.progress_bar.setValue(0)
-        self.btn_align.setEnabled(False)
-        self.act_align.setEnabled(False)
-
-        self._show_message(f"开始批量对齐: 共 {total} 对", 3000)
-
-        try:
-            for idx, pair in enumerate(self._image_pairs, start=1):
-                try:
-                    if self._pair_has_aligned_artifacts(pair):
-                        skip_count += 1
-                        self._logger.info("[%s/%s] 已有对齐裁剪标记，跳过: %s", idx, total, pair.name)
-                        self._show_message(f"[{idx}/{total}] 跳过已对齐: {pair.name}", 1000)
-                        self.progress_bar.setValue(idx)
-                        QApplication.processEvents()
-                        continue
-
-                    new_fits = read_fits(pair.new_path)
-                    old_fits = read_fits(pair.old_path)
-
-                    # 输入有效性校验：常量图（常见为全零）无法进行星点或特征对齐
-                    new_data = np.nan_to_num(new_fits.data.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
-                    old_data = np.nan_to_num(old_fits.data.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
-                    new_span = float(np.percentile(new_data, 99.5) - np.percentile(new_data, 0.5))
-                    old_span = float(np.percentile(old_data, 99.5) - np.percentile(old_data, 0.5))
-                    if new_span <= 1e-6 or old_span <= 1e-6:
-                        fail_count += 1
-                        self._logger.error(
-                            "[%s/%s] 对齐前校验失败: %s; new_span=%.6g, old_span=%.6g; new=%s old=%s",
-                            idx,
-                            total,
-                            pair.name,
-                            new_span,
-                            old_span,
-                            pair.new_path,
-                            pair.old_path,
-                        )
-                        self._show_message(
-                            f"[{idx}/{total}] 跳过无效图像: {pair.name} (新图/旧图近乎常量)",
-                            2000,
-                            level='WARNING',
-                        )
-                        self.progress_bar.setValue(idx)
-                        QApplication.processEvents()
-                        continue
-
-                    self._logger.info("[%s/%s] 开始 Siril 对齐: %s", idx, total, pair.name)
-                    self._show_message(f"[{idx}/{total}] Siril 对齐: {pair.name}", 1000)
-
-                    # 优先使用 Siril 对齐；失败时自动回退到内置对齐
-                    result = align(new_fits.data, old_fits.data, method="siril")
-                    if not result.success or result.aligned_old is None:
-                        h, w = new_fits.data.shape[:2]
-                        fallback_max_shift = max(100, int(min(h, w) * 0.45))
-                        self._logger.warning(
-                            "[%s/%s] Siril 对齐失败，回退 auto: %s; reason=%s; fallback_max_shift=%s",
-                            idx,
-                            total,
-                            pair.name,
-                            result.error_message,
-                            fallback_max_shift,
-                        )
-                        self._show_message(f"[{idx}/{total}] Siril 失败，回退内置对齐: {pair.name}", 1500, level='WARNING')
-                        result = align(
-                            new_fits.data,
-                            old_fits.data,
-                            method="auto",
-                            max_shift=fallback_max_shift,
-                        )
-
-                    if result.success and result.aligned_old is not None:
-                        h, w = new_data.shape[:2]
-                        crop_bounds = self._calc_overlap_crop_bounds(
-                            w=w,
-                            h=h,
-                            dx=result.dx,
-                            dy=result.dy,
-                            aligned_old=result.aligned_old,
-                        )
-                        if crop_bounds is None:
-                            fail_count += 1
-                            self._logger.error(
-                                "[%s/%s] 对齐后无有效重叠区域: %s; dx=%.3f dy=%.3f",
-                                idx,
-                                total,
-                                pair.name,
-                                result.dx,
-                                result.dy,
-                            )
-                            self._show_message(
-                                f"[{idx}/{total}] 对齐失败(无重叠区域): {pair.name}",
-                                2000,
-                                level='WARNING',
-                            )
-                            self.progress_bar.setValue(idx)
-                            QApplication.processEvents()
-                            continue
-
-                        x0, x1, y0, y1 = crop_bounds
-                        cropped_new = new_data[y0:y1, x0:x1]
-                        cropped_old = result.aligned_old[y0:y1, x0:x1]
-
-                        new_aligned_path, old_aligned_path, new_marker_path, old_marker_path = self._aligned_artifact_paths(pair)
-                        write_fits(new_aligned_path, cropped_new, new_fits.header)
-                        write_fits(old_aligned_path, cropped_old, old_fits.header)
-                        marker_text = (
-                            "aligned=1\n"
-                            f"dx={result.dx:.6f}\n"
-                            f"dy={result.dy:.6f}\n"
-                            f"crop={x0},{x1},{y0},{y1}\n"
-                        )
-                        new_marker_path.write_text(marker_text, encoding="utf-8")
-                        old_marker_path.write_text(marker_text, encoding="utf-8")
-
-                        success_count += 1
-                        self._logger.info(
-                            "[%s/%s] 对齐成功并保存裁剪重叠图: %s; new=%s old=%s",
-                            idx,
-                            total,
-                            pair.name,
-                            new_aligned_path,
-                            old_aligned_path,
-                        )
-                    else:
-                        fail_count += 1
-                        self._logger.error(
-                            "[%s/%s] 对齐失败: %s; reason=%s",
-                            idx,
-                            total,
-                            pair.name,
-                            result.error_message,
-                        )
-
-                except Exception as e:
-                    fail_count += 1
-                    self._logger.exception("[%s/%s] 对齐异常: %s", idx, total, pair.name)
-                    self._show_message(f"[{idx}/{total}] 对齐异常: {pair.name} ({e})", 2000, level='ERROR')
-
-                self.progress_bar.setValue(idx)
-                QApplication.processEvents()
-        finally:
-            self.progress_bar.setVisible(False)
-            self.btn_align.setEnabled(True)
-            self.act_align.setEnabled(True)
-
-        self._show_message(f"对齐完成: 成功 {success_count}, 跳过 {skip_count}, 失败 {fail_count}", 5000)
-
-        # 重新加载当前显示的配对
-        if self._current_pair_idx >= 0:
-            self._load_pair(self._current_pair_idx)
+        self.detection_controller.batch_align()
 
     def _on_batch_process(self) -> None:
         """打开批量处理对话框"""
@@ -1215,11 +1023,7 @@ class MainWindow(QMainWindow):
 
     def _on_batch_process_impl(self) -> None:
         """打开批量处理对话框的兼容实现。"""
-        from scann.gui.dialogs.batch_process_dialog import BatchProcessDialog
-        dlg = BatchProcessDialog(self)
-        dlg.process_started.connect(self._run_batch_process)
-        self._batch_dialog = dlg
-        dlg.exec_()
+        self.detection_controller.batch_process()
 
     def _run_batch_process(self, params: dict) -> None:
         """执行批量处理 (降噪/伪平场)"""
@@ -1227,74 +1031,7 @@ class MainWindow(QMainWindow):
 
     def _run_batch_process_impl(self, params: dict) -> None:
         """执行批量处理的兼容实现。"""
-        input_dir = params.get("input_dir", self._new_folder)
-        output_dir = params.get("output_dir", "")
-        if not input_dir:
-            self._show_message("未指定输入文件夹")
-            return
-
-        from pathlib import Path
-        if not output_dir:
-            output_dir = str(Path(input_dir) / "processed")
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
-
-        fits_files = scan_fits_folder(input_dir)
-        if not fits_files:
-            self._show_message("输入文件夹中未找到 FITS 文件")
-            return
-
-        success_count = 0
-        fail_count = 0
-        denoise_method_map = {
-            "中值滤波": "median",
-            "高斯滤波": "gaussian",
-            "双边滤波": "bilateral",
-        }
-
-        for i, fits_path in enumerate(fits_files):
-            try:
-                fits_img = read_fits(str(fits_path))
-                data = fits_img.data
-
-                # 降噪
-                if params.get("denoise", False):
-                    method = denoise_method_map.get(
-                        params.get("denoise_method", "中值滤波"), "median"
-                    )
-                    kernel = params.get("kernel_size", 3)
-                    data = denoise(data, method=method, kernel_size=kernel)
-
-                # 伪平场
-                if params.get("flat_field", False):
-                    sigma = params.get("flat_sigma", 100.0)
-                    kernel_size = max(3, int(sigma) * 2 + 1)
-                    if kernel_size % 2 == 0:
-                        kernel_size += 1
-                    data = pseudo_flat_field(data, kernel_size=kernel_size)
-
-                # 保存
-                out_path = str(Path(output_dir) / fits_path.name)
-                write_fits(data, out_path)
-                success_count += 1
-
-                # 更新对话框进度
-                try:
-                    if self._batch_dialog is not None:
-                        self._batch_dialog.update_progress(
-                            i + 1, len(fits_files), fits_path.name
-                        )
-                except (AttributeError, RuntimeError):
-                    pass
-            except Exception:
-                fail_count += 1
-
-        try:
-            if self._batch_dialog is not None:
-                self._batch_dialog.processing_finished()
-        except (AttributeError, RuntimeError):
-            pass
-
-        self._show_message(f"批量处理完成: 成功 {success_count}, 失败 {fail_count}", 5000)
+        self.detection_controller.run_batch_process(params)
 
     def _build_detection_params(self):
         """从 AppConfig 构造 DetectionParams"""
@@ -1302,22 +1039,7 @@ class MainWindow(QMainWindow):
 
     def _build_detection_params_impl(self):
         """从 AppConfig 构造 DetectionParams 的兼容实现。"""
-        from scann.core.candidate_detector import DetectionParams
-        return DetectionParams(
-            thresh=self._config.thresh,
-            min_area=self._config.min_area,
-            max_area=self._config.max_area,
-            sharpness_min=self._config.sharpness,
-            sharpness_max=self._config.max_sharpness,
-            contrast_min=self._config.contrast,
-            edge_margin=self._config.edge_margin,
-            dynamic_thresh=self._config.dynamic_thresh,
-            kill_flat=self._config.kill_flat,
-            kill_dipole=self._config.kill_dipole,
-            aspect_ratio_max=self._config.aspect_ratio_max,
-            extent_max=self._config.extent_max,
-            topk=self._config.topk,
-        )
+        return self.detection_controller.build_detection_params()
 
     # ── AI 菜单 ──
 
@@ -1327,36 +1049,7 @@ class MainWindow(QMainWindow):
 
     def _on_batch_detect_impl(self) -> None:
         """批量检测的兼容实现。"""
-        if self._new_image_data is None:
-            self._show_message("请先加载图像数据")
-            return
-
-        old_data = self._old_image_data
-        if old_data is None:
-            old_data = np.zeros_like(self._new_image_data)
-
-        pipeline = DetectionPipeline(
-            detection_params=self._build_detection_params(),
-            inference_engine=self._inference_engine,
-            patch_size=self._config.slice_size,
-        )
-        result = pipeline.process_pair(
-            pair_name="current",
-            new_data=self._new_image_data,
-            old_data=old_data,
-            # 仅当当前加载的是已对齐裁剪产物时才跳过对齐
-            skip_align=bool(self.__dict__.get("_current_pair_using_aligned", False)),
-        )
-
-        if result.candidates:
-            self.set_candidates(result.candidates)
-            # 将检测结果缓存到当前配对索引
-            self._candidates_cache[self._current_pair_idx] = result.candidates
-            self._show_message(f"检测完成: 发现 {len(result.candidates)} 个候选体", 5000)
-        else:
-            self._show_message(f"检测完成: 未发现候选体 {result.error or ''}", 5000)
-            # 即使没有候选体，也缓存空列表，表示已检测过
-            self._candidates_cache[self._current_pair_idx] = []
+        self.detection_controller.batch_detect()
 
     def _on_open_training(self) -> None:
         """打开训练对话框"""
