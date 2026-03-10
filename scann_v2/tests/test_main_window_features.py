@@ -45,7 +45,10 @@ def _make_mock_window():
 
     from scann.gui.main_window import MainWindow
     from scann.gui.controllers import (
+        AnnotationController,
         DetectionController,
+        FileActionsController,
+        HelpController,
         ImageSessionController,
         ModelController,
         PairController,
@@ -142,6 +145,9 @@ def _make_mock_window():
         read_fits_fn=main_window.read_fits,
     )
     w.image_session_controller = ImageSessionController(w)
+    w.file_actions_controller = FileActionsController(w)
+    w.annotation_controller = AnnotationController(w)
+    w.help_controller = HelpController(w)
     w.pair_controller = PairController(w, w.pair_service)
     w.model_controller = ModelController(w, w.model_service)
     w.training_controller = TrainingController(w)
@@ -699,8 +705,8 @@ class TestAlignedCropBounds:
 class TestSaveImage:
     """测试保存图像功能"""
 
-    @patch("scann.gui.main_window.QFileDialog.getSaveFileName")
-    @patch("scann.gui.main_window.write_fits")
+    @patch("scann.gui.controllers.file_actions_controller.QFileDialog.getSaveFileName")
+    @patch("scann.gui.controllers.file_actions_controller.write_fits")
     def test_save_image_with_data(self, mock_write, mock_dialog):
         """有数据时应保存"""
         w = _make_mock_window()
@@ -720,7 +726,7 @@ class TestSaveImage:
 
         w.statusBar().showMessage.assert_called()
 
-    @patch("scann.gui.main_window.QFileDialog.getSaveFileName")
+    @patch("scann.gui.controllers.file_actions_controller.QFileDialog.getSaveFileName")
     def test_save_marked_image_creates_file(self, mock_dialog):
         """另存标记图应导出PNG/FITS"""
         w = _make_mock_window()
@@ -1394,3 +1400,44 @@ class TestAnnotationToolEntry:
         src = inspect.getsource(MainWindowWiring.connect_signals)
         assert "act_annotation" in src
         assert "_on_open_annotation" in src
+
+
+class TestHelpEntry:
+    """测试帮助类辅助动作入口"""
+
+    @patch("scann.gui.controllers.help_controller.webbrowser.open")
+    def test_on_open_docs_opens_wiki(self, mock_open):
+        w = _make_mock_window()
+
+        w._on_open_docs()
+
+        mock_open.assert_called_once_with("https://github.com/Dubnium-105/SCANN_v2/wiki")
+
+    @patch("scann.gui.controllers.help_controller.QMessageBox.about")
+    def test_on_about_shows_about_dialog(self, mock_about):
+        w = _make_mock_window()
+
+        w._on_about()
+
+        mock_about.assert_called_once()
+        call_args = mock_about.call_args
+        assert call_args[0][0] == w
+        assert call_args[0][1] == "关于 SCANN v2"
+
+    def test_on_open_scheduler_shows_placeholder_message(self):
+        w = _make_mock_window()
+
+        w._on_open_scheduler()
+
+        w.statusBar().showMessage.assert_called_with("计划任务功能开发中，敬请期待", 3000)
+
+    @patch("scann.gui.dialogs.shortcut_help_dialog.ShortcutHelpDialog")
+    def test_on_shortcut_help_opens_dialog(self, mock_dialog_cls):
+        w = _make_mock_window()
+        mock_dialog = Mock()
+        mock_dialog_cls.return_value = mock_dialog
+
+        w._on_shortcut_help()
+
+        mock_dialog_cls.assert_called_once_with(w)
+        mock_dialog.exec_.assert_called_once_with()

@@ -185,6 +185,8 @@
 
 ### 提交 D：迁移主窗口残留辅助动作
 
+状态：已完成（2026年3月10日）
+
 目标：
 
 - 把图像保存、标记图导出、标注工具入口、帮助菜单入口从主窗口中进一步收束
@@ -195,6 +197,14 @@
 - 保存相关动作可进入轻量 `file_actions_controller.py` 或现有 Pair/Preferences 相关 helper
 - 标注工具入口可单独封装为 `annotation_controller.py` 或保持为单一 helper
 - 帮助/关于入口可进入轻量 `help_controller.py`
+
+完成记录：
+
+- 已新增 `src/scann/gui/controllers/file_actions_controller.py`，承接 `_on_save_image` 与 `_on_save_marked_image` 的保存流程
+- 已新增 `src/scann/gui/controllers/annotation_controller.py`，承接标注对话框创建与非模态打开逻辑
+- 已新增 `src/scann/gui/controllers/help_controller.py`，承接快捷键帮助、文档、关于与计划任务占位入口
+- `src/scann/gui/main_window.py` 已收敛为对应动作的薄转发入口，不再直接处理这些辅助动作细节
+- 已扩展 `tests/test_main_window_features.py` 覆盖保存、标注、帮助入口的主要回归点
 
 ### 提交 E：清理 import 与文档验收
 

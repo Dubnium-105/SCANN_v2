@@ -204,7 +204,7 @@
 
 ### 当前状态
 
-- 未开始
+- 已完成（2026年3月10日）
 
 ### 目标
 
@@ -237,6 +237,14 @@
 
 - 主窗口只保留极少数真正依赖 QMainWindow 生命周期的动作
 - 辅助动作职责有清晰归位
+
+### 完成记录
+
+- 已新增 `src/scann/gui/controllers/file_actions_controller.py`，迁移图像保存与标记图导出逻辑
+- 已新增 `src/scann/gui/controllers/annotation_controller.py`，迁移标注工具对话框入口
+- 已新增 `src/scann/gui/controllers/help_controller.py`，迁移快捷键帮助、文档、关于与计划任务占位入口
+- `src/scann/gui/main_window.py` 中对应方法已改为转发到轻量 controller，窗口类不再直接执行这些辅助动作流程
+- 已更新 `tests/test_main_window_features.py`，覆盖保存图像、标注入口、帮助文档、关于和计划任务占位提示回归点
 
 ### 建议运行
 

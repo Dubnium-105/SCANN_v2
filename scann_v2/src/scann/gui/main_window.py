@@ -23,12 +23,10 @@ import numpy as np
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import (
     QApplication,
-    QFileDialog,
     QMainWindow,
-    QMessageBox,
 )
 
-from scann.core.fits_io import read_fits, write_fits
+from scann.core.fits_io import read_fits
 from scann.core.image_aligner import align
 from scann.core.image_processor import denoise, pseudo_flat_field
 from scann.core.models import (
@@ -39,7 +37,10 @@ from scann.core.models import (
 )
 from scann.logger_config import get_logger
 from scann.gui.controllers import (
+    AnnotationController,
     DetectionController,
+    FileActionsController,
+    HelpController,
     ImageSessionController,
     ModelController,
     PairController,
@@ -231,6 +232,9 @@ class MainWindow(QMainWindow):
     def _init_controllers(self) -> None:
         """初始化主窗口控制器。"""
         self.image_session_controller = ImageSessionController(self)
+        self.file_actions_controller = FileActionsController(self)
+        self.annotation_controller = AnnotationController(self)
+        self.help_controller = HelpController(self)
         self.model_service = ModelService()
         self.pair_service = PairService(
             scan_folder_fn=scan_fits_folder,
@@ -436,45 +440,11 @@ class MainWindow(QMainWindow):
 
     def _on_save_image(self) -> None:
         """保存当前图像"""
-        data = self._new_image_data
-        if data is None:
-            self._show_message("无图像数据可保存")
-            return
-
-        path, _ = QFileDialog.getSaveFileName(
-            self, "保存图像", "", "FITS (*.fits);;所有文件 (*)"
-        )
-        if not path:
-            return
-
-        try:
-            write_fits(
-                path, data,
-                header=self._new_fits_header,
-            )
-            self._show_message(f"已保存: {path}")
-        except Exception as e:
-            self._show_message(f"保存失败: {e}", 5000, level='ERROR')
+        self.file_actions_controller.save_image()
 
     def _on_save_marked_image(self) -> None:
         """另存为带标记的图像"""
-        if self._new_image_data is None:
-            self._show_message("无图像数据可保存")
-            return
-
-        path, _ = QFileDialog.getSaveFileName(
-            self, "另存为标记图", "", "PNG (*.png);;FITS (*.fits)"
-        )
-        if not path:
-            return
-
-        try:
-            # 获取带标记的渲染图像
-            pixmap = self.image_viewer.grab()
-            pixmap.save(path)
-            self._show_message(f"已保存标记图: {path}")
-        except Exception as e:
-            self._show_message(f"保存失败: {e}", 5000, level='ERROR')
+        self.file_actions_controller.save_marked_image()
 
     def _on_update_recent_menu(self) -> None:
         """更新最近打开菜单"""
@@ -514,10 +484,7 @@ class MainWindow(QMainWindow):
 
     def _on_open_annotation(self) -> None:
         """打开标注工具对话框 (非模态)"""
-        from scann.gui.dialogs.annotation_dialog import AnnotationDialog
-        dlg = AnnotationDialog(self, config=self._config)
-        self._annotation_dialog = dlg
-        dlg.show()
+        self.annotation_controller.open_annotation()
 
     def _on_training_started(self, params: dict) -> None:
         """训练开始信号处理: 接收超参数并启动训练线程"""
@@ -601,32 +568,21 @@ class MainWindow(QMainWindow):
 
     def _on_open_scheduler(self) -> None:
         """打开计划任务设置"""
-        self._show_message("计划任务功能开发中，敬请期待")
+        self.help_controller.open_scheduler()
 
     # ── 帮助菜单 ──
 
     def _on_shortcut_help(self) -> None:
         """显示快捷键帮助对话框"""
-        from scann.gui.dialogs.shortcut_help_dialog import ShortcutHelpDialog
-        dlg = ShortcutHelpDialog(self)
-        dlg.exec_()
+        self.help_controller.open_shortcut_help()
 
     def _on_open_docs(self) -> None:
         """打开使用文档"""
-        import webbrowser
-        webbrowser.open("https://github.com/Dubnium-105/SCANN_v2/wiki")
+        self.help_controller.open_docs()
 
     def _on_about(self) -> None:
         """显示关于对话框"""
-        from PyQt5.QtWidgets import QMessageBox
-        QMessageBox.about(
-            self,
-            "关于 SCANN v2",
-            "<h3>SCANN v2</h3>"
-            "<p>Star/Source Classification and Analysis Neural Network</p>"
-            "<p>版本: 2.0.0-dev</p>"
-            "<p>基于深度学习的天文瞬变源自动检测工具</p>",
-        )
+        self.help_controller.open_about()
 
     # ── 图像查看器信号处理 ──
 
