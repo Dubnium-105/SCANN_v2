@@ -45,7 +45,7 @@
 10. 迁移检测工作流到 DetectionController（已完成）
 11. 拆分 QueryService 为 utils 与 clients（已完成）
 12. 引入 QueryController 并迁移查询入口（已完成）
-13. 引入 ModelService、ModelController、TrainingController
+13. 引入 ModelService、ModelController、TrainingController（已完成）
 14. 引入 ConfigService、PreferencesController 并清理主窗口
 
 如果希望风险更低，可以把第 13 和第 14 再各自拆成两次提交。
@@ -589,6 +589,10 @@
 ---
 
 ## 提交 13：引入 ModelService、ModelController、TrainingController
+
+### 当前状态
+
+- 已完成
 
 ### 目标
 

@@ -50,11 +50,19 @@ from scann.core.models import (
     TargetVerdict,
 )
 from scann.logger_config import get_logger
-from scann.gui.controllers import DetectionController, ImageSessionController, PairController, QueryController
+from scann.gui.controllers import (
+    DetectionController,
+    ImageSessionController,
+    ModelController,
+    PairController,
+    QueryController,
+    TrainingController,
+)
 from scann.gui.presenters import CandidatePresenter, StatusPresenter
 from scann.data.file_manager import scan_fits_folder, match_new_old_pairs
 from scann.ai.inference import InferenceEngine
 from scann.services.detection_service import DetectionPipeline
+from scann.services.model_service import ModelService
 from scann.services.pair_service import PairService
 from scann.gui.image_viewer import FitsImageViewer
 from scann.gui.widgets.blink_speed_slider import BlinkSpeedSlider
@@ -203,9 +211,6 @@ class MainWindow(QMainWindow):
         # ── 候选目标缓存：key 是配对索引，value 是候选目标列表
         self._candidates_cache: dict[int, list[Candidate]] = {}
 
-        # ── AI/推理 ──
-        self._inference_engine = None
-
         # ── 日志 ──
         self._logger = get_logger(__name__)
 
@@ -244,14 +249,70 @@ class MainWindow(QMainWindow):
     def _init_controllers(self) -> None:
         """初始化主窗口控制器。"""
         self.image_session_controller = ImageSessionController(self)
+        self.model_service = ModelService()
         self.pair_service = PairService(
             scan_folder_fn=scan_fits_folder,
             match_pairs_fn=match_new_old_pairs,
             read_fits_fn=read_fits,
         )
         self.pair_controller = PairController(self, self.pair_service)
+        self.model_controller = ModelController(self, self.model_service)
+        self.training_controller = TrainingController(self)
         self.detection_controller = DetectionController(self)
         self.query_controller = QueryController(self)
+
+    @property
+    def _inference_engine(self):
+        """兼容访问点，生命周期由 ModelService 托管。"""
+        if hasattr(self, "model_service"):
+            return self.model_service.inference_engine
+        return self.__dict__.get("_legacy_inference_engine")
+
+    @_inference_engine.setter
+    def _inference_engine(self, inference_engine) -> None:
+        if hasattr(self, "model_service"):
+            self.model_service.set_inference_engine(inference_engine)
+            return
+        self.__dict__["_legacy_inference_engine"] = inference_engine
+
+    @property
+    def _training_dialog(self):
+        if hasattr(self, "training_controller"):
+            return self.training_controller.training_dialog
+        return self.__dict__.get("_legacy_training_dialog")
+
+    @_training_dialog.setter
+    def _training_dialog(self, dialog) -> None:
+        if hasattr(self, "training_controller"):
+            self.training_controller._training_dialog = dialog
+            return
+        self.__dict__["_legacy_training_dialog"] = dialog
+
+    @property
+    def _training_worker(self):
+        if hasattr(self, "training_controller"):
+            return self.training_controller.training_worker
+        return self.__dict__.get("_legacy_training_worker")
+
+    @_training_worker.setter
+    def _training_worker(self, worker) -> None:
+        if hasattr(self, "training_controller"):
+            self.training_controller.training_worker = worker
+            return
+        self.__dict__["_legacy_training_worker"] = worker
+
+    @property
+    def _training_params(self):
+        if hasattr(self, "training_controller"):
+            return self.training_controller.training_params
+        return self.__dict__.get("_legacy_training_params", {})
+
+    @_training_params.setter
+    def _training_params(self, params: dict) -> None:
+        if hasattr(self, "training_controller"):
+            self.training_controller.training_params = params
+            return
+        self.__dict__["_legacy_training_params"] = params
 
     def _show_message(self, message: str, timeout: int = 3000, level: str = 'INFO') -> None:
         """统一的消息输出方法，同时输出到状态栏和日志
@@ -959,13 +1020,7 @@ class MainWindow(QMainWindow):
 
     def _on_open_training(self) -> None:
         """打开训练对话框"""
-        from scann.gui.dialogs.training_dialog import TrainingDialog
-        dlg = TrainingDialog(self)
-        dlg.training_started.connect(self._on_training_started)
-        dlg.training_stopped.connect(self._on_training_stopped)
-        self._training_dialog = dlg
-        self._training_worker = None
-        dlg.exec_()
+        self.training_controller.open_training()
 
     def _on_open_annotation(self) -> None:
         """打开标注工具对话框 (非模态)"""
@@ -976,127 +1031,31 @@ class MainWindow(QMainWindow):
 
     def _on_training_started(self, params: dict) -> None:
         """训练开始信号处理: 接收超参数并启动训练线程"""
-        self._show_message(
-            f"训练已开始: epochs={params.get('epochs', '?')}, "
-            f"lr={params.get('lr', '?')}, backbone={params.get('backbone', '?')}, "
-            f"device={params.get('device', 'auto')}", 5000
-        )
-        # 保存训练参数到实例以便后续使用
-        self._training_params = params
-
-        # 创建并启动训练工作线程
-        from scann.ai.training_worker import TrainingWorker
-
-        self._training_worker = TrainingWorker(params, parent=self)
-        self._training_worker.progress.connect(self._on_training_progress)
-        self._training_worker.finished.connect(self._on_training_finished)
-        self._training_worker.error.connect(self._on_training_error)
-        self._training_worker.start()
+        self.training_controller.training_started(params)
 
     def _on_training_progress(self, epoch: int, total: int, loss: float, val_loss: float) -> None:
         """训练进度更新"""
-        if self._training_dialog:
-            self._training_dialog.update_progress(epoch, total, loss, val_loss)
+        self.training_controller.training_progress(epoch, total, loss, val_loss)
 
     def _on_training_finished(self, model_path: str, metrics: dict) -> None:
         """训练完成"""
-        if self._training_dialog:
-            self._training_dialog.training_finished(model_path)
-        self._training_worker = None
-        best_f2 = metrics.get('best_f2', 0)
-        best_threshold = metrics.get('best_threshold', 0.5)
-        self._show_message(
-            f"训练完成! 最佳 F2={best_f2:.4f}, 阈值={best_threshold:.3f}", 5000
-        )
+        self.training_controller.training_finished(model_path, metrics)
 
     def _on_training_error(self, message: str) -> None:
         """训练出错"""
-        if self._training_dialog:
-            self._training_dialog.log_text.appendPlainText(f"❌ 错误: {message}")
-        self._training_worker = None
-        self._show_message(f"训练失败: {message}", 5000, level='ERROR')
+        self.training_controller.training_error(message)
 
     def _on_training_stopped(self) -> None:
         """训练停止信号处理"""
-        if self._training_worker:
-            self._training_worker.stop()
-        self._training_worker = None
-        self._show_message("训练已停止")
+        self.training_controller.training_stopped()
 
     def _on_load_model(self) -> None:
         """加载 AI 模型 (支持 v1/v2 格式自动检测)"""
-        path, _ = QFileDialog.getOpenFileName(
-            self, "加载模型", "", "PyTorch 模型 (*.pth *.pt)"
-        )
-        if not path:
-            return
-
-        try:
-            from scann.ai.inference import InferenceConfig
-            config = InferenceConfig(
-                batch_size=self._config.batch_size,
-                device=self._config.compute_device,
-                model_format=self._config.model_format,
-                model_backbone=getattr(self._config, "model_backbone", "auto"),
-            )
-            self._inference_engine = InferenceEngine(model_path=path, config=config)
-
-            # 模型内阈值仅作为参考；实际运行优先采用 GUI 配置阈值
-            model_threshold = float(self._inference_engine.threshold)
-            gui_threshold = float(self._config.ai_confidence)
-            self._inference_engine.threshold = gui_threshold
-
-            # 回写夹紧后的运行时阈值
-            self._config.ai_confidence = float(self._inference_engine.threshold)
-            self._config.model_path = path
-            fmt_info = getattr(self._inference_engine, '_model_format', None)
-            fmt_str = fmt_info.value if fmt_info else 'unknown'
-            backbone_str = getattr(self._inference_engine, 'model_backbone', 'auto')
-            ch_order = getattr(self._inference_engine, '_channel_order', (0, 1, 2))
-            self._logger.info(
-                "模型已加载: %s (格式=%s, backbone=%s, 模型阈值=%.4f, GUI阈值=%.4f, 生效阈值=%.4f, 通道=%s)",
-                path,
-                fmt_str,
-                backbone_str,
-                model_threshold,
-                gui_threshold,
-                self._inference_engine.threshold,
-                ch_order,
-            )
-            self._show_message(
-                f"模型已加载: {path} (格式={fmt_str}, backbone={backbone_str}, 阈值={self._inference_engine.threshold:.2f})", 5000
-            )
-        except Exception as e:
-            self._inference_engine = None
-            self._show_message(f"模型加载失败: {e}", 5000, level='ERROR')
+        self.model_controller.load_model()
 
     def _on_model_info(self) -> None:
         """显示模型信息"""
-        if self._inference_engine is None or not self._inference_engine.is_ready:
-            self._show_message("尚未加载模型")
-            return
-
-        model = self._inference_engine.model
-        # 计算参数量
-        total_params = sum(p.numel() for p in model.parameters())
-        threshold = self._inference_engine.threshold
-        fmt_info = getattr(self._inference_engine, '_model_format', None)
-        fmt_str = fmt_info.value if fmt_info else 'unknown'
-        backbone_str = getattr(self._inference_engine, 'model_backbone', 'auto')
-        ch_order = getattr(self._inference_engine, '_channel_order', (0, 1, 2))
-
-        QMessageBox.information(
-            self,
-            "模型信息",
-            f"<h3>AI 模型信息</h3>"
-            f"<p>架构: {model.__class__.__name__}</p>"
-            f"<p>模型格式: {fmt_str}</p>"
-            f"<p>模型主干: {backbone_str}</p>"
-            f"<p>参数量: {total_params:,}</p>"
-            f"<p>检测阈值: {threshold:.4f}</p>"
-            f"<p>通道顺序: {ch_order}</p>"
-            f"<p>设备: {self._inference_engine.device}</p>",
-        )
+        self.model_controller.show_model_info()
 
     # ── 查询菜单 ──
 
@@ -1155,15 +1114,7 @@ class MainWindow(QMainWindow):
                 self._logger.error(f"保存配置失败: {e}")
             # 同步运行时状态
             self.blink_service.speed_ms = self._config.blink_speed_ms
-            if self._inference_engine is not None and self._inference_engine.is_ready:
-                # 使 GUI 配置对当前会话立即生效
-                self._inference_engine.threshold = self._config.ai_confidence
-                self._inference_engine.config.batch_size = self._config.batch_size
-                self._logger.info(
-                    "已应用GUI推理参数: threshold=%.4f, batch_size=%d",
-                    self._inference_engine.threshold,
-                    self._inference_engine.config.batch_size,
-                )
+            self.model_controller.apply_runtime_config()
             self._show_message("设置已保存")
 
     def _on_select_mpcorb_file(self) -> None:

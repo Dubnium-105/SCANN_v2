@@ -2,7 +2,7 @@
 
 > 最后更新：2026年3月10日
 
-> 当前执行进度：已完成提交 12（引入 QueryController 并迁移查询入口）
+> 当前执行进度：已完成提交 13（引入 ModelService、ModelController、TrainingController）
 
 本文档给出 SCANN v2 当前代码结构的完整重构拆分方案，目标是降低 GUI 热点类的复杂度，恢复 Core → Service → GUI 的单向依赖，降低跨层直接耦合，同时保证功能连续可用、测试可逐步迁移。
 

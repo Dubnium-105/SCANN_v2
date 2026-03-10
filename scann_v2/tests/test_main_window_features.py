@@ -29,6 +29,8 @@ from scann.core.models import (
     AppConfig,
 )
 from scann.services.blink_service import BlinkState
+from scann.gui.controllers import ModelController
+from scann.services.model_service import ModelService
 from scann.services.query_service import QueryResult
 
 
@@ -42,8 +44,16 @@ def _make_mock_window():
     import scann.gui.main_window as main_window
 
     from scann.gui.main_window import MainWindow
-    from scann.gui.controllers import DetectionController, ImageSessionController, PairController, QueryController
+    from scann.gui.controllers import (
+        DetectionController,
+        ImageSessionController,
+        ModelController,
+        PairController,
+        QueryController,
+        TrainingController,
+    )
     from scann.gui.presenters import CandidatePresenter, StatusPresenter
+    from scann.services.model_service import ModelService
     from scann.services.pair_service import PairService
 
     with patch("scann.gui.main_window.QMainWindow.__init__"):
@@ -122,6 +132,7 @@ def _make_mock_window():
     w._logger = Mock()
     w.status_presenter = StatusPresenter(w.statusBar(), w._logger)
     w.candidate_presenter = CandidatePresenter(w.suspect_table, w.image_viewer)
+    w.model_service = ModelService()
     w.pair_service = PairService(
         scan_folder_fn=main_window.scan_fits_folder,
         match_pairs_fn=main_window.match_new_old_pairs,
@@ -129,6 +140,8 @@ def _make_mock_window():
     )
     w.image_session_controller = ImageSessionController(w)
     w.pair_controller = PairController(w, w.pair_service)
+    w.model_controller = ModelController(w, w.model_service)
+    w.training_controller = TrainingController(w)
     w.detection_controller = DetectionController(w)
     w.query_controller = QueryController(w)
 
@@ -466,16 +479,17 @@ class TestBatchAlign:
 class TestLoadModel:
     """测试加载AI模型功能"""
 
-    @patch("scann.gui.main_window.QFileDialog.getOpenFileName")
-    @patch("scann.gui.main_window.InferenceEngine")
-    def test_load_model_success(self, mock_engine_cls, mock_dialog):
+    @patch("scann.gui.controllers.model_controller.QFileDialog.getOpenFileName")
+    def test_load_model_success(self, mock_dialog):
         """成功加载模型应设置inference_engine"""
         w = _make_mock_window()
         mock_dialog.return_value = ("/path/to/model.pth", "")
         mock_engine = Mock()
         mock_engine.is_ready = True
         mock_engine.threshold = 0.5
-        mock_engine_cls.return_value = mock_engine
+        mock_engine_cls = Mock(return_value=mock_engine)
+        w.model_service = ModelService(engine_factory=mock_engine_cls)
+        w.model_controller = ModelController(w, w.model_service)
 
         w._on_load_model()
 
@@ -486,9 +500,8 @@ class TestLoadModel:
         assert w._inference_engine is mock_engine
         w.statusBar().showMessage.assert_called()
 
-    @patch("scann.gui.main_window.QFileDialog.getOpenFileName")
-    @patch("scann.gui.main_window.InferenceEngine")
-    def test_load_model_applies_gui_confidence_threshold(self, mock_engine_cls, mock_dialog):
+    @patch("scann.gui.controllers.model_controller.QFileDialog.getOpenFileName")
+    def test_load_model_applies_gui_confidence_threshold(self, mock_dialog):
         """加载模型后应优先应用 GUI 配置阈值到运行时引擎"""
         w = _make_mock_window()
         w._config.ai_confidence = 0.23
@@ -497,16 +510,17 @@ class TestLoadModel:
         mock_engine = Mock()
         mock_engine.is_ready = True
         mock_engine.threshold = 0.5  # 模型自带阈值
-        mock_engine_cls.return_value = mock_engine
+        mock_engine_cls = Mock(return_value=mock_engine)
+        w.model_service = ModelService(engine_factory=mock_engine_cls)
+        w.model_controller = ModelController(w, w.model_service)
 
         w._on_load_model()
 
         assert mock_engine.threshold == pytest.approx(0.23)
         assert w._config.ai_confidence == pytest.approx(0.23)
 
-    @patch("scann.gui.main_window.QFileDialog.getOpenFileName")
-    @patch("scann.gui.main_window.InferenceEngine")
-    def test_load_model_passes_model_backbone_to_inference_config(self, mock_engine_cls, mock_dialog):
+    @patch("scann.gui.controllers.model_controller.QFileDialog.getOpenFileName")
+    def test_load_model_passes_model_backbone_to_inference_config(self, mock_dialog):
         """加载模型时应把配置中的 model_backbone 传入推理配置"""
         w = _make_mock_window()
         w._config.model_backbone = "ViT_B_16"
@@ -515,14 +529,16 @@ class TestLoadModel:
         mock_engine = Mock()
         mock_engine.is_ready = True
         mock_engine.threshold = 0.5
-        mock_engine_cls.return_value = mock_engine
+        mock_engine_cls = Mock(return_value=mock_engine)
+        w.model_service = ModelService(engine_factory=mock_engine_cls)
+        w.model_controller = ModelController(w, w.model_service)
 
         w._on_load_model()
 
         config = mock_engine_cls.call_args.kwargs["config"]
         assert getattr(config, "model_backbone", "auto") == "ViT_B_16"
 
-    @patch("scann.gui.main_window.QFileDialog.getOpenFileName")
+    @patch("scann.gui.controllers.model_controller.QFileDialog.getOpenFileName")
     def test_load_model_cancelled(self, mock_dialog):
         """取消不应改变状态"""
         w = _make_mock_window()
@@ -533,13 +549,14 @@ class TestLoadModel:
 
         assert w._inference_engine is None
 
-    @patch("scann.gui.main_window.QFileDialog.getOpenFileName")
-    @patch("scann.gui.main_window.InferenceEngine")
-    def test_load_model_failure_shows_error(self, mock_engine_cls, mock_dialog):
+    @patch("scann.gui.controllers.model_controller.QFileDialog.getOpenFileName")
+    def test_load_model_failure_shows_error(self, mock_dialog):
         """加载失败应显示错误信息"""
         w = _make_mock_window()
         mock_dialog.return_value = ("/bad/model.pth", "")
-        mock_engine_cls.side_effect = Exception("模型文件损坏")
+        mock_engine_cls = Mock(side_effect=Exception("模型文件损坏"))
+        w.model_service = ModelService(engine_factory=mock_engine_cls)
+        w.model_controller = ModelController(w, w.model_service)
 
         w._on_load_model()
 
@@ -846,7 +863,7 @@ class TestModelInfo:
         msg = w.statusBar().showMessage.call_args[0][0]
         assert "模型" in msg or "加载" in msg
 
-    @patch("scann.gui.main_window.QMessageBox")
+    @patch("scann.gui.controllers.model_controller.QMessageBox")
     def test_model_info_with_model(self, mock_msgbox_cls):
         """有模型时应显示信息"""
         w = _make_mock_window()
@@ -864,7 +881,7 @@ class TestModelInfo:
         # 不应崩溃
         w._on_model_info()
 
-    @patch("scann.gui.main_window.QMessageBox")
+    @patch("scann.gui.controllers.model_controller.QMessageBox")
     def test_model_info_contains_backbone_hint(self, mock_msgbox_cls):
         """模型信息弹窗应包含 backbone 提示"""
         w = _make_mock_window()
@@ -1076,13 +1093,13 @@ class TestTrainingIntegration:
     def test_training_dialog_opens(self):
         """应打开训练对话框"""
         w = _make_mock_window()
-        with patch("scann.gui.dialogs.training_dialog.TrainingDialog") as mock_dlg:
+        with patch("scann.gui.controllers.training_controller.TrainingDialog") as mock_dlg:
             mock_instance = Mock()
             mock_dlg.return_value = mock_instance
             w._on_open_training()
             mock_dlg.assert_called_once()
 
-    @patch("scann.ai.training_worker.TrainingWorker")
+    @patch("scann.gui.controllers.training_controller.TrainingWorker")
     def test_training_started_calls_trainer(self, mock_worker_cls):
         """training_started 信号应启动后台训练"""
         w = _make_mock_window()
