@@ -43,7 +43,7 @@
 8. 引入 DetectionController 骨架（已完成）
 9. 拆分 DetectionPipeline 辅助模块（已完成）
 10. 迁移检测工作流到 DetectionController（已完成）
-11. 拆分 QueryService 为 utils 与 clients
+11. 拆分 QueryService 为 utils 与 clients（已完成）
 12. 引入 QueryController 并迁移查询入口
 13. 引入 ModelService、ModelController、TrainingController
 14. 引入 ConfigService、PreferencesController 并清理主窗口
@@ -500,6 +500,10 @@
 
 ## 提交 11：拆分 QueryService 为 utils 与 clients
 
+### 当前状态
+
+- 已完成
+
 ### 目标
 
 把通用计算与外部数据源适配从 `QueryService` 中分离出来。
@@ -508,6 +512,7 @@
 
 - 新增：
   - `src/scann/services/query_utils.py`
+  - `src/scann/services/query_models.py`
   - `src/scann/services/query_clients/__init__.py`
   - `src/scann/services/query_clients/vsx_client.py`
   - `src/scann/services/query_clients/mpc_client.py`
@@ -532,6 +537,10 @@
 - `pytest scann_v2/tests/test_query_utils.py`
 - `pytest scann_v2/tests/test_query_clients.py`
 - `pytest scann_v2/tests/test_query_service.py`
+
+### 验证记录
+
+- 2026年3月10日：`pytest scann_v2/tests/test_query_service_regression.py scann_v2/tests/test_query_utils.py scann_v2/tests/test_query_clients.py scann_v2/tests/test_query_service.py scann_v2/tests/test_query_service_apis.py` 通过（29 passed, 2 skipped）
 
 ---
 
