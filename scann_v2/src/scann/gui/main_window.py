@@ -44,7 +44,7 @@ from PyQt5.QtWidgets import (
 from scann.core.astrometry import pixel_to_wcs, format_ra_hms, format_dec_dms
 from scann.core.fits_io import read_fits, write_fits
 from scann.core.image_aligner import align
-from scann.core.image_processor import histogram_stretch, denoise, pseudo_flat_field
+from scann.core.image_processor import denoise, pseudo_flat_field
 from scann.core.models import (
     AppConfig,
     Candidate,
@@ -55,7 +55,7 @@ from scann.core.observation_report import generate_mpc_report, Observation
 from scann.logger_config import get_logger
 from scann.services.query_service import QueryService, QueryResult
 from scann.gui.dialogs.query_result_popup import QueryResultPopup
-from scann.gui.controllers import PairController
+from scann.gui.controllers import ImageSessionController, PairController
 from scann.gui.presenters import CandidatePresenter, StatusPresenter
 from scann.data.file_manager import scan_fits_folder, match_new_old_pairs
 from scann.ai.inference import InferenceEngine
@@ -69,7 +69,7 @@ from scann.gui.widgets.histogram_panel import HistogramPanel
 from scann.gui.widgets.no_scroll_spinbox import NoScrollDoubleSpinBox, NoScrollSpinBox
 from scann.gui.widgets.overlay_label import OverlayLabel
 from scann.gui.widgets.suspect_table import SuspectTableWidget
-from scann.services.blink_service import BlinkService, BlinkState
+from scann.services.blink_service import BlinkService
 
 
 # ─── 暗色主题样式表 ───
@@ -248,6 +248,7 @@ class MainWindow(QMainWindow):
 
     def _init_controllers(self) -> None:
         """初始化主窗口控制器。"""
+        self.image_session_controller = ImageSessionController(self)
         self.pair_service = PairService(
             scan_folder_fn=scan_fits_folder,
             match_pairs_fn=match_new_old_pairs,
@@ -704,60 +705,27 @@ class MainWindow(QMainWindow):
 
     def _on_blink_toggle(self) -> None:
         """切换闪烁"""
-        running = self.blink_service.toggle()
-        self.btn_blink.setChecked(running)
-        if running:
-            self.blink_timer.setInterval(self.blink_service.speed_ms)
-            self.blink_timer.start()
-            # self.overlay_blink.show_label()  # 不显示⚡图标
-            # self.overlay_blink.start_pulse()
-        else:
-            self.blink_timer.stop()
-            # self.overlay_blink.stop_pulse()
-            # self.overlay_blink.hide_label()
+        self.image_session_controller.toggle_blink()
 
     def _on_blink_tick(self) -> None:
         """闪烁定时回调"""
-        state = self.blink_service.tick()
-        if state == BlinkState.NEW:
-            self._show_image("new")
-        else:
-            self._show_image("old")
+        self.image_session_controller.blink_tick()
 
     def _on_blink_speed_changed(self, speed_ms: int) -> None:
         """闪烁速度变化"""
-        self.blink_service.speed_ms = speed_ms
-        self._config.blink_speed_ms = speed_ms
-        if self.blink_service.is_running:
-            self.blink_timer.setInterval(speed_ms)
+        self.image_session_controller.set_blink_speed(speed_ms)
 
     def _on_invert_toggle(self) -> None:
         """切换反色 (持久状态: 切换图片不重置)"""
-        inverted = self.blink_service.toggle_invert()
-        self.btn_invert.setChecked(inverted)
-
-        if inverted:
-            self.overlay_inv.show_label()
-        else:
-            self.overlay_inv.hide_label()
-
-        # 刷新当前显示
-        current = "new" if self.blink_service.current_state == BlinkState.NEW else "old"
-        self._show_image(current)
+        self.image_session_controller.toggle_invert()
 
     def _on_show_new(self) -> None:
         """显示新图"""
-        self.btn_show_new.setChecked(True)
-        self.btn_show_old.setChecked(False)
-        self.blink_service.set_state(BlinkState.NEW)
-        self._show_image("new")
+        self.image_session_controller.show_new()
 
     def _on_show_old(self) -> None:
         """显示旧图"""
-        self.btn_show_new.setChecked(False)
-        self.btn_show_old.setChecked(True)
-        self.blink_service.set_state(BlinkState.OLD)
-        self._show_image("old")
+        self.image_session_controller.show_old()
 
     def _show_image(self, which: str) -> None:
         """统一的图像显示逻辑
@@ -765,33 +733,7 @@ class MainWindow(QMainWindow):
         Args:
             which: "new" 或 "old"
         """
-        if which == "new":
-            data = self._new_image_data
-            label = "NEW"
-            color = "new"
-        else:
-            data = self._old_image_data
-            label = "OLD"
-            color = "old"
-
-        if data is None:
-            self.overlay_state.setText(f"无{label}")
-            return
-
-        # 更新直方图面板，显示当前图像的直方图
-        self.histogram_panel.set_image_data(data)
-
-        # 应用当前的直方图拉伸参数
-        black = self.histogram_panel.black_point
-        white = self.histogram_panel.white_point
-        stretched = histogram_stretch(data, black_point=black, white_point=white)
-
-        self.image_viewer.set_image_data(
-            stretched, inverted=self.blink_service.is_inverted
-        )
-        self.overlay_state.setText(label)
-        self.overlay_state.set_state(color)
-        self.status_image_type.setText(f"当前: {label}")
+        self.image_session_controller.show_image(which)
 
     def _on_mark_real(self) -> None:
         """标记当前候选为真目标"""
@@ -859,27 +801,11 @@ class MainWindow(QMainWindow):
 
     def _on_toggle_histogram(self) -> None:
         """切换直方图面板"""
-        visible = not self.histogram_panel.isVisible()
-        self.histogram_panel.setVisible(visible)
+        self.image_session_controller.toggle_histogram()
 
     def _on_stretch_changed(self, black: float, white: float) -> None:
         """直方图拉伸参数变化 (仅影响显示)"""
-        # 确定当前显示的图像
-        if self.blink_service.current_state == BlinkState.NEW:
-            data = self._new_image_data
-        else:
-            data = self._old_image_data
-
-        if data is None:
-            return
-
-        # 使用 ImageProcessor 执行线性拉伸
-        stretched = histogram_stretch(
-            data, black_point=black, white_point=white
-        )
-        self.image_viewer.set_image_data(
-            stretched, inverted=self.blink_service.is_inverted
-        )
+        self.image_session_controller.stretch_changed(black, white)
 
     def _on_image_clicked(self, x: int, y: int) -> None:
         """图像左键点击"""
@@ -1697,19 +1623,11 @@ class MainWindow(QMainWindow):
 
     def _on_mouse_moved(self, x: int, y: int) -> None:
         """鼠标在图像上移动 → 更新状态栏像素坐标"""
-        self.status_pixel_coord.set_pixel_coordinates(x, y)
-
-        # 若已加载 WCS 头信息，同步更新天球坐标
-        if self._new_fits_header is not None:
-            sky = pixel_to_wcs(x, y, self._new_fits_header)
-            if sky:
-                self.status_wcs_coord.set_wcs_coordinates(
-                    format_ra_hms(sky.ra), format_dec_dms(sky.dec)
-                )
+        self.image_session_controller.mouse_moved(x, y)
 
     def _on_zoom_changed(self, zoom_pct: float) -> None:
         """缩放比例变化 → 更新状态栏"""
-        self.status_zoom.setText(f"{zoom_pct:.0f}%")
+        self.image_session_controller.zoom_changed(zoom_pct)
 
     # ── 右键上下文菜单处理 ──
 
@@ -1813,12 +1731,7 @@ class MainWindow(QMainWindow):
         self, new_data: Optional[np.ndarray], old_data: Optional[np.ndarray]
     ) -> None:
         """设置当前图像配对数据"""
-        self._new_image_data = new_data
-        self._old_image_data = old_data
-        self._on_show_new()
-
-        if new_data is not None:
-            self.histogram_panel.set_image_data(new_data)
+        self.image_session_controller.set_image_data(new_data, old_data)
 
     def set_candidates(self, candidates: list[Candidate]) -> None:
         """设置检测到的候选体列表"""

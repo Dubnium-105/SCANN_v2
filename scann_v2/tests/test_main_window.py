@@ -26,11 +26,12 @@ from scann.services.blink_service import BlinkState
 
 def _make_mock_window():
     """创建一个跳过 __init__ 的 MainWindow, 手动挂载 Mock 属性"""
+    import scann.gui.main_window as main_window
+
     from scann.gui.main_window import MainWindow
-    from scann.gui.controllers import PairController
+    from scann.gui.controllers import ImageSessionController, PairController
     from scann.gui.presenters import CandidatePresenter, StatusPresenter
     from scann.services.pair_service import PairService
-        import scann.gui.main_window as main_window
 
     with patch("scann.gui.main_window.QMainWindow.__init__"):
         w = MainWindow.__new__(MainWindow)
@@ -79,6 +80,7 @@ def _make_mock_window():
 
     # 文件列表
     w.file_list = Mock()
+    w.file_list.count.return_value = 0
 
     # 状态栏
     w.status_image_type = Mock()
@@ -111,11 +113,12 @@ def _make_mock_window():
     w._config = Mock()
     w._config.blink_speed_ms = 500
 
-        w.pair_service = PairService(
-            scan_folder_fn=main_window.scan_fits_folder,
-            match_pairs_fn=main_window.match_new_old_pairs,
-            read_fits_fn=main_window.read_fits,
-        )
+    w.pair_service = PairService(
+        scan_folder_fn=main_window.scan_fits_folder,
+        match_pairs_fn=main_window.match_new_old_pairs,
+        read_fits_fn=main_window.read_fits,
+    )
+    w.image_session_controller = ImageSessionController(w)
     w.pair_controller = PairController(w, w.pair_service)
 
     return w
@@ -197,8 +200,6 @@ class TestBlinkMode:
         w.blink_timer.setInterval.assert_called_with(400)
         w.blink_timer.start.assert_called_once()
         w.btn_blink.setChecked.assert_called_with(True)
-        w.overlay_blink.show_label.assert_called_once()
-        w.overlay_blink.start_pulse.assert_called_once()
 
     def test_toggle_stops_timer(self):
         w = _make_mock_window()
@@ -206,8 +207,6 @@ class TestBlinkMode:
         w._on_blink_toggle()
         w.blink_timer.stop.assert_called_once()
         w.btn_blink.setChecked.assert_called_with(False)
-        w.overlay_blink.stop_pulse.assert_called_once()
-        w.overlay_blink.hide_label.assert_called_once()
 
     def test_blink_tick_new(self):
         w = _make_mock_window()

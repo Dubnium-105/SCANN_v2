@@ -50,12 +50,9 @@ class PairController:
         if files:
             try:
                 first_image = self._pair_service.read_image(files[0].path)
-                self._window._new_image_data = first_image.data
+                self._window.set_image_data(first_image.data, None)
                 self._window._new_fits_header = first_image.header
-                self._window._old_image_data = None
                 self._window._old_fits_header = None
-                self._window._on_show_new()
-                self._window.histogram_panel.set_image_data(first_image.data)
             except Exception as exc:
                 self._window._show_message(f"加载失败: {exc}", 5000, level="ERROR")
                 return
@@ -144,12 +141,9 @@ class PairController:
         if files:
             try:
                 first_image = self._pair_service.read_image(files[0].path)
-                self._window._new_image_data = first_image.data
+                self._window.set_image_data(first_image.data, None)
                 self._window._new_fits_header = first_image.header
-                self._window._old_image_data = None
                 self._window._old_fits_header = None
-                self._window._on_show_new()
-                self._window.histogram_panel.set_image_data(first_image.data)
             except Exception as exc:
                 self._window._show_message(f"加载失败: {exc}", 5000, level="ERROR")
                 return
@@ -201,8 +195,10 @@ class PairController:
                         self._window._new_image_data = self._window._new_image_data[y0:y1, x0:x1]
                         self._window._old_image_data = self._window._old_image_data[y0:y1, x0:x1]
 
-            self._window._on_show_new()
-            self._window.histogram_panel.set_image_data(self._window._new_image_data)
+            self._window.set_image_data(
+                self._window._new_image_data,
+                self._window._old_image_data,
+            )
 
             if image_pair.aligned:
                 self._window._logger.info("加载已对齐裁剪图像: %s", pair.name)

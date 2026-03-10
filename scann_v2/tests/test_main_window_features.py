@@ -42,7 +42,7 @@ def _make_mock_window():
     import scann.gui.main_window as main_window
 
     from scann.gui.main_window import MainWindow
-    from scann.gui.controllers import PairController
+    from scann.gui.controllers import ImageSessionController, PairController
     from scann.gui.presenters import CandidatePresenter, StatusPresenter
     from scann.services.pair_service import PairService
 
@@ -58,6 +58,7 @@ def _make_mock_window():
     w.blink_service.is_running = False
     w.blink_service.speed_ms = 500
     w.blink_service.current_state = BlinkState.NEW
+    w.blink_service.set_state = Mock()
 
     # 定时器
     w.blink_timer = Mock()
@@ -126,6 +127,7 @@ def _make_mock_window():
         match_pairs_fn=main_window.match_new_old_pairs,
         read_fits_fn=main_window.read_fits,
     )
+    w.image_session_controller = ImageSessionController(w)
     w.pair_controller = PairController(w, w.pair_service)
 
     # 数据
@@ -293,7 +295,7 @@ class TestStretchChanged:
         w._new_image_data = np.random.random((64, 64)).astype(np.float32) * 65535
         w.blink_service.current_state = BlinkState.NEW
 
-        with patch("scann.gui.main_window.histogram_stretch") as mock_stretch:
+        with patch("scann.gui.controllers.image_session_controller.histogram_stretch") as mock_stretch:
             mock_stretch.return_value = np.zeros((64, 64), dtype=np.float32)
             w._on_stretch_changed(100.0, 50000.0)
             mock_stretch.assert_called_once()
@@ -314,7 +316,7 @@ class TestStretchChanged:
         w._new_image_data = np.ones((32, 32), dtype=np.float32) * 1000
         w.blink_service.current_state = BlinkState.NEW
 
-        with patch("scann.gui.main_window.histogram_stretch") as mock_stretch:
+        with patch("scann.gui.controllers.image_session_controller.histogram_stretch") as mock_stretch:
             mock_stretch.return_value = np.zeros((32, 32), dtype=np.float32)
             w._on_stretch_changed(200.0, 800.0)
             args, kwargs = mock_stretch.call_args
@@ -768,7 +770,7 @@ class TestWCSSync:
             "NAXIS1": 128, "NAXIS2": 128,
         })
 
-        with patch("scann.gui.main_window.pixel_to_wcs") as mock_p2w:
+        with patch("scann.gui.controllers.image_session_controller.pixel_to_wcs") as mock_p2w:
             from scann.core.models import SkyPosition
             mock_p2w.return_value = SkyPosition(ra=180.5, dec=45.3)
 

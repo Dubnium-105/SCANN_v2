@@ -28,7 +28,6 @@ def _make_window():
     window.menu_recent = Mock()
     window._logger = Mock()
     window._show_message = Mock()
-    window._on_show_new = Mock()
     window._update_markers = Mock()
     window.candidate_presenter = Mock()
     window.set_candidates = Mock()
@@ -103,8 +102,10 @@ class TestPairController:
         service.read_image.assert_called_once_with(Path("/data/new/img_001.fits"))
         window.file_list.clear.assert_called_once_with()
         assert window.file_list.addItem.call_count == 2
-        window._on_show_new.assert_called_once_with()
-        window.histogram_panel.set_image_data.assert_called_once()
+        window.set_image_data.assert_called_once_with(
+            service.read_image.return_value.data,
+            None,
+        )
 
     @patch("scann.gui.controllers.pair_controller.QFileDialog.getExistingDirectory")
     def test_open_old_folder_matches_pairs_and_loads_first_pair(self, mock_dialog):
@@ -165,7 +166,10 @@ class TestPairController:
         assert window._current_pair_using_aligned is True
         window._update_markers.assert_called_once_with()
         window.candidate_presenter.set_candidates.assert_called_once_with([])
-        window._on_show_new.assert_called_once_with()
+        window.set_image_data.assert_called_once_with(
+            window._new_image_data,
+            window._old_image_data,
+        )
         window.set_candidates.assert_called_once_with(window._candidates_cache[0])
         assert window._new_image_data.shape == (20, 22)
         assert window._old_image_data.shape == (20, 22)
