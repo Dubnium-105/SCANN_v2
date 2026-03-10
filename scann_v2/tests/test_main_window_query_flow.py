@@ -2,6 +2,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from scann.core.models import Candidate, FitsHeader
+from scann.gui.controllers import DetectionController, QueryController
+from scann.gui.presenters import StatusPresenter
 from scann.services.query_service import QueryResult
 
 
@@ -54,6 +56,7 @@ def _make_mock_window():
     window.image_viewer.mapToGlobal.side_effect = lambda point: point
     window.statusBar = Mock(return_value=Mock())
     window._logger = Mock()
+    window.status_presenter = StatusPresenter(window.statusBar(), window._logger)
     window._new_fits_header = None
     window._candidates = []
     window._current_candidate_idx = -1
@@ -64,17 +67,23 @@ def _make_mock_window():
         read_fits_fn=main_window.read_fits,
     )
     window.pair_controller = PairController(window, window.pair_service)
+    window.detection_controller = DetectionController(window)
+    window.query_controller = QueryController(window)
     return window
 
 
 class TestMainWindowQueryFlow:
-    @patch("scann.gui.main_window.QMenu", _Menu)
+    @patch("scann.gui.controllers.query_controller.QMenu", _Menu)
     def test_right_click_menu_wires_query_and_context_actions(self):
         window = _make_mock_window()
         window._do_query = Mock()
         window._on_context_mpc_report = Mock()
         window._on_context_add_candidate = Mock()
         window._on_copy_wcs_coordinates = Mock()
+        window.query_controller.do_query = window._do_query
+        window.query_controller.context_mpc_report = window._on_context_mpc_report
+        window.query_controller.context_add_candidate = window._on_context_add_candidate
+        window.query_controller.copy_wcs_coordinates = window._on_copy_wcs_coordinates
 
         _Menu.instances.clear()
         window._on_image_right_click(42, 84)
@@ -111,6 +120,7 @@ class TestMainWindowQueryFlow:
         window._candidates = [Candidate(x=123, y=456)]
         window._current_candidate_idx = 0
         window._do_query = Mock()
+        window.query_controller.do_query = window._do_query
 
         window._on_menu_query("simbad")
 
@@ -125,9 +135,9 @@ class TestMainWindowQueryFlow:
         status_bar.showMessage.assert_called_once()
         assert "请先选中一个候选体" in status_bar.showMessage.call_args.args[0]
 
-    @patch("scann.gui.main_window.QueryResultPopup")
-    @patch("scann.gui.main_window.QueryService")
-    @patch("scann.gui.main_window.pixel_to_wcs")
+    @patch("scann.gui.controllers.query_controller.QueryResultPopup")
+    @patch("scann.gui.controllers.query_controller.QueryService")
+    @patch("scann.gui.controllers.query_controller.pixel_to_wcs")
     def test_do_query_with_wcs_invokes_service_and_formats_popup(
         self,
         mock_pixel_to_wcs,

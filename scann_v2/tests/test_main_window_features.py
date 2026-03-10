@@ -42,7 +42,7 @@ def _make_mock_window():
     import scann.gui.main_window as main_window
 
     from scann.gui.main_window import MainWindow
-    from scann.gui.controllers import DetectionController, ImageSessionController, PairController
+    from scann.gui.controllers import DetectionController, ImageSessionController, PairController, QueryController
     from scann.gui.presenters import CandidatePresenter, StatusPresenter
     from scann.services.pair_service import PairService
 
@@ -130,6 +130,7 @@ def _make_mock_window():
     w.image_session_controller = ImageSessionController(w)
     w.pair_controller = PairController(w, w.pair_service)
     w.detection_controller = DetectionController(w)
+    w.query_controller = QueryController(w)
 
     # 数据
     w._candidates = []
@@ -799,8 +800,8 @@ class TestWCSSync:
 class TestCopyWCSCoordinates:
     """测试复制天球坐标功能"""
 
-    @patch("scann.gui.main_window.QApplication")
-    @patch("scann.gui.main_window.pixel_to_wcs")
+    @patch("scann.gui.controllers.query_controller.QApplication")
+    @patch("scann.gui.controllers.query_controller.pixel_to_wcs")
     def test_copy_wcs_with_header(self, mock_p2w, mock_qapp):
         """有WCS时应复制RA/Dec到剪贴板"""
         from scann.core.models import SkyPosition
@@ -1130,8 +1131,8 @@ class TestQueryIntegration:
         mock_sky.ra = 180.0
         mock_sky.dec = 45.0
 
-        with patch("scann.gui.main_window.pixel_to_wcs", return_value=mock_sky):
-            with patch("scann.gui.main_window.QueryService") as mock_svc_cls:
+        with patch("scann.gui.controllers.query_controller.pixel_to_wcs", return_value=mock_sky):
+            with patch("scann.gui.controllers.query_controller.QueryService") as mock_svc_cls:
                 mock_svc = Mock()
                 mock_svc.query_vsx.return_value = [
                     QueryResult(
@@ -1141,7 +1142,7 @@ class TestQueryIntegration:
                 ]
                 mock_svc_cls.return_value = mock_svc
 
-                with patch("scann.gui.main_window.QueryResultPopup") as mock_popup_cls:
+                with patch("scann.gui.controllers.query_controller.QueryResultPopup") as mock_popup_cls:
                     mock_popup = Mock()
                     mock_popup_cls.return_value = mock_popup
 
@@ -1160,13 +1161,13 @@ class TestQueryIntegration:
         mock_sky.ra = 200.0
         mock_sky.dec = -10.0
 
-        with patch("scann.gui.main_window.pixel_to_wcs", return_value=mock_sky):
-            with patch("scann.gui.main_window.QueryService") as mock_svc_cls:
+        with patch("scann.gui.controllers.query_controller.pixel_to_wcs", return_value=mock_sky):
+            with patch("scann.gui.controllers.query_controller.QueryService") as mock_svc_cls:
                 mock_svc = Mock()
                 mock_svc.query_mpc.return_value = []
                 mock_svc_cls.return_value = mock_svc
 
-                with patch("scann.gui.main_window.QueryResultPopup") as mock_popup_cls:
+                with patch("scann.gui.controllers.query_controller.QueryResultPopup") as mock_popup_cls:
                     mock_popup = Mock()
                     mock_popup_cls.return_value = mock_popup
 
@@ -1183,13 +1184,13 @@ class TestQueryIntegration:
         mock_sky.ra = 100.0
         mock_sky.dec = 20.0
 
-        with patch("scann.gui.main_window.pixel_to_wcs", return_value=mock_sky):
-            with patch("scann.gui.main_window.QueryService") as mock_svc_cls:
+        with patch("scann.gui.controllers.query_controller.pixel_to_wcs", return_value=mock_sky):
+            with patch("scann.gui.controllers.query_controller.QueryService") as mock_svc_cls:
                 mock_svc = Mock()
                 mock_svc.query_simbad.return_value = []
                 mock_svc_cls.return_value = mock_svc
 
-                with patch("scann.gui.main_window.QueryResultPopup") as mock_popup_cls:
+                with patch("scann.gui.controllers.query_controller.QueryResultPopup") as mock_popup_cls:
                     mock_popup = Mock()
                     mock_popup_cls.return_value = mock_popup
 
@@ -1217,13 +1218,13 @@ class TestQueryIntegration:
         mock_sky.ra = 150.0
         mock_sky.dec = 30.0
 
-        with patch("scann.gui.main_window.pixel_to_wcs", return_value=mock_sky):
-            with patch("scann.gui.main_window.QueryService") as mock_svc_cls:
+        with patch("scann.gui.controllers.query_controller.pixel_to_wcs", return_value=mock_sky):
+            with patch("scann.gui.controllers.query_controller.QueryService") as mock_svc_cls:
                 mock_svc = Mock()
                 mock_svc.query_tns.return_value = []
                 mock_svc_cls.return_value = mock_svc
 
-                with patch("scann.gui.main_window.QueryResultPopup") as mock_popup_cls:
+                with patch("scann.gui.controllers.query_controller.QueryResultPopup") as mock_popup_cls:
                     mock_popup = Mock()
                     mock_popup_cls.return_value = mock_popup
 
@@ -1253,13 +1254,13 @@ class TestMpcReportIntegration:
             mock_dlg = Mock()
             mock_dlg_cls.return_value = mock_dlg
 
-            with patch("scann.gui.main_window.pixel_to_wcs") as mock_wcs:
+            with patch("scann.gui.controllers.query_controller.pixel_to_wcs") as mock_wcs:
                 mock_sky = Mock()
                 mock_sky.ra = 180.0
                 mock_sky.dec = 45.0
                 mock_wcs.return_value = mock_sky
 
-                with patch("scann.gui.main_window.generate_mpc_report") as mock_gen:
+                with patch("scann.gui.controllers.query_controller.generate_mpc_report") as mock_gen:
                     mock_gen.return_value = "     K24A01A  C2024 01 15.12345 12 00 00.00 +45 00 00.0          20.0R      XXX"
                     w._on_mpc_report()
 

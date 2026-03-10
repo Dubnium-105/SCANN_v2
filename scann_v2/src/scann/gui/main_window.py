@@ -30,7 +30,6 @@ from PyQt5.QtWidgets import (
     QLabel,
     QListWidget,
     QMainWindow,
-    QMenu,
     QMenuBar,
     QMessageBox,
     QProgressBar,
@@ -41,7 +40,6 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from scann.core.astrometry import pixel_to_wcs, format_ra_hms, format_dec_dms
 from scann.core.fits_io import read_fits, write_fits
 from scann.core.image_aligner import align
 from scann.core.image_processor import denoise, pseudo_flat_field
@@ -51,11 +49,8 @@ from scann.core.models import (
     FitsHeader,
     TargetVerdict,
 )
-from scann.core.observation_report import generate_mpc_report, Observation
 from scann.logger_config import get_logger
-from scann.services.query_service import QueryService, QueryResult
-from scann.gui.dialogs.query_result_popup import QueryResultPopup
-from scann.gui.controllers import DetectionController, ImageSessionController, PairController
+from scann.gui.controllers import DetectionController, ImageSessionController, PairController, QueryController
 from scann.gui.presenters import CandidatePresenter, StatusPresenter
 from scann.data.file_manager import scan_fits_folder, match_new_old_pairs
 from scann.ai.inference import InferenceEngine
@@ -256,6 +251,7 @@ class MainWindow(QMainWindow):
         )
         self.pair_controller = PairController(self, self.pair_service)
         self.detection_controller = DetectionController(self)
+        self.query_controller = QueryController(self)
 
     def _show_message(self, message: str, timeout: int = 3000, level: str = 'INFO') -> None:
         """统一的消息输出方法，同时输出到状态栏和日志
@@ -803,105 +799,15 @@ class MainWindow(QMainWindow):
 
     def _on_image_clicked(self, x: int, y: int) -> None:
         """图像左键点击"""
-        self.status_pixel_coord.set_pixel_coordinates(x, y)
+        self.query_controller.image_clicked(x, y)
 
     def _on_image_right_click(self, x: int, y: int) -> None:
         """图像右键点击 → 上下文查询菜单"""
-        menu = QMenu(self)
-
-        queries = [
-            ("🔍 查询 VSX", "vsx"),
-            ("🔍 查询 MPC", "mpc"),
-            ("🔍 查询 SIMBAD", "simbad"),
-            ("🔍 查询 TNS", "tns"),
-            ("🛰️ 查询人造卫星", "satellite"),
-        ]
-        for label, qtype in queries:
-            action = menu.addAction(label)
-            action.triggered.connect(
-                lambda checked, t=qtype: self._do_query(t, x, y)
-            )
-
-        menu.addSeparator()
-        act_mpc = menu.addAction("📝 生成 MPC 80列报告")
-        act_mpc.triggered.connect(
-            lambda checked, cx=x, cy=y: self._on_context_mpc_report(cx, cy)
-        )
-        menu.addSeparator()
-        act_add_cand = menu.addAction("➕ 手动添加候选体")
-        act_add_cand.triggered.connect(
-            lambda checked, cx=x, cy=y: self._on_context_add_candidate(cx, cy)
-        )
-        menu.addSeparator()
-
-        act_copy_pixel = menu.addAction("📋 复制像素坐标")
-        act_copy_pixel.triggered.connect(
-            lambda: QApplication.clipboard().setText(f"{x}, {y}")
-        )
-        act_copy_wcs = menu.addAction("📋 复制天球坐标")
-        act_copy_wcs.triggered.connect(
-            lambda checked, cx=x, cy=y: self._on_copy_wcs_coordinates(cx, cy)
-        )
-
-        menu.exec_(self.image_viewer.mapToGlobal(
-            self.image_viewer.mapFromScene(float(x), float(y))
-        ))
+        self.query_controller.image_right_click(x, y)
 
     def _do_query(self, query_type: str, x: int, y: int) -> None:
         """执行外部查询"""
-        # 若有 WCS 头信息，先转换坐标
-        if self._new_fits_header is not None:
-            sky = pixel_to_wcs(x, y, self._new_fits_header)
-            if sky:
-                ra_deg = sky.ra
-                dec_deg = sky.dec
-                self._show_message(f"正在查询 {query_type} (RA={ra_deg:.4f}, Dec={dec_deg:.4f})...", 5000)
-
-                # 实际查询
-                svc = QueryService()
-                results: list[QueryResult] = []
-
-                query_map = {
-                    "vsx": svc.query_vsx,
-                    "mpc": svc.query_mpc,
-                    "simbad": svc.query_simbad,
-                    "tns": svc.query_tns,
-                }
-                query_fn = query_map.get(query_type)
-                if query_fn:
-                    try:
-                        results = query_fn(ra_deg, dec_deg)
-                    except Exception as e:
-                        results = []
-                        self._show_message(f"查询失败: {e}", 5000, level='WARNING')
-
-                # 显示结果弹窗
-                popup = QueryResultPopup(
-                    title=f"{query_type.upper()} 查询结果", parent=self
-                )
-                if results:
-                    lines = []
-                    for r in results:
-                        lines.append(
-                            f"{r.name}  类型={r.object_type}  "
-                            f"距离={r.distance_arcsec:.1f}″"
-                        )
-                    popup.set_content(
-                        "\n".join(lines),
-                        coords=f"RA={ra_deg:.4f}  Dec={dec_deg:.4f}",
-                    )
-                    popup.set_success(count=len(results))
-                else:
-                    popup.set_content(
-                        "未找到匹配天体",
-                        coords=f"RA={ra_deg:.4f}  Dec={dec_deg:.4f}",
-                    )
-                popup.show()
-                return
-
-        self._show_message(
-            f"正在查询 {query_type} ({x}, {y})... (无WCS信息，使用像素坐标)", 5000
-        )
+        self.query_controller.do_query(query_type, x, y)
 
     def _on_prev_pair(self) -> None:
         """上一组图像配对"""
@@ -1196,56 +1102,11 @@ class MainWindow(QMainWindow):
 
     def _on_menu_query(self, query_type: str) -> None:
         """从菜单栏触发的查询 (无坐标上下文)"""
-        # 若有选中候选体则使用其坐标查询，否则提示用户
-        if self._candidates and 0 <= self._current_candidate_idx < len(self._candidates):
-            cand = self._candidates[self._current_candidate_idx]
-            self._do_query(query_type, int(cand.x), int(cand.y))
-        else:
-            self._show_message("请先选中一个候选体，或在图像上右键进行坐标查询")
+        self.query_controller.menu_query(query_type)
 
     def _on_mpc_report(self) -> None:
         """打开 MPC 80列报告对话框"""
-        from scann.gui.dialogs.mpc_report_dialog import MpcReportDialog
-
-        dlg = MpcReportDialog(self)
-
-        # 如果有候选体和 WCS 头信息，生成报告
-        if self._candidates and self._new_fits_header is not None:
-            from datetime import datetime
-
-            observations = []
-            header = self._new_fits_header
-            obs_dt = header.observation_datetime or datetime.utcnow()
-            obs_code = header.raw.get("OBSERVAT", "")[:3] if header.raw.get("OBSERVAT") else ""
-
-            for cand in self._candidates:
-                if cand.verdict == TargetVerdict.BOGUS:
-                    continue
-
-                sky = pixel_to_wcs(int(cand.x), int(cand.y), header)
-                if sky is None:
-                    continue
-
-                observations.append(Observation(
-                    designation="",
-                    discovery=False,
-                    obs_datetime=obs_dt,
-                    ra_deg=sky.ra,
-                    dec_deg=sky.dec,
-                    magnitude=0.0,
-                    mag_band="C",
-                    observatory_code=obs_code,
-                ))
-
-            if observations:
-                report = generate_mpc_report(observations)
-                dlg.set_report(report)
-        elif not self._candidates:
-            pass  # 空对话框
-        elif self._new_fits_header is None:
-            self._show_message("无 WCS 头信息，无法生成 MPC 报告坐标")
-
-        dlg.exec_()
+        self.query_controller.mpc_report()
 
     # ── 视图菜单 ──
 
@@ -1371,46 +1232,15 @@ class MainWindow(QMainWindow):
 
     def _on_context_mpc_report(self, x: int, y: int) -> None:
         """右键菜单 → 生成 MPC 报告"""
-        # 尝试定位最近的候选体
-        best_idx = -1
-        best_dist = float('inf')
-        for i, c in enumerate(self._candidates):
-            dist = (c.x - x) ** 2 + (c.y - y) ** 2
-            if dist < best_dist:
-                best_dist = dist
-                best_idx = i
-
-        if best_idx >= 0 and best_dist < 50 ** 2:  # 50像素范围内
-            self._current_candidate_idx = best_idx
-            self._focus_candidate(best_idx)
-
-        self._on_mpc_report()
+        self.query_controller.context_mpc_report(x, y)
 
     def _on_context_add_candidate(self, x: int, y: int) -> None:
         """右键菜单 → 手动添加候选体"""
-        candidate = Candidate(
-            x=x, y=y, is_manual=True,
-            verdict=TargetVerdict.UNKNOWN,
-        )
-        self._candidates.append(candidate)
-        self._current_candidate_idx = len(self._candidates) - 1
-        self.candidate_presenter.set_candidates(self._candidates)
-        self._update_markers()
-        self._show_message(f"已添加手动候选体 ({x}, {y})")
+        self.query_controller.context_add_candidate(x, y)
 
     def _on_copy_wcs_coordinates(self, x: int, y: int) -> None:
         """右键菜单 → 复制天球坐标"""
-        if self._new_fits_header is None:
-            self._show_message("无 WCS 头信息，无法转换坐标")
-            return
-
-        sky = pixel_to_wcs(x, y, self._new_fits_header)
-        if sky:
-            text = f"{format_ra_hms(sky.ra)}  {format_dec_dms(sky.dec)}"
-            QApplication.clipboard().setText(text)
-            self._show_message(f"已复制: {text}")
-        else:
-            self._show_message("WCS 转换失败")
+        self.query_controller.copy_wcs_coordinates(x, y)
 
     # ══════════════════════════════════════════════
     #  图像配对加载

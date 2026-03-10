@@ -44,7 +44,7 @@
 9. 拆分 DetectionPipeline 辅助模块（已完成）
 10. 迁移检测工作流到 DetectionController（已完成）
 11. 拆分 QueryService 为 utils 与 clients（已完成）
-12. 引入 QueryController 并迁移查询入口
+12. 引入 QueryController 并迁移查询入口（已完成）
 13. 引入 ModelService、ModelController、TrainingController
 14. 引入 ConfigService、PreferencesController 并清理主窗口
 
@@ -545,6 +545,10 @@
 ---
 
 ## 提交 12：引入 QueryController 并迁移查询入口
+
+### 当前状态
+
+- 已完成
 
 ### 目标
 
