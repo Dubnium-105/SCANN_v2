@@ -359,48 +359,24 @@ class MainWindow(QMainWindow):
         """标记当前候选为真目标"""
         self.detection_controller.mark_real()
 
-    def _on_mark_real_impl(self) -> None:
-        """标记当前候选为真目标的兼容实现。"""
-        self.detection_controller.mark_real()
-
     def _on_mark_bogus(self) -> None:
         """标记当前候选为假目标"""
-        self.detection_controller.mark_bogus()
-
-    def _on_mark_bogus_impl(self) -> None:
-        """标记当前候选为假目标的兼容实现。"""
         self.detection_controller.mark_bogus()
 
     def _on_next_candidate(self) -> None:
         """跳转到下一个候选体"""
         self.detection_controller.next_candidate()
 
-    def _on_next_candidate_impl(self) -> None:
-        """跳转到下一个候选体的兼容实现。"""
-        self.detection_controller.next_candidate()
-
     def _on_candidate_selected(self, index: int) -> None:
         """候选表格单击选中"""
-        self.detection_controller.candidate_selected(index)
-
-    def _on_candidate_selected_impl(self, index: int) -> None:
-        """候选表格单击选中的兼容实现。"""
         self.detection_controller.candidate_selected(index)
 
     def _on_candidate_double_clicked(self, index: int) -> None:
         """候选表格双击 → 放大到候选体"""
         self.detection_controller.candidate_double_clicked(index)
 
-    def _on_candidate_double_clicked_impl(self, index: int) -> None:
-        """候选表格双击的兼容实现。"""
-        self.detection_controller.candidate_double_clicked(index)
-
     def _focus_candidate(self, index: int) -> None:
         """聚焦某个候选体"""
-        self.detection_controller.focus_candidate(index)
-
-    def _focus_candidate_impl(self, index: int) -> None:
-        """聚焦某个候选体的兼容实现。"""
         self.detection_controller.focus_candidate(index)
 
     def _update_markers(self) -> None:
@@ -436,16 +412,8 @@ class MainWindow(QMainWindow):
         """上一组图像配对"""
         self.pair_controller.prev_pair()
 
-    def _prev_pair_impl(self) -> None:
-        """上一组图像配对的兼容入口。"""
-        self.pair_controller.prev_pair()
-
     def _on_next_pair(self) -> None:
         """下一组图像配对"""
-        self.pair_controller.next_pair()
-
-    def _next_pair_impl(self) -> None:
-        """下一组图像配对的兼容入口。"""
         self.pair_controller.next_pair()
 
     # ══════════════════════════════════════════════
@@ -458,24 +426,12 @@ class MainWindow(QMainWindow):
         """打开新图文件夹"""
         self.pair_controller.open_new_folder()
 
-    def _open_new_folder_impl(self) -> None:
-        """打开新图文件夹的兼容入口。"""
-        self.pair_controller.open_new_folder()
-
     def _add_recent_folder(self, folder: str) -> None:
         """添加文件夹到最近打开列表"""
         self.pair_controller.add_recent_folder(folder)
 
-    def _add_recent_folder_impl(self, folder: str) -> None:
-        """添加文件夹到最近打开列表的兼容入口。"""
-        self.pair_controller.add_recent_folder(folder)
-
     def _on_open_old_folder(self) -> None:
         """打开旧图文件夹"""
-        self.pair_controller.open_old_folder()
-
-    def _open_old_folder_impl(self) -> None:
-        """打开旧图文件夹的兼容入口。"""
         self.pair_controller.open_old_folder()
 
     def _on_save_image(self) -> None:
@@ -524,16 +480,8 @@ class MainWindow(QMainWindow):
         """更新最近打开菜单"""
         self.pair_controller.update_recent_menu()
 
-    def _update_recent_menu_impl(self) -> None:
-        """更新最近打开菜单的兼容入口。"""
-        self.pair_controller.update_recent_menu()
-
     def _open_recent_folder(self, folder: str) -> None:
         """从最近打开列表恢复文件夹"""
-        self.pair_controller.open_recent_folder(folder)
-
-    def _open_recent_folder_impl(self, folder: str) -> None:
-        """从最近打开列表恢复文件夹的兼容入口。"""
         self.pair_controller.open_recent_folder(folder)
 
     # ── 处理菜单 ──
@@ -542,42 +490,22 @@ class MainWindow(QMainWindow):
         """批量对齐"""
         self.detection_controller.batch_align()
 
-    def _on_batch_align_impl(self) -> None:
-        """批量对齐的兼容实现。"""
-        self.detection_controller.batch_align()
-
     def _on_batch_process(self) -> None:
         """打开批量处理对话框"""
-        self.detection_controller.batch_process()
-
-    def _on_batch_process_impl(self) -> None:
-        """打开批量处理对话框的兼容实现。"""
         self.detection_controller.batch_process()
 
     def _run_batch_process(self, params: dict) -> None:
         """执行批量处理 (降噪/伪平场)"""
         self.detection_controller.run_batch_process(params)
 
-    def _run_batch_process_impl(self, params: dict) -> None:
-        """执行批量处理的兼容实现。"""
-        self.detection_controller.run_batch_process(params)
-
     def _build_detection_params(self):
         """从 AppConfig 构造 DetectionParams"""
-        return self.detection_controller.build_detection_params()
-
-    def _build_detection_params_impl(self):
-        """从 AppConfig 构造 DetectionParams 的兼容实现。"""
         return self.detection_controller.build_detection_params()
 
     # ── AI 菜单 ──
 
     def _on_batch_detect(self) -> None:
         """批量检测"""
-        self.detection_controller.batch_detect()
-
-    def _on_batch_detect_impl(self) -> None:
-        """批量检测的兼容实现。"""
         self.detection_controller.batch_detect()
 
     def _on_open_training(self) -> None:
@@ -767,10 +695,6 @@ class MainWindow(QMainWindow):
 
     def _on_pair_selected(self, index: int) -> None:
         """配对列表选择事件"""
-        self.pair_controller.select_pair(index)
-
-    def _select_pair_impl(self, index: int) -> None:
-        """配对列表选择事件的兼容入口。"""
         self.pair_controller.select_pair(index)
 
     # ══════════════════════════════════════════════

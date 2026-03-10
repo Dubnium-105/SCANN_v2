@@ -141,7 +141,7 @@
 
 ### 当前状态
 
-- 未开始
+- 已完成（2026年3月10日）
 
 ### 目标
 
@@ -184,6 +184,12 @@
 
 - 主窗口的兼容壳方法显著减少或清零
 - 所有调用点都改为正式入口
+
+### 完成记录
+
+- 已从 `src/scann/gui/main_window.py` 删除 `_on_mark_real_impl` 等 19 个 `_impl` 兼容壳方法
+- 已确认 signal wiring、DetectionController、PairController 与现有调用点均切换为正式入口
+- 已在 `tests/test_main_window.py` 新增回归测试，确保历史兼容壳方法不会重新出现
 
 ### 建议运行
 

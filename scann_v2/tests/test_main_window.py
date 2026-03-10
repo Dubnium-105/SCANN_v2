@@ -440,6 +440,38 @@ class TestPublicAPI:
         assert w._current_candidate_idx == -1
 
 
+class TestCompatibilityCleanup:
+    """测试历史兼容壳方法已删除。"""
+
+    def test_impl_shell_methods_removed(self):
+        from scann.gui.main_window import MainWindow
+
+        removed_methods = [
+            "_on_mark_real_impl",
+            "_on_mark_bogus_impl",
+            "_on_next_candidate_impl",
+            "_on_candidate_selected_impl",
+            "_on_candidate_double_clicked_impl",
+            "_focus_candidate_impl",
+            "_prev_pair_impl",
+            "_next_pair_impl",
+            "_open_new_folder_impl",
+            "_add_recent_folder_impl",
+            "_open_old_folder_impl",
+            "_update_recent_menu_impl",
+            "_open_recent_folder_impl",
+            "_on_batch_align_impl",
+            "_on_batch_process_impl",
+            "_run_batch_process_impl",
+            "_build_detection_params_impl",
+            "_on_batch_detect_impl",
+            "_select_pair_impl",
+        ]
+
+        for method_name in removed_methods:
+            assert not hasattr(MainWindow, method_name)
+
+
 # ═══════════════════════════════════════════════
 #  直方图面板切换
 # ═══════════════════════════════════════════════

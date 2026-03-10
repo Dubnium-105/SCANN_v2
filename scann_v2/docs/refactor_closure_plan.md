@@ -162,6 +162,8 @@
 
 ### 提交 C：清理兼容壳方法
 
+状态：已完成（2026年3月10日）
+
 目标：
 
 - 删除已无必要的 `_xxx_impl` 兼容方法
@@ -174,6 +176,12 @@
 - 配对相关兼容入口
 - 检测批处理相关兼容入口
 - 最近目录与配对选择兼容入口
+
+完成记录：
+
+- 已删除 `src/scann/gui/main_window.py` 中第十七次提交清单列出的 19 个 `_impl` 兼容壳方法
+- 已确认 `main_window_wiring.py`、`DetectionController`、`PairController` 与现有测试均已使用正式入口，无需保留历史别名
+- 已在 `tests/test_main_window.py` 增加回归测试，确保这些兼容入口不会被重新引入
 
 ### 提交 D：迁移主窗口残留辅助动作
 

@@ -1331,17 +1331,17 @@ class TestAnnotationToolEntry:
 
     def test_annotation_menu_exists(self):
         """AI 菜单中应有标注工具菜单项"""
-        from scann.gui.main_window import MainWindow
+        from scann.gui.composition.main_window_builder import MainWindowBuilder
         import inspect
-        src = inspect.getsource(MainWindow._init_menu_bar)
+        src = inspect.getsource(MainWindowBuilder._build_menu_bar)
         assert "标注工具" in src
         assert "act_annotation" in src
 
     def test_annotation_shortcut_ctrl_l(self):
         """标注工具应绑定 Ctrl+L 快捷键"""
-        from scann.gui.main_window import MainWindow
+        from scann.gui.composition.main_window_builder import MainWindowBuilder
         import inspect
-        src = inspect.getsource(MainWindow._init_menu_bar)
+        src = inspect.getsource(MainWindowBuilder._build_menu_bar)
         assert "Ctrl+L" in src
 
     def test_on_open_annotation_creates_dialog(self):
@@ -1389,8 +1389,8 @@ class TestAnnotationToolEntry:
 
     def test_annotation_signal_connected(self):
         """act_annotation.triggered 应连接到 _on_open_annotation"""
-        from scann.gui.main_window import MainWindow
+        from scann.gui.composition.main_window_wiring import MainWindowWiring
         import inspect
-        src = inspect.getsource(MainWindow._connect_signals)
+        src = inspect.getsource(MainWindowWiring.connect_signals)
         assert "act_annotation" in src
         assert "_on_open_annotation" in src
