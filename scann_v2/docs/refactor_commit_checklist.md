@@ -1,6 +1,6 @@
 # SCANN v2 重构逐提交清单
 
-> 最后更新：2026年3月9日
+> 最后更新：2026年3月10日
 
 本文档是 [refactor_split_plan.md](refactor_split_plan.md) 的落地版执行清单，按“每次提交只做一件事”的原则组织。目标是让重构过程具备以下特点：
 
@@ -38,7 +38,7 @@
 3. 主窗口接入 Presenter（已完成）
 4. 引入 PairService 骨架（已完成）
 5. 引入 PairController 骨架并接线（已完成）
-6. 迁移配对加载逻辑到 PairController
+6. 迁移配对加载逻辑到 PairController（已完成）
 7. 引入 ImageSessionController 并迁移显示状态
 8. 引入 DetectionController 骨架
 9. 拆分 DetectionPipeline 辅助模块
@@ -265,6 +265,10 @@
 ---
 
 ## 提交 6：迁移配对加载逻辑到 PairController
+
+### 当前状态
+
+- 已完成
 
 ### 目标
 

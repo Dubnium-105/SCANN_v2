@@ -40,6 +40,8 @@ class _Menu:
 
 
 def _make_mock_window():
+    import scann.gui.main_window as main_window
+
     from scann.gui.main_window import MainWindow
     from scann.gui.controllers import PairController
     from scann.services.pair_service import PairService
@@ -56,7 +58,11 @@ def _make_mock_window():
     window._candidates = []
     window._current_candidate_idx = -1
     window._config = SimpleNamespace()
-    window.pair_service = PairService()
+    window.pair_service = PairService(
+        scan_folder_fn=main_window.scan_fits_folder,
+        match_pairs_fn=main_window.match_new_old_pairs,
+        read_fits_fn=main_window.read_fits,
+    )
     window.pair_controller = PairController(window, window.pair_service)
     return window
 

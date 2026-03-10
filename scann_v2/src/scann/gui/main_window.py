@@ -248,7 +248,11 @@ class MainWindow(QMainWindow):
 
     def _init_controllers(self) -> None:
         """初始化主窗口控制器。"""
-        self.pair_service = PairService()
+        self.pair_service = PairService(
+            scan_folder_fn=scan_fits_folder,
+            match_pairs_fn=match_new_old_pairs,
+            read_fits_fn=read_fits,
+        )
         self.pair_controller = PairController(self, self.pair_service)
 
     def _show_message(self, message: str, timeout: int = 3000, level: str = 'INFO') -> None:
@@ -984,20 +988,16 @@ class MainWindow(QMainWindow):
         self.pair_controller.prev_pair()
 
     def _prev_pair_impl(self) -> None:
-        """上一组图像配对的现有实现。"""
-        current = self.file_list.currentRow()
-        if current > 0:
-            self.file_list.setCurrentRow(current - 1)
+        """上一组图像配对的兼容入口。"""
+        self.pair_controller.prev_pair()
 
     def _on_next_pair(self) -> None:
         """下一组图像配对"""
         self.pair_controller.next_pair()
 
     def _next_pair_impl(self) -> None:
-        """下一组图像配对的现有实现。"""
-        current = self.file_list.currentRow()
-        if current < self.file_list.count() - 1:
-            self.file_list.setCurrentRow(current + 1)
+        """下一组图像配对的兼容入口。"""
+        self.pair_controller.next_pair()
 
     # ══════════════════════════════════════════════
     #  菜单 / 按钮处理方法
@@ -1010,98 +1010,24 @@ class MainWindow(QMainWindow):
         self.pair_controller.open_new_folder()
 
     def _open_new_folder_impl(self) -> None:
-        """打开新图文件夹的现有实现。"""
-        folder = QFileDialog.getExistingDirectory(self, "选择新图文件夹")
-        if not folder:
-            return
-
-        self._new_folder = folder
-        files = scan_fits_folder(folder)
-
-        # 清空并重新填充文件列表
-        self.file_list.clear()
-        self._image_pairs = []
-        self._current_pair_idx = -1
-        self._candidates_cache.clear()  # 清空候选目标缓存
-
-        for f in files:
-            self.file_list.addItem(f.stem)
-
-        # 自动加载第一张图
-        if files:
-            try:
-                fits_img = read_fits(files[0].path)
-                self._new_image_data = fits_img.data
-                self._new_fits_header = fits_img.header
-                self._on_show_new()
-                self.histogram_panel.set_image_data(fits_img.data)
-            except Exception as e:
-                self._show_message(f"加载失败: {e}", 5000, level='ERROR')
-                return
-
-        self._show_message(f"已加载新图文件夹: {folder} ({len(files)} 个文件)")
-
-        # 同步到配置并加入最近打开
-        self._config.new_folder = folder
-        self.pair_controller.add_recent_folder(folder)
+        """打开新图文件夹的兼容入口。"""
+        self.pair_controller.open_new_folder()
 
     def _add_recent_folder(self, folder: str) -> None:
         """添加文件夹到最近打开列表"""
         self.pair_controller.add_recent_folder(folder)
 
     def _add_recent_folder_impl(self, folder: str) -> None:
-        """添加文件夹到最近打开列表的现有实现。"""
-        if folder in self._config.recent_folders:
-            self._config.recent_folders.remove(folder)
-        self._config.recent_folders.insert(0, folder)
-        # 限制数量
-        max_count = self._config.max_recent_count
-        self._config.recent_folders = self._config.recent_folders[:max_count]
-        self.pair_controller.update_recent_menu()
+        """添加文件夹到最近打开列表的兼容入口。"""
+        self.pair_controller.add_recent_folder(folder)
 
     def _on_open_old_folder(self) -> None:
         """打开旧图文件夹"""
         self.pair_controller.open_old_folder()
 
     def _open_old_folder_impl(self) -> None:
-        """打开旧图文件夹的现有实现。"""
-        folder = QFileDialog.getExistingDirectory(self, "选择旧图文件夹")
-        if not folder:
-            return
-
-        self._old_folder = folder
-        self._config.old_folder = folder
-        self.pair_controller.add_recent_folder(folder)
-        old_files = scan_fits_folder(folder)
-
-        # 如果已有新图文件夹，自动配对
-        if self._new_folder:
-            pairs, only_new, only_old = match_new_old_pairs(
-                self._new_folder, folder
-            )
-            self._image_pairs = pairs
-
-            # 清空候选目标缓存，因为配对已改变
-            self._candidates_cache.clear()
-
-            # 更新文件列表显示配对状态
-            self.file_list.clear()
-            for p in pairs:
-                self.file_list.addItem(f"✅ {p.name}")
-            for n in only_new:
-                self.file_list.addItem(f"🆕 {n} (仅新图)")
-            for o in only_old:
-                self.file_list.addItem(f"📁 {o} (仅旧图)")
-
-            # 自动加载第一对
-            if pairs:
-                self._load_pair(0)
-
-            self._show_message(
-                f"已配对: {len(pairs)} 对, 仅新图: {len(only_new)}, 仅旧图: {len(only_old)}", 5000
-            )
-        else:
-            self._show_message(f"已选择旧图文件夹: {folder} ({len(old_files)} 个文件)")
+        """打开旧图文件夹的兼容入口。"""
+        self.pair_controller.open_old_folder()
 
     def _on_save_image(self) -> None:
         """保存当前图像"""
@@ -1150,48 +1076,16 @@ class MainWindow(QMainWindow):
         self.pair_controller.update_recent_menu()
 
     def _update_recent_menu_impl(self) -> None:
-        """更新最近打开菜单的现有实现。"""
-        self.menu_recent.clear()
-        recent = self._config.recent_folders
-        if not recent:
-            self.menu_recent.addAction("(无最近打开)")
-            return
-        for folder in recent:
-            action = self.menu_recent.addAction(folder)
-            action.triggered.connect(
-                lambda checked, f=folder: self._open_recent_folder(f)
-            )
+        """更新最近打开菜单的兼容入口。"""
+        self.pair_controller.update_recent_menu()
 
     def _open_recent_folder(self, folder: str) -> None:
         """从最近打开列表恢复文件夹"""
         self.pair_controller.open_recent_folder(folder)
 
     def _open_recent_folder_impl(self, folder: str) -> None:
-        """从最近打开列表恢复文件夹的现有实现。"""
-        from pathlib import Path
-        if not Path(folder).exists():
-            self._show_message(f"文件夹不存在: {folder}", 5000, level='WARNING')
-            return
-        # 按新图文件夹打开
-        self._new_folder = folder
-        self._config.new_folder = folder
-        files = scan_fits_folder(folder)
-        self.file_list.clear()
-        self._image_pairs = []
-        self._current_pair_idx = -1
-        for f in files:
-            self.file_list.addItem(f.stem)
-        if files:
-            try:
-                fits_img = read_fits(files[0].path)
-                self._new_image_data = fits_img.data
-                self._new_fits_header = fits_img.header
-                self._on_show_new()
-                self.histogram_panel.set_image_data(fits_img.data)
-            except Exception as e:
-                self._show_message(f"加载失败: {e}", 5000, level='ERROR')
-                return
-        self._show_message(f"已加载: {folder} ({len(files)} 个文件)")
+        """从最近打开列表恢复文件夹的兼容入口。"""
+        self.pair_controller.open_recent_folder(folder)
 
     # ── 处理菜单 ──
 
@@ -1867,112 +1761,24 @@ class MainWindow(QMainWindow):
     # ══════════════════════════════════════════════
 
     def _load_pair(self, index: int) -> None:
-        """加载指定索引的图像配对"""
-        if index < 0 or index >= len(self._image_pairs):
-            return
-
-        pair = self._image_pairs[index]
-        self._current_pair_idx = index
-
-        # 切换图像配对时，先清空当前候选目标
-        self._candidates = []
-        self._current_candidate_idx = -1
-        self._update_markers()
-        self.candidate_presenter.set_candidates([])
-
-        try:
-            new_path, old_path, using_aligned = self._resolve_pair_image_paths(pair)
-            new_fits = read_fits(new_path)
-            old_fits = read_fits(old_path)
-            self._new_image_data = new_fits.data
-            self._old_image_data = old_fits.data
-            self._current_pair_using_aligned = bool(using_aligned)
-
-            # 防御性修复：历史对齐产物可能仍残留 L 型黑边。
-            if using_aligned:
-                bounds = self._calc_nonzero_valid_bounds(self._old_image_data)
-                if bounds is not None:
-                    x0, x1, y0, y1 = bounds
-                    if (x1 - x0) >= 16 and (y1 - y0) >= 16:
-                        self._new_image_data = self._new_image_data[y0:y1, x0:x1]
-                        self._old_image_data = self._old_image_data[y0:y1, x0:x1]
-
-            self._new_fits_header = new_fits.header
-            self._old_fits_header = old_fits.header
-            self._on_show_new()
-            self.histogram_panel.set_image_data(self._new_image_data)
-
-            if using_aligned:
-                self._logger.info("加载已对齐裁剪图像: %s", pair.name)
-            
-            # 从缓存中恢复该配对的候选目标（如果有）
-            if index in self._candidates_cache:
-                self.set_candidates(self._candidates_cache[index])
-        except Exception as e:
-            self._show_message(f"加载失败: {e}", 5000, level='ERROR')
+        """加载指定索引的图像配对。"""
+        self.pair_controller.load_pair(index)
 
     def _aligned_artifact_paths(self, pair) -> tuple[Path, Path, Path, Path]:
-        """返回配对图像的对齐裁剪产物路径。
-
-        Returns:
-            (new_aligned_path, old_aligned_path, new_marker_path, old_marker_path)
-        """
-        new_path = Path(pair.new_path)
-        old_path = Path(pair.old_path)
-
-        new_aligned_path = new_path.with_name(f"{new_path.stem}__aligned_crop{new_path.suffix}")
-        old_aligned_path = old_path.with_name(f"{old_path.stem}__aligned_crop{old_path.suffix}")
-        new_marker_path = new_path.with_name(f"{new_path.stem}__aligned.marker")
-        old_marker_path = old_path.with_name(f"{old_path.stem}__aligned.marker")
-        return new_aligned_path, old_aligned_path, new_marker_path, old_marker_path
+        """返回配对图像的对齐裁剪产物路径。"""
+        return self.pair_controller.aligned_artifact_paths(pair)
 
     def _pair_has_aligned_artifacts(self, pair) -> bool:
         """配对是否已有可复用的对齐裁剪结果。"""
-        new_aligned_path, old_aligned_path, new_marker_path, old_marker_path = self._aligned_artifact_paths(pair)
-        return (
-            new_aligned_path.is_file()
-            and old_aligned_path.is_file()
-            and new_marker_path.is_file()
-            and old_marker_path.is_file()
-        )
+        return self.pair_controller.pair_has_aligned_artifacts(pair)
 
     def _resolve_pair_image_paths(self, pair) -> tuple[Path, Path, bool]:
-        """解析配对应使用的图像路径（优先使用对齐裁剪图）。"""
-        if self._pair_has_aligned_artifacts(pair):
-            new_aligned_path, old_aligned_path, _, _ = self._aligned_artifact_paths(pair)
-            return new_aligned_path, old_aligned_path, True
-        return Path(pair.new_path), Path(pair.old_path), False
+        """解析配对应使用的图像路径。"""
+        return self.pair_controller.resolve_pair_image_paths(pair)
 
     def _calc_nonzero_valid_bounds(self, image: np.ndarray) -> Optional[tuple[int, int, int, int]]:
-        """估计旧图有效区域边界（用于移除对齐后黑边）。"""
-        if image is None or image.size == 0:
-            return None
-
-        arr = np.nan_to_num(image.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
-        mask = np.abs(arr) > 1e-6
-        if not np.any(mask):
-            return None
-
-        row_ratio = np.mean(mask, axis=1)
-        col_ratio = np.mean(mask, axis=0)
-
-        row_valid = row_ratio > 0.98
-        col_valid = col_ratio > 0.98
-        # 如果阈值过严（如存在窄黑边），回退为“该行/列存在任意有效像素”
-        if not np.any(row_valid):
-            row_valid = np.any(mask, axis=1)
-        if not np.any(col_valid):
-            col_valid = np.any(mask, axis=0)
-        if not np.any(row_valid) or not np.any(col_valid):
-            return None
-
-        ys = np.where(row_valid)[0]
-        xs = np.where(col_valid)[0]
-        y0, y1 = int(ys[0]), int(ys[-1] + 1)
-        x0, x1 = int(xs[0]), int(xs[-1] + 1)
-        if x1 <= x0 or y1 <= y0:
-            return None
-        return x0, x1, y0, y1
+        """估计旧图有效区域边界。"""
+        return self.pair_controller.calc_nonzero_valid_bounds(image)
 
     def _calc_overlap_crop_bounds(
         self,
@@ -1982,34 +1788,22 @@ class MainWindow(QMainWindow):
         dy: float,
         aligned_old: Optional[np.ndarray] = None,
     ) -> Optional[tuple[int, int, int, int]]:
-        """根据平移量 + 旧图有效区域，计算新旧图重叠裁剪区域。"""
-        x0 = max(0, int(math.ceil(dx)))
-        x1 = min(w, int(math.floor(w + dx)))
-        y0 = max(0, int(math.ceil(dy)))
-        y1 = min(h, int(math.floor(h + dy)))
-
-        if aligned_old is not None:
-            valid = self._calc_nonzero_valid_bounds(aligned_old)
-            if valid is not None:
-                vx0, vx1, vy0, vy1 = valid
-                x0 = max(x0, vx0)
-                x1 = min(x1, vx1)
-                y0 = max(y0, vy0)
-                y1 = min(y1, vy1)
-
-        if x1 <= x0 or y1 <= y0:
-            return None
-        return x0, x1, y0, y1
+        """根据平移量和旧图有效区域计算重叠裁剪区域。"""
+        return self.pair_controller.calc_overlap_crop_bounds(
+            w=w,
+            h=h,
+            dx=dx,
+            dy=dy,
+            aligned_old=aligned_old,
+        )
 
     def _on_pair_selected(self, index: int) -> None:
         """配对列表选择事件"""
         self.pair_controller.select_pair(index)
 
     def _select_pair_impl(self, index: int) -> None:
-        """配对列表选择事件的现有实现。"""
-        if index < 0 or index >= len(self._image_pairs):
-            return
-        self._load_pair(index)
+        """配对列表选择事件的兼容入口。"""
+        self.pair_controller.select_pair(index)
 
     # ══════════════════════════════════════════════
     #  公共 API

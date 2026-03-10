@@ -9,6 +9,8 @@ from scann.services.blink_service import BlinkState
 
 
 def _make_mock_window():
+    import scann.gui.main_window as main_window
+
     from scann.gui.main_window import MainWindow
     from scann.gui.controllers import PairController
     from scann.gui.presenters import CandidatePresenter, StatusPresenter
@@ -67,7 +69,11 @@ def _make_mock_window():
     window._current_candidate_idx = -1
     window._candidates_cache = {}
     window.menu_recent = Mock()
-    window.pair_service = PairService()
+    window.pair_service = PairService(
+        scan_folder_fn=main_window.scan_fits_folder,
+        match_pairs_fn=main_window.match_new_old_pairs,
+        read_fits_fn=main_window.read_fits,
+    )
     window.pair_controller = PairController(window, window.pair_service)
     return window
 
@@ -135,7 +141,7 @@ class TestMainWindowPairFlow:
         window = _make_mock_window()
         window._new_folder = "/data/new"
         window._candidates_cache = {0: [Mock()]}
-        window._load_pair = Mock()
+        window.pair_controller.load_pair = Mock()
 
         mock_dialog.return_value = "/data/old"
         mock_scan.return_value = []
@@ -160,7 +166,7 @@ class TestMainWindowPairFlow:
         window.file_list.clear.assert_called_once()
         added_labels = [call.args[0] for call in window.file_list.addItem.call_args_list]
         assert added_labels == ["✅ img_001", "🆕 img_002 (仅新图)", "📁 img_003 (仅旧图)"]
-        window._load_pair.assert_called_once_with(0)
+        window.pair_controller.load_pair.assert_called_once_with(0)
 
     @patch("scann.gui.main_window.read_fits")
     def test_load_pair_prefers_aligned_artifacts_and_restores_cached_candidates(

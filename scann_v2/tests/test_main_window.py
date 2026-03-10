@@ -30,6 +30,7 @@ def _make_mock_window():
     from scann.gui.controllers import PairController
     from scann.gui.presenters import CandidatePresenter, StatusPresenter
     from scann.services.pair_service import PairService
+        import scann.gui.main_window as main_window
 
     with patch("scann.gui.main_window.QMainWindow.__init__"):
         w = MainWindow.__new__(MainWindow)
@@ -110,7 +111,11 @@ def _make_mock_window():
     w._config = Mock()
     w._config.blink_speed_ms = 500
 
-    w.pair_service = PairService()
+        w.pair_service = PairService(
+            scan_folder_fn=main_window.scan_fits_folder,
+            match_pairs_fn=main_window.match_new_old_pairs,
+            read_fits_fn=main_window.read_fits,
+        )
     w.pair_controller = PairController(w, w.pair_service)
 
     return w

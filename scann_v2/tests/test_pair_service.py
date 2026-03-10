@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from scann.core.models import ImagePair
+import numpy as np
+
+from scann.core.models import FitsHeader, FitsImage, ImagePair
 from scann.data.file_manager import FitsImagePair
 from scann.services.pair_service import PairService
 
@@ -49,10 +51,44 @@ class TestPairService:
             old_path=Path("/data/old/field_001.fits"),
         )
 
-        new_path, old_path = service.resolve_pair_image_paths(pair)
+        new_path, old_path, using_aligned = service.resolve_pair_image_paths(pair)
 
         assert new_path == pair.new_path
         assert old_path == pair.old_path
+        assert using_aligned is False
+
+    def test_pair_has_aligned_artifacts_when_all_outputs_exist(self, tmp_path):
+        service = PairService()
+        pair = FitsImagePair(
+            name="field_001",
+            new_path=tmp_path / "new" / "field_001.fits",
+            old_path=tmp_path / "old" / "field_001.fits",
+        )
+        pair.new_path.parent.mkdir(parents=True, exist_ok=True)
+        pair.old_path.parent.mkdir(parents=True, exist_ok=True)
+
+        new_aligned_path, old_aligned_path, new_marker_path, old_marker_path = (
+            service.aligned_artifact_paths(pair)
+        )
+        for path in (new_aligned_path, old_aligned_path, new_marker_path, old_marker_path):
+            path.write_text("ok", encoding="utf-8")
+
+        assert service.pair_has_aligned_artifacts(pair) is True
+
+    def test_calc_nonzero_valid_bounds_trims_black_border(self):
+        service = PairService()
+        image = np.ones((20, 20), dtype=np.float32)
+        image[:, :3] = 0.0
+        image[:2, :] = 0.0
+
+        bounds = service.calc_nonzero_valid_bounds(image)
+
+        assert bounds is not None
+        x0, x1, y0, y1 = bounds
+        assert x0 >= 3
+        assert y0 >= 2
+        assert x1 <= 20
+        assert y1 <= 20
 
     def test_load_pair_reads_both_images(self, fits_file_pair):
         service = PairService()
@@ -66,6 +102,30 @@ class TestPairService:
         assert image_pair.new_image.path == new_path
         assert image_pair.old_image.path == old_path
         assert image_pair.aligned is False
+
+    def test_load_pair_marks_aligned_when_aligned_outputs_exist(self, fits_file_pair):
+        new_path, old_path = fits_file_pair
+        pair = FitsImagePair(name="field_001", new_path=new_path, old_path=old_path)
+        service = PairService(
+            read_fits_fn=lambda path: FitsImage(
+                data=np.zeros((8, 8), dtype=np.float32),
+                header=FitsHeader(raw={}),
+                path=Path(path),
+            )
+        )
+        new_aligned_path, old_aligned_path, new_marker_path, old_marker_path = (
+            service.aligned_artifact_paths(pair)
+        )
+        new_aligned_path.write_text("aligned", encoding="utf-8")
+        old_aligned_path.write_text("aligned", encoding="utf-8")
+        new_marker_path.write_text("aligned", encoding="utf-8")
+        old_marker_path.write_text("aligned", encoding="utf-8")
+
+        image_pair = service.load_pair(pair)
+
+        assert image_pair.aligned is True
+        assert image_pair.new_image.path == new_aligned_path
+        assert image_pair.old_image.path == old_aligned_path
 
     def test_load_pair_propagates_read_errors(self):
         service = PairService()

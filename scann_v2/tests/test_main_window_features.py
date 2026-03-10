@@ -39,6 +39,8 @@ from scann.services.query_service import QueryResult
 
 def _make_mock_window():
     """创建一个跳过 __init__ 的 MainWindow, 手动挂载 Mock 属性"""
+    import scann.gui.main_window as main_window
+
     from scann.gui.main_window import MainWindow
     from scann.gui.controllers import PairController
     from scann.gui.presenters import CandidatePresenter, StatusPresenter
@@ -119,7 +121,11 @@ def _make_mock_window():
     w._logger = Mock()
     w.status_presenter = StatusPresenter(w.statusBar(), w._logger)
     w.candidate_presenter = CandidatePresenter(w.suspect_table, w.image_viewer)
-    w.pair_service = PairService()
+    w.pair_service = PairService(
+        scan_folder_fn=main_window.scan_fits_folder,
+        match_pairs_fn=main_window.match_new_old_pairs,
+        read_fits_fn=main_window.read_fits,
+    )
     w.pair_controller = PairController(w, w.pair_service)
 
     # 数据
