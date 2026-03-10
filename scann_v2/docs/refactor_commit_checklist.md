@@ -40,7 +40,7 @@
 5. 引入 PairController 骨架并接线（已完成）
 6. 迁移配对加载逻辑到 PairController（已完成）
 7. 引入 ImageSessionController 并迁移显示状态（已完成）
-8. 引入 DetectionController 骨架
+8. 引入 DetectionController 骨架（已完成）
 9. 拆分 DetectionPipeline 辅助模块
 10. 迁移检测工作流到 DetectionController
 11. 拆分 QueryService 为 utils 与 clients
@@ -367,6 +367,10 @@
 ---
 
 ## 提交 8：引入 DetectionController 骨架
+
+### 当前状态
+
+- 已完成
 
 ### 目标
 

@@ -42,7 +42,7 @@ def _make_mock_window():
     import scann.gui.main_window as main_window
 
     from scann.gui.main_window import MainWindow
-    from scann.gui.controllers import ImageSessionController, PairController
+    from scann.gui.controllers import DetectionController, ImageSessionController, PairController
     from scann.gui.presenters import CandidatePresenter, StatusPresenter
     from scann.services.pair_service import PairService
 
@@ -129,6 +129,7 @@ def _make_mock_window():
     )
     w.image_session_controller = ImageSessionController(w)
     w.pair_controller = PairController(w, w.pair_service)
+    w.detection_controller = DetectionController(w)
 
     # 数据
     w._candidates = []

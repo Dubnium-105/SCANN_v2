@@ -55,7 +55,7 @@ from scann.core.observation_report import generate_mpc_report, Observation
 from scann.logger_config import get_logger
 from scann.services.query_service import QueryService, QueryResult
 from scann.gui.dialogs.query_result_popup import QueryResultPopup
-from scann.gui.controllers import ImageSessionController, PairController
+from scann.gui.controllers import DetectionController, ImageSessionController, PairController
 from scann.gui.presenters import CandidatePresenter, StatusPresenter
 from scann.data.file_manager import scan_fits_folder, match_new_old_pairs
 from scann.ai.inference import InferenceEngine
@@ -255,6 +255,7 @@ class MainWindow(QMainWindow):
             read_fits_fn=read_fits,
         )
         self.pair_controller = PairController(self, self.pair_service)
+        self.detection_controller = DetectionController(self)
 
     def _show_message(self, message: str, timeout: int = 3000, level: str = 'INFO') -> None:
         """统一的消息输出方法，同时输出到状态栏和日志
@@ -737,6 +738,10 @@ class MainWindow(QMainWindow):
 
     def _on_mark_real(self) -> None:
         """标记当前候选为真目标"""
+        self.detection_controller.mark_real()
+
+    def _on_mark_real_impl(self) -> None:
+        """标记当前候选为真目标的兼容实现。"""
         if not self._candidates or self._current_candidate_idx < 0:
             return
         if self._current_candidate_idx >= len(self._candidates):
@@ -750,6 +755,10 @@ class MainWindow(QMainWindow):
 
     def _on_mark_bogus(self) -> None:
         """标记当前候选为假目标"""
+        self.detection_controller.mark_bogus()
+
+    def _on_mark_bogus_impl(self) -> None:
+        """标记当前候选为假目标的兼容实现。"""
         if not self._candidates or self._current_candidate_idx < 0:
             return
         if self._current_candidate_idx >= len(self._candidates):
@@ -763,6 +772,10 @@ class MainWindow(QMainWindow):
 
     def _on_next_candidate(self) -> None:
         """跳转到下一个候选体"""
+        self.detection_controller.next_candidate()
+
+    def _on_next_candidate_impl(self) -> None:
+        """跳转到下一个候选体的兼容实现。"""
         if not self._candidates:
             return
         self._current_candidate_idx = (
@@ -772,11 +785,19 @@ class MainWindow(QMainWindow):
 
     def _on_candidate_selected(self, index: int) -> None:
         """候选表格单击选中"""
+        self.detection_controller.candidate_selected(index)
+
+    def _on_candidate_selected_impl(self, index: int) -> None:
+        """候选表格单击选中的兼容实现。"""
         self._current_candidate_idx = index
         self._focus_candidate(index)
 
     def _on_candidate_double_clicked(self, index: int) -> None:
         """候选表格双击 → 放大到候选体"""
+        self.detection_controller.candidate_double_clicked(index)
+
+    def _on_candidate_double_clicked_impl(self, index: int) -> None:
+        """候选表格双击的兼容实现。"""
         if 0 <= index < len(self._candidates):
             cand = self._candidates[index]
             self._current_candidate_idx = index
@@ -784,6 +805,10 @@ class MainWindow(QMainWindow):
 
     def _focus_candidate(self, index: int) -> None:
         """聚焦某个候选体"""
+        self.detection_controller.focus_candidate(index)
+
+    def _focus_candidate_impl(self, index: int) -> None:
+        """聚焦某个候选体的兼容实现。"""
         if 0 <= index < len(self._candidates):
             cand = self._candidates[index]
             self.image_viewer.center_on_point(cand.x, cand.y)
@@ -1017,6 +1042,10 @@ class MainWindow(QMainWindow):
 
     def _on_batch_align(self) -> None:
         """批量对齐"""
+        self.detection_controller.batch_align()
+
+    def _on_batch_align_impl(self) -> None:
+        """批量对齐的兼容实现。"""
         if not self._image_pairs:
             self._show_message("请先加载新旧图文件夹配对")
             return
@@ -1182,6 +1211,10 @@ class MainWindow(QMainWindow):
 
     def _on_batch_process(self) -> None:
         """打开批量处理对话框"""
+        self.detection_controller.batch_process()
+
+    def _on_batch_process_impl(self) -> None:
+        """打开批量处理对话框的兼容实现。"""
         from scann.gui.dialogs.batch_process_dialog import BatchProcessDialog
         dlg = BatchProcessDialog(self)
         dlg.process_started.connect(self._run_batch_process)
@@ -1190,6 +1223,10 @@ class MainWindow(QMainWindow):
 
     def _run_batch_process(self, params: dict) -> None:
         """执行批量处理 (降噪/伪平场)"""
+        self.detection_controller.run_batch_process(params)
+
+    def _run_batch_process_impl(self, params: dict) -> None:
+        """执行批量处理的兼容实现。"""
         input_dir = params.get("input_dir", self._new_folder)
         output_dir = params.get("output_dir", "")
         if not input_dir:
@@ -1261,6 +1298,10 @@ class MainWindow(QMainWindow):
 
     def _build_detection_params(self):
         """从 AppConfig 构造 DetectionParams"""
+        return self.detection_controller.build_detection_params()
+
+    def _build_detection_params_impl(self):
+        """从 AppConfig 构造 DetectionParams 的兼容实现。"""
         from scann.core.candidate_detector import DetectionParams
         return DetectionParams(
             thresh=self._config.thresh,
@@ -1282,6 +1323,10 @@ class MainWindow(QMainWindow):
 
     def _on_batch_detect(self) -> None:
         """批量检测"""
+        self.detection_controller.batch_detect()
+
+    def _on_batch_detect_impl(self) -> None:
+        """批量检测的兼容实现。"""
         if self._new_image_data is None:
             self._show_message("请先加载图像数据")
             return
