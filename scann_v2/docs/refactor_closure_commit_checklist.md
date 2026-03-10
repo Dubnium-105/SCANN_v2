@@ -90,7 +90,7 @@
 
 ### 当前状态
 
-- 未开始
+- 已完成（2026年3月10日）
 
 ### 目标
 
@@ -122,6 +122,13 @@
 
 - 主窗口中不再保留成片信号绑定代码
 - 动作创建和绑定方式可独立测试
+
+### 完成记录
+
+- 已新增 `src/scann/gui/composition/main_window_wiring.py`
+- `src/scann/gui/main_window.py` 已改为通过 wiring 层完成 signal 绑定与快捷键装配
+- builder 中的退出 QAction 连接已迁出，`main_window_builder.py` 仅保留静态 QAction 创建
+- 已新增 `tests/test_main_window_wiring.py`，覆盖控件信号、菜单动作、查询动作和窗口级快捷键注册
 
 ### 建议运行
 

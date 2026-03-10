@@ -20,9 +20,8 @@ from pathlib import Path
 import math
 
 import numpy as np
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import (
-    QAction,
     QApplication,
     QFileDialog,
     QMainWindow,
@@ -48,7 +47,7 @@ from scann.gui.controllers import (
     QueryController,
     TrainingController,
 )
-from scann.gui.composition import MainWindowBuilder
+from scann.gui.composition import MainWindowBuilder, MainWindowWiring
 from scann.gui.presenters import CandidatePresenter, StatusPresenter
 from scann.data.file_manager import scan_fits_folder, match_new_old_pairs
 from scann.ai.inference import InferenceEngine
@@ -207,8 +206,8 @@ class MainWindow(QMainWindow):
         self.ui_parts.attach(self)
         self._init_presenters()
         self._init_controllers()
-        self._connect_signals()
-        self._init_shortcuts()
+        self.ui_wiring = MainWindowWiring(self)
+        self.ui_wiring.wire()
 
         # ── 从配置恢复文件夹路径 ──
         self._new_folder = self._config.new_folder
@@ -311,118 +310,6 @@ class MainWindow(QMainWindow):
     # ══════════════════════════════════════════════
     #  菜单栏
     # ══════════════════════════════════════════════
-
-    # ══════════════════════════════════════════════
-    #  信号连接
-    # ══════════════════════════════════════════════
-
-    def _connect_signals(self) -> None:
-        """连接所有信号与槽"""
-        # ── 控制栏按钮 ──
-        self.btn_show_new.clicked.connect(self._on_show_new)
-        self.btn_show_old.clicked.connect(self._on_show_old)
-        self.btn_blink.clicked.connect(self._on_blink_toggle)
-        self.btn_invert.clicked.connect(self._on_invert_toggle)
-        self.btn_mark_real.clicked.connect(self._on_mark_real)
-        self.btn_mark_bogus.clicked.connect(self._on_mark_bogus)
-        self.btn_next_candidate.clicked.connect(self._on_next_candidate)
-        self.btn_histogram.clicked.connect(self._on_toggle_histogram)
-
-        # ── 闪烁速度 ──
-        self.blink_speed.speed_changed.connect(self._on_blink_speed_changed)
-
-        # ── 侧边栏按钮 ──
-        self.btn_new_folder.clicked.connect(self._on_open_new_folder)
-        self.btn_old_folder.clicked.connect(self._on_open_old_folder)
-        self.btn_align.clicked.connect(self._on_batch_align)
-        self.btn_detect.clicked.connect(self._on_batch_detect)
-
-        # ── 文件菜单 ──
-        self.act_open_new.triggered.connect(self._on_open_new_folder)
-        self.act_open_old.triggered.connect(self._on_open_old_folder)
-        self.act_save.triggered.connect(self._on_save_image)
-        self.act_save_marked.triggered.connect(self._on_save_marked_image)
-
-        # ── 处理菜单 ──
-        self.act_align.triggered.connect(self._on_batch_align)
-        self.act_batch_process.triggered.connect(self._on_batch_process)
-        self.act_histogram.triggered.connect(self._on_toggle_histogram)
-
-        # ── AI 菜单 ──
-        self.act_detect.triggered.connect(self._on_batch_detect)
-        self.act_train.triggered.connect(self._on_open_training)
-        self.act_load_model.triggered.connect(self._on_load_model)
-        self.act_model_info.triggered.connect(self._on_model_info)
-        self.act_annotation.triggered.connect(self._on_open_annotation)
-
-        # ── 查询菜单 ──
-        self.act_query_vsx.triggered.connect(lambda: self._on_menu_query("vsx"))
-        self.act_query_mpc.triggered.connect(lambda: self._on_menu_query("mpc"))
-        self.act_query_simbad.triggered.connect(lambda: self._on_menu_query("simbad"))
-        self.act_query_tns.triggered.connect(lambda: self._on_menu_query("tns"))
-        self.act_query_satellite.triggered.connect(lambda: self._on_menu_query("satellite"))
-        self.act_mpc_report.triggered.connect(self._on_mpc_report)
-
-        # ── 视图菜单 ──
-        self.act_toggle_sidebar.triggered.connect(self.sidebar.toggle)
-        self.act_fit_view.triggered.connect(self.image_viewer.fit_in_view)
-        self.act_zoom_actual.triggered.connect(self._on_zoom_actual)
-        self.act_zoom_in.triggered.connect(self._on_zoom_in)
-        self.act_zoom_out.triggered.connect(self._on_zoom_out)
-        self.act_show_markers.toggled.connect(lambda _: self._update_markers())
-        self.act_show_mpcorb.toggled.connect(self._on_toggle_mpcorb)
-        self.act_show_known.toggled.connect(self._on_toggle_known)
-
-        # ── 设置菜单 ──
-        self.act_preferences.triggered.connect(self._on_open_preferences)
-        self.act_mpcorb_file.triggered.connect(self._on_select_mpcorb_file)
-        self.act_scheduler.triggered.connect(self._on_open_scheduler)
-
-        # ── 帮助菜单 ──
-        self.act_shortcut_help.triggered.connect(self._on_shortcut_help)
-        self.act_docs.triggered.connect(self._on_open_docs)
-        self.act_about.triggered.connect(self._on_about)
-
-        # ── 可疑目标表格 ──
-        self.suspect_table.candidate_selected.connect(self._on_candidate_selected)
-        self.suspect_table.candidate_double_clicked.connect(self._on_candidate_double_clicked)
-
-        # ── 文件列表 ──
-        self.file_list.currentRowChanged.connect(self._on_pair_selected)
-
-        # ── 图像查看器 ──
-        self.image_viewer.point_clicked.connect(self._on_image_clicked)
-        self.image_viewer.right_click.connect(self._on_image_right_click)
-        self.image_viewer.mouse_moved.connect(self._on_mouse_moved)
-        self.image_viewer.zoom_changed.connect(self._on_zoom_changed)
-
-        # ── 直方图 ──
-        self.histogram_panel.stretch_changed.connect(self._on_stretch_changed)
-
-    # ══════════════════════════════════════════════
-    #  快捷键
-    # ══════════════════════════════════════════════
-
-    def _init_shortcuts(self) -> None:
-        """初始化快捷键 (非全局，仅窗口焦点内)"""
-        shortcuts = {
-            "R": self._on_blink_toggle,
-            "I": self._on_invert_toggle,
-            "Y": self._on_mark_real,
-            "N": self._on_mark_bogus,
-            "1": self._on_show_new,
-            "2": self._on_show_old,
-            "F": self.image_viewer.fit_in_view,
-            "Space": self._on_next_candidate,
-            "Left": self._on_prev_pair,
-            "Right": self._on_next_pair,
-        }
-        for key, handler in shortcuts.items():
-            action = QAction(self)
-            action.setShortcut(key)
-            action.setShortcutContext(Qt.WindowShortcut)  # 非全局
-            action.triggered.connect(handler)
-            self.addAction(action)
 
     # ══════════════════════════════════════════════
     #  事件处理

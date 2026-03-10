@@ -64,19 +64,18 @@
 - 必要装配依赖：保留或迁移到 composition/builder
 - 历史兼容残留：删除
 
-### 2.4 composition 层尚未落地
+### 2.4 composition 层已完成第一阶段落地
 
-原方案中已为 `gui/composition/` 预留了明确位置，但当前尚未创建：
+当前 `gui/composition/` 已新增并投入使用：
 
 - `main_window_builder.py`
-- `action_factory.py`
+- `main_window_wiring.py`
 
-这使得 `MainWindow` 仍同时承担：
+这意味着 `MainWindow` 已不再承担大段 widget 创建、signal 绑定和快捷键注册代码，但仍需要继续完成：
 
-- widget 创建
-- action 创建
-- signal 绑定
-- controller 装配
+- 历史兼容壳方法清理
+- 残留辅助动作收束
+- direct import 收口
 
 ### 2.5 主窗口中仍有零散流程性职责
 
@@ -141,6 +140,8 @@
 
 ### 提交 B：提取动作与信号装配层
 
+状态：已完成（2026年3月10日）
+
 目标：
 
 - 将 `_connect_signals` 与 `_init_shortcuts` 从主窗口迁出
@@ -151,6 +152,13 @@
 
 - 不在本提交改业务流程
 - 不在本提交删除兼容入口
+
+完成记录：
+
+- 已新增 `src/scann/gui/composition/main_window_wiring.py`
+- 已将 `_connect_signals` 与 `_init_shortcuts` 从 `main_window.py` 迁出
+- 已把退出动作的连接一并收口到 wiring 层，builder 仅保留 QAction 创建
+- 已新增 `tests/test_main_window_wiring.py` 覆盖代表性的动作绑定、signal 装配和窗口级快捷键注册
 
 ### 提交 C：清理兼容壳方法
 

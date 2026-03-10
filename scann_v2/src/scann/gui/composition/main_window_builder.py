@@ -172,7 +172,6 @@ class MainWindowBuilder:
         file_menu.addSeparator()
         act_exit = file_menu.addAction("退出")
         act_exit.setShortcut(QKeySequence("Alt+F4"))
-        act_exit.triggered.connect(self._window.close)
 
         proc_menu = mb.addMenu("处理(&P)")
         act_align = proc_menu.addAction("批量对齐")
