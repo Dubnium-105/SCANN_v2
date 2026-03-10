@@ -188,7 +188,7 @@ def _make_mock_window():
 class TestOpenNewFolder:
     """测试打开新图文件夹功能"""
 
-    @patch("scann.gui.main_window.QFileDialog.getExistingDirectory")
+    @patch("scann.gui.controllers.pair_controller.QFileDialog.getExistingDirectory")
     @patch("scann.gui.main_window.scan_fits_folder")
     def test_open_new_folder_loads_files(self, mock_scan, mock_dialog):
         """打开新图文件夹应扫描FITS文件并填充file_list"""
@@ -209,7 +209,7 @@ class TestOpenNewFolder:
         # 应该向 file_list 中添加了项目
         assert w.file_list.addItem.call_count == 2
 
-    @patch("scann.gui.main_window.QFileDialog.getExistingDirectory")
+    @patch("scann.gui.controllers.pair_controller.QFileDialog.getExistingDirectory")
     def test_open_new_folder_cancelled(self, mock_dialog):
         """取消对话框不应改变状态"""
         w = _make_mock_window()
@@ -220,7 +220,7 @@ class TestOpenNewFolder:
         assert w._new_folder == ""
         w.file_list.clear.assert_not_called()
 
-    @patch("scann.gui.main_window.QFileDialog.getExistingDirectory")
+    @patch("scann.gui.controllers.pair_controller.QFileDialog.getExistingDirectory")
     @patch("scann.gui.main_window.scan_fits_folder")
     def test_open_new_folder_clears_old_list(self, mock_scan, mock_dialog):
         """打开新文件夹应先清空旧列表"""
@@ -232,7 +232,7 @@ class TestOpenNewFolder:
 
         w.file_list.clear.assert_called_once()
 
-    @patch("scann.gui.main_window.QFileDialog.getExistingDirectory")
+    @patch("scann.gui.controllers.pair_controller.QFileDialog.getExistingDirectory")
     @patch("scann.gui.main_window.scan_fits_folder")
     @patch("scann.gui.main_window.read_fits")
     def test_open_new_folder_loads_first_image(self, mock_read, mock_scan, mock_dialog):
@@ -260,7 +260,7 @@ class TestOpenNewFolder:
 class TestOpenOldFolder:
     """测试打开旧图文件夹功能"""
 
-    @patch("scann.gui.main_window.QFileDialog.getExistingDirectory")
+    @patch("scann.gui.controllers.pair_controller.QFileDialog.getExistingDirectory")
     @patch("scann.gui.main_window.scan_fits_folder")
     def test_open_old_folder_stores_path(self, mock_scan, mock_dialog):
         """打开旧图文件夹应保存路径"""
@@ -272,7 +272,7 @@ class TestOpenOldFolder:
 
         assert w._old_folder == "/path/to/old"
 
-    @patch("scann.gui.main_window.QFileDialog.getExistingDirectory")
+    @patch("scann.gui.controllers.pair_controller.QFileDialog.getExistingDirectory")
     @patch("scann.gui.main_window.scan_fits_folder")
     @patch("scann.gui.main_window.match_new_old_pairs")
     def test_open_old_folder_triggers_pairing(self, mock_match, mock_scan, mock_dialog):
@@ -295,7 +295,7 @@ class TestOpenOldFolder:
         mock_match.assert_called_once_with("/path/to/new", "/path/to/old")
         assert len(w._image_pairs) == 1
 
-    @patch("scann.gui.main_window.QFileDialog.getExistingDirectory")
+    @patch("scann.gui.controllers.pair_controller.QFileDialog.getExistingDirectory")
     def test_open_old_folder_cancelled(self, mock_dialog):
         """取消不应改变状态"""
         w = _make_mock_window()

@@ -17,23 +17,17 @@ from __future__ import annotations
 
 from typing import Optional
 from pathlib import Path
-import math
 
 import numpy as np
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import (
-    QApplication,
     QMainWindow,
 )
 
 from scann.core.fits_io import read_fits
-from scann.core.image_aligner import align
-from scann.core.image_processor import denoise, pseudo_flat_field
 from scann.core.models import (
-    AppConfig,
     Candidate,
     FitsHeader,
-    TargetVerdict,
 )
 from scann.logger_config import get_logger
 from scann.gui.controllers import (
@@ -51,12 +45,9 @@ from scann.gui.controllers import (
 from scann.gui.composition import MainWindowBuilder, MainWindowWiring
 from scann.gui.presenters import CandidatePresenter, StatusPresenter
 from scann.data.file_manager import scan_fits_folder, match_new_old_pairs
-from scann.ai.inference import InferenceEngine
-from scann.services.detection_service import DetectionPipeline
 from scann.services.config_service import ConfigService
 from scann.services.model_service import ModelService
 from scann.services.pair_service import PairService
-from scann.gui.widgets.no_scroll_spinbox import NoScrollDoubleSpinBox, NoScrollSpinBox
 from scann.services.blink_service import BlinkService
 
 

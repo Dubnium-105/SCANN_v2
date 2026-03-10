@@ -48,12 +48,12 @@
 13. 引入 ModelService、ModelController、TrainingController（已完成）
 14. 引入 ConfigService、PreferencesController 并清理主窗口（已完成，第一轮）
 
-第一轮 14 次提交完成后，若按终态标准继续收口，请转入以下文档：
+第一轮 14 次提交与第二轮 15 到 19 次收口现均已完成。
+
+终态收口与验收记录见以下文档：
 
 - `refactor_closure_plan.md`
 - `refactor_closure_commit_checklist.md`
-
-如果希望风险更低，可以把第 13 和第 14 再各自拆成两次提交。
 
 ---
 

@@ -257,7 +257,7 @@
 
 ### 当前状态
 
-- 未开始
+- 已完成（2026年3月10日）
 
 ### 目标
 
@@ -285,6 +285,14 @@
 - 文档中的“已完成”与实际结构一致
 - `main_window.py` 的 remaining import 和 remaining method 可以自洽地解释为装配或生命周期 glue
 - 本轮收口后可正式宣布第一阶段架构重构结束
+
+### 完成记录
+
+- 已清理 `src/scann/gui/main_window.py` 中未使用的 `core`、`ai` 与 widget 级 direct import，剩余依赖仅服务于 service 装配、状态类型和兼容生命周期 glue
+- 已确认 `src/scann/services/` 目录下无 PyQt / Qt widget import，service 层仍保持非 GUI 依赖边界
+- 已更新 `docs/architecture.md`，补充 composition、controller、presenter 分层说明，并把主窗口描述同步为骨架式装配入口
+- 已更新 `docs/refactor_split_plan.md`、`docs/refactor_commit_checklist.md`、`docs/refactor_closure_plan.md` 与本文件状态，完成文档与代码现实的一致化
+- 终态结论：`main_window.py` 的剩余方法已基本收敛为初始化、事件转发、少量窗口级视图控制和生命周期 glue，可作为第一阶段架构重构的收官状态
 
 ### 建议运行
 

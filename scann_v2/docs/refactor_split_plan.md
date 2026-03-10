@@ -2,7 +2,7 @@
 
 > 最后更新：2026年3月10日
 
-> 当前执行进度：已完成提交 14（引入 ConfigService、PreferencesController 并清理主窗口），但按终态标准仍需进行第二轮收口；详见 `refactor_closure_plan.md`
+> 当前执行进度：第一轮提交 1 到 14 与第二轮收口提交 15 到 19 均已完成。本文档保留为第一轮拆分方案记录，终态结构以 `architecture.md` 与 `refactor_closure_plan.md` 的验收状态为准。
 
 本文档给出 SCANN v2 当前代码结构的完整重构拆分方案，目标是降低 GUI 热点类的复杂度，恢复 Core → Service → GUI 的单向依赖，降低跨层直接耦合，同时保证功能连续可用、测试可逐步迁移。
 

@@ -33,8 +33,13 @@ SCANN v2 (Star/Source Classification and Analysis Neural Network) 是一个天�
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │                         GUI Layer (PyQt5)                            │
-│  MainWindow │ ImageViewer │ Widgets │ Dialogs                        │
+│  MainWindow │ Composition │ Controllers │ Presenters │ Widgets │ Dialogs │
 │  ┌─────────────────────────────────────────────────────────────────┐ │
+│  │ Composition: MainWindowBuilder │ MainWindowWiring              │ │
+│  │ Controllers: ImageSession │ Pair │ Detection │ Query │ Model  │ │
+│  │             Training │ Preferences │ FileActions │ Help       │ │
+│  │ Presenters: CandidatePresenter │ StatusPresenter               │ │
+│  ├─────────────────────────────────────────────────────────────────┤ │
 │  │ Widgets:                                                        │ │
 │  │  OverlayLabel │ SuspectTable │ HistogramPanel │ BlinkSpeedSlider│ │
 │  │  CollapsibleSidebar │ MpcorbOverlay │ CoordinateLabel           │ │
@@ -173,7 +178,26 @@ SCANN v2 (Star/Source Classification and Analysis Neural Network) 是一个天�
 
 > 详见 [UI/UX 设计文档](ui_ux_design.md)
 
-#### main_window.py - 主窗口
+#### main_window.py - 主窗口骨架
+- 持有 `ui_parts`、presenter、controller 与运行态状态
+- 负责启动装配、少量窗口级视图动作和生命周期 glue
+- 不再直接承担菜单、中央布局、状态栏、快捷键的大段构建逻辑
+
+#### composition/ - GUI 组装层
+- `main_window_builder.py`: 创建菜单栏、中央区域、状态栏、histogram dock，并返回结构化 `ui_parts`
+- `main_window_wiring.py`: 负责 QAction 连接、控件 signal 装配和窗口级快捷键注册
+
+#### controllers/ - GUI 事件控制层
+- `ImageSessionController` / `PairController` / `DetectionController` / `QueryController`
+- `ModelController` / `TrainingController` / `PreferencesController`
+- `FileActionsController` / `AnnotationController` / `HelpController`
+- 职责是把 Qt 事件转成 service 调用，并把结果回写给 view / presenter
+
+#### presenters/ - GUI 展示层
+- `CandidatePresenter`: 负责候选体表格与图像 marker 刷新
+- `StatusPresenter`: 负责状态栏消息和日志输出
+
+#### 主要窗口内容
 - **菜单栏**: 文件 | 处理 | AI | 查询 | 视图 | 设置 | 帮助
 - **可折叠侧边栏** (240px, Ctrl+B 切换):
   - 文件夹按钮 (新图/旧图)

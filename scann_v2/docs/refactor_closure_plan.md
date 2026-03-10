@@ -2,26 +2,28 @@
 
 > 最后更新：2026年3月10日
 
-> 适用背景：原 1 到 14 次提交已完成第一轮控制器与服务边界拆分，但距离 `refactor_split_plan.md` 中定义的终态标准仍存在收口差距。本文件用于指导第二轮“收口式解耦”。
+> 当前状态：第二轮收口提交 A 到 E 已完成（2026年3月10日）。本文档保留为终态收口方案与验收记录。
 
 ---
 
 ## 1. 当前判断
 
-按终态标准验收，当前项目状态应定义为：
+按终态标准复核，当前项目状态应定义为：
 
-- 配置、模型、训练、查询、检测、配对、图像会话的主要边界已经建立
-- 主窗口中的大部分业务入口已经改为委托 controller
-- 但 `main_window.py` 仍未达到“窗口骨架 + 组件持有 + controller 装配 + 少量生命周期 glue code”的目标形态
+- 配置、模型、训练、查询、检测、配对、图像会话的主要边界已经建立并稳定委托到各 controller / service
+- `main_window.py` 已收敛为窗口骨架、组件持有、controller 装配与少量生命周期 glue code
+- composition 层已承接 UI 构建与 signal / shortcut wiring，残留辅助动作和历史兼容壳方法已收束完毕
 
 这意味着：
 
-- 第一轮重构已经完成“拆边界”
-- 第二轮重构需要完成“清兼容层、清装配热点、清残留直接依赖”
+- 第一轮重构定义的结构边界已经落地
+- 第二轮收口目标已经完成，本轮可作为第一阶段架构重构的正式收官记录
 
 ---
 
 ## 2. 与终态标准的主要差距
+
+以下差距项已在提交 15 到 19 中全部关闭，保留本节作为终态验收对照。
 
 ### 2.1 主窗口仍然过重
 
@@ -208,12 +210,21 @@
 
 ### 提交 E：清理 import 与文档验收
 
+状态：已完成（2026年3月10日）
+
 目标：
 
 - 清理主窗口未使用的 `core`、`data`、`ai` import
 - 对照终态标准重新更新 `architecture.md`
 - 补一轮人工检查结论
 - 将文档中的“已完成”状态与实际结构一致化
+
+完成记录：
+
+- 已清理 `src/scann/gui/main_window.py` 中历史残留且未使用的 `core`、`ai`、widget 级 direct import，剩余 import 均可解释为装配、状态类型或生命周期 glue
+- 已确认 `src/scann/services/` 下无 Qt 相关 import，service 层未回流依赖 GUI 组件
+- 已更新 `docs/architecture.md`，明确 composition、controller、presenter 在 GUI 层中的职责分工
+- 已同步更新 `docs/refactor_split_plan.md`、`docs/refactor_commit_checklist.md`、`docs/refactor_closure_plan.md` 与 `docs/refactor_closure_commit_checklist.md` 的状态描述，使其与当前代码结构一致
 
 ---
 
