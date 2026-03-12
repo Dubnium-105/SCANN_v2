@@ -3,18 +3,59 @@
 from __future__ import annotations
 
 from datetime import datetime
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
+from PyQt5.QtCore import QThread, pyqtSignal
 from PyQt5.QtWidgets import QApplication, QMenu
 
-from scann.core.astrometry import format_dec_dms, format_ra_hms, pixel_to_wcs
+from scann.core.astrometry import pixel_to_wcs
 from scann.core.models import Candidate, TargetVerdict
 from scann.core.observation_report import Observation, generate_mpc_report
 from scann.gui.dialogs.query_result_popup import QueryResultPopup
-from scann.services.query_service import QueryResult, QueryService
+from scann.services.query_service import QueryResponse, QueryService
+from scann.services.siril_astrometry import ResolvedSkyCoordinate
 
 if TYPE_CHECKING:
     from scann.gui.main_window import MainWindow
+
+
+class QueryWorker(QThread):
+    finished_with_response = pyqtSignal(str, str, object)
+
+    def __init__(
+        self,
+        service: QueryService,
+        query_type: str,
+        coordinate_text: str,
+        ra_deg: float,
+        dec_deg: float,
+        obs_datetime,
+        observatory,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self._service = service
+        self._query_type = query_type
+        self._coordinate_text = coordinate_text
+        self._ra_deg = ra_deg
+        self._dec_deg = dec_deg
+        self._obs_datetime = obs_datetime
+        self._observatory = observatory
+
+    def run(self) -> None:
+        response = self._service.execute_query(
+            self._query_type,
+            self._ra_deg,
+            self._dec_deg,
+            obs_datetime=self._obs_datetime,
+            observatory=self._observatory,
+        )
+        self.finished_with_response.emit(
+            self._query_type,
+            self._coordinate_text,
+            response,
+        )
 
 
 class QueryController:
@@ -27,6 +68,14 @@ class QueryController:
     ) -> None:
         self._window = window
         self._query_service = query_service
+        self._query_worker: QueryWorker | None = None
+
+    def populate_candidate_coordinates(self, candidates: list[Candidate]) -> None:
+        for candidate in candidates:
+            resolved = self._resolve_candidate_coordinate(candidate.x, candidate.y)
+            text = resolved.text if resolved is not None else "--"
+            setattr(candidate, "wcs_text", text)
+            setattr(candidate, "sky_position", (resolved.sky if resolved is not None else None))
 
     def image_clicked(self, x: int, y: int) -> None:
         self._window.status_pixel_coord.set_pixel_coordinates(x, y)
@@ -84,24 +133,33 @@ class QueryController:
         )
 
     def do_query(self, query_type: str, x: int, y: int) -> None:
-        if self._window._new_fits_header is not None:
-            sky = pixel_to_wcs(x, y, self._window._new_fits_header)
-            if sky:
-                ra_deg = sky.ra
-                dec_deg = sky.dec
+        resolved = self._resolve_candidate_coordinate(x, y)
+        if resolved is not None:
+                ra_deg = resolved.sky.ra
+                dec_deg = resolved.sky.dec
                 self._window._show_message(
-                    f"正在查询 {query_type} (RA={ra_deg:.4f}, Dec={dec_deg:.4f})...",
+                    f"正在查询 {query_type} ({resolved.text})...",
                     5000,
                 )
 
                 service = self._query_service or QueryService()
-                results = self._execute_query(
+                if query_type == "satellite":
+                    self._start_async_query(
+                        service,
+                        query_type,
+                        ra_deg,
+                        dec_deg,
+                        resolved.text,
+                    )
+                    return
+
+                response = self._execute_query(
                     service,
                     query_type,
                     ra_deg,
                     dec_deg,
                 )
-                self._show_query_results(query_type, ra_deg, dec_deg, results)
+                self._show_query_results(query_type, resolved.text, response)
                 return
 
         self._window._show_message(
@@ -134,8 +192,8 @@ class QueryController:
                 if candidate.verdict == TargetVerdict.BOGUS:
                     continue
 
-                sky = pixel_to_wcs(int(candidate.x), int(candidate.y), header)
-                if sky is None:
+                resolved = self._resolve_candidate_coordinate(int(candidate.x), int(candidate.y))
+                if resolved is None:
                     continue
 
                 observations.append(
@@ -143,8 +201,8 @@ class QueryController:
                         designation="",
                         discovery=False,
                         obs_datetime=obs_dt,
-                        ra_deg=sky.ra,
-                        dec_deg=sky.dec,
+                        ra_deg=resolved.sky.ra,
+                        dec_deg=resolved.sky.dec,
                         magnitude=0.0,
                         mag_band="C",
                         observatory_code=obs_code,
@@ -182,23 +240,58 @@ class QueryController:
         )
         self._window._candidates.append(candidate)
         self._window._current_candidate_idx = len(self._window._candidates) - 1
+        self.populate_candidate_coordinates(self._window._candidates)
         self._window.candidate_presenter.set_candidates(self._window._candidates)
         self._window._update_markers()
         self._window._show_message(f"已添加手动候选体 ({x}, {y})")
 
     def copy_wcs_coordinates(self, x: int, y: int) -> None:
-        if self._window._new_fits_header is None:
-            self._window._show_message("无 WCS 头信息，无法转换坐标")
-            return
-
-        sky = pixel_to_wcs(x, y, self._window._new_fits_header)
-        if sky:
-            text = f"{format_ra_hms(sky.ra)}  {format_dec_dms(sky.dec)}"
+        resolved = self._resolve_candidate_coordinate(x, y)
+        if resolved is not None:
+            text = resolved.text
             QApplication.clipboard().setText(text)
             self._window._show_message(f"已复制: {text}")
             return
 
         self._window._show_message("WCS 转换失败")
+
+    def _resolve_candidate_coordinate(self, x: int, y: int):
+        header = getattr(self._window, "_new_fits_header", None)
+        if header is None:
+            return None
+
+        detection_controller = getattr(self._window, "detection_controller", None)
+        if detection_controller is not None:
+            try:
+                exclusion_service = detection_controller.get_exclusion_service()
+                image_path = detection_controller.resolve_current_new_image_path()
+                resolved = exclusion_service.get_candidate_sky_coordinate(
+                    header,
+                    x,
+                    y,
+                    image_path=image_path,
+                )
+                sky = getattr(resolved, "position", None)
+                text = getattr(resolved, "normalized_coordinate", None)
+                if sky is not None and isinstance(text, str):
+                    ra = getattr(sky, "ra", None)
+                    dec = getattr(sky, "dec", None)
+                    if isinstance(ra, (int, float)) and isinstance(dec, (int, float)):
+                        return SimpleNamespace(
+                            sky=sky,
+                            text=text,
+                        )
+            except Exception:
+                pass
+
+        sky = pixel_to_wcs(x, y, header)
+        if sky is None:
+            return None
+        resolved = ResolvedSkyCoordinate.from_decimal_degrees(sky.ra, sky.dec)
+        return SimpleNamespace(
+            sky=sky,
+            text=resolved.normalized_coordinate,
+        )
 
     def _execute_query(
         self,
@@ -206,52 +299,112 @@ class QueryController:
         query_type: str,
         ra_deg: float,
         dec_deg: float,
-    ) -> list[QueryResult]:
-        try:
-            if query_type == "vsx":
-                return service.query_vsx(ra_deg, dec_deg)
-            if query_type == "mpc":
-                return service.query_mpc(ra_deg, dec_deg)
-            if query_type == "simbad":
-                return service.query_simbad(ra_deg, dec_deg)
-            if query_type == "tns":
-                return service.query_tns(ra_deg, dec_deg)
-            if query_type == "satellite":
-                obs_datetime = None
-                if self._window._new_fits_header is not None:
-                    obs_datetime = self._window._new_fits_header.observation_datetime
-                return service.check_satellite(ra_deg, dec_deg, obs_datetime=obs_datetime)
-        except Exception as exc:
-            self._window._show_message(f"查询失败: {exc}", 5000, level="WARNING")
-            return []
+    ) -> QueryResponse:
+        obs_datetime = None
+        if self._window._new_fits_header is not None:
+            obs_datetime = self._window._new_fits_header.observation_datetime
+        observatory = self._resolve_observatory()
+        kwargs = {"obs_datetime": obs_datetime}
+        if observatory is not None:
+            kwargs["observatory"] = observatory
+        return service.execute_query(
+            query_type,
+            ra_deg,
+            dec_deg,
+            **kwargs,
+        )
 
-        self._window._show_message(f"不支持的查询类型: {query_type}", 5000, level="WARNING")
-        return []
+    def _start_async_query(
+        self,
+        service: QueryService,
+        query_type: str,
+        ra_deg: float,
+        dec_deg: float,
+        coordinate_text: str,
+    ) -> None:
+        if self._query_worker is not None and self._query_worker.isRunning():
+            self._window._show_message("已有查询正在进行，请稍候", 5000)
+            return
+
+        obs_datetime = None
+        if self._window._new_fits_header is not None:
+            obs_datetime = self._window._new_fits_header.observation_datetime
+
+        observatory = self._resolve_observatory()
+
+        worker = QueryWorker(
+            service,
+            query_type,
+            coordinate_text,
+            ra_deg,
+            dec_deg,
+            obs_datetime,
+            observatory,
+            parent=self._window,
+        )
+        worker.finished_with_response.connect(self._handle_async_query_finished)
+        worker.finished.connect(self._clear_query_worker)
+        self._query_worker = worker
+        worker.start()
+
+    def _handle_async_query_finished(
+        self,
+        query_type: str,
+        coordinate_text: str,
+        response: QueryResponse,
+    ) -> None:
+        self._show_query_results(query_type, coordinate_text, response)
+
+    def _clear_query_worker(self) -> None:
+        self._query_worker = None
+
+    def _resolve_observatory(self):
+        config = getattr(self._window, "_config", None)
+        observatory = getattr(config, "observatory", None) if config is not None else None
+        if observatory is None:
+            return None
+
+        if any(
+            abs(value) > 0.0
+            for value in (
+                getattr(observatory, "longitude", 0.0),
+                getattr(observatory, "latitude", 0.0),
+                getattr(observatory, "altitude", 0.0),
+            )
+        ):
+            return observatory
+
+        if getattr(observatory, "code", "") or getattr(observatory, "name", ""):
+            return observatory
+        return None
 
     def _show_query_results(
         self,
         query_type: str,
-        ra_deg: float,
-        dec_deg: float,
-        results: list[QueryResult],
+        coordinate_text: str,
+        response: QueryResponse,
     ) -> None:
         popup = QueryResultPopup(
             title=f"{query_type.upper()} 查询结果",
             parent=self._window,
         )
-        if results:
+        if response.has_error:
+            popup.set_error(response.error)
+            popup.lbl_coords.setText(coordinate_text)
+            self._window._show_message(f"查询失败: {response.error}", 5000, level="WARNING")
+        elif response:
             lines = [
                 f"{result.name}  类型={result.object_type}  距离={result.distance_arcsec:.1f}″"
-                for result in results
+                for result in response
             ]
             popup.set_content(
                 "\n".join(lines),
-                coords=f"RA={ra_deg:.4f}  Dec={dec_deg:.4f}",
+                coords=coordinate_text,
             )
-            popup.set_success(count=len(results))
+            popup.set_success(count=len(response))
         else:
             popup.set_content(
                 "未找到匹配天体",
-                coords=f"RA={ra_deg:.4f}  Dec={dec_deg:.4f}",
+                coords=coordinate_text,
             )
         popup.show()

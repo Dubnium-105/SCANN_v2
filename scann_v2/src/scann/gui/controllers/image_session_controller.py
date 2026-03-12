@@ -6,8 +6,9 @@ from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
-from scann.core.astrometry import pixel_to_wcs, format_ra_hms, format_dec_dms
+from scann.core.astrometry import pixel_to_wcs
 from scann.core.image_processor import histogram_stretch
+from scann.services.siril_astrometry import ResolvedSkyCoordinate
 from scann.services.blink_service import BlinkState
 
 if TYPE_CHECKING:
@@ -135,9 +136,12 @@ class ImageSessionController:
         if header is not None:
             sky = pixel_to_wcs(x, y, header)
             if sky:
-                self._window.status_wcs_coord.set_wcs_coordinates(
-                    format_ra_hms(sky.ra),
-                    format_dec_dms(sky.dec),
+                resolved = ResolvedSkyCoordinate.from_decimal_degrees(
+                    sky.ra,
+                    sky.dec,
+                )
+                self._window.status_wcs_coord.set_coordinate_text(
+                    resolved.normalized_coordinate,
                 )
 
     def zoom_changed(self, zoom_pct: float) -> None:

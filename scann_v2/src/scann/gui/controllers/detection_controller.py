@@ -15,6 +15,7 @@ from scann.core.image_processor import denoise, pseudo_flat_field
 from scann.core.models import TargetVerdict
 from scann.data.file_manager import scan_fits_folder
 from scann.services.detection_service import DetectionPipeline
+from scann.services.exclusion_service import ExclusionService
 
 if TYPE_CHECKING:
     from scann.gui.main_window import MainWindow
@@ -25,6 +26,50 @@ class DetectionController:
 
     def __init__(self, window: MainWindow) -> None:
         self._window = window
+        self._exclusion_service: ExclusionService | None = None
+        self._exclusion_service_mpcorb_path: str = ""
+
+    def _get_exclusion_service(self) -> ExclusionService | None:
+        config = getattr(self._window, "_config", None)
+        if config is None:
+            if self._exclusion_service is None:
+                self._exclusion_service = ExclusionService()
+            return self._exclusion_service
+
+        mpcorb_path = getattr(config, "mpcorb_path", "") or ""
+        if self._exclusion_service is not None and self._exclusion_service_mpcorb_path == mpcorb_path:
+            return self._exclusion_service
+
+        service = ExclusionService(
+            mpcorb_path=mpcorb_path or None,
+            observatory=getattr(config, "observatory", None),
+        )
+        if mpcorb_path:
+            service.load_mpcorb()
+        self._exclusion_service = service
+        self._exclusion_service_mpcorb_path = mpcorb_path
+        return service
+
+    def get_exclusion_service(self) -> ExclusionService:
+        return self._get_exclusion_service()
+
+    def _resolve_current_new_image_path(self) -> str | None:
+        index = getattr(self._window, "_current_pair_idx", -1)
+        image_pairs = getattr(self._window, "_image_pairs", [])
+        if index < 0 or index >= len(image_pairs):
+            return None
+
+        pair = image_pairs[index]
+        resolver = getattr(self._window, "_resolve_pair_image_paths", None)
+        if callable(resolver):
+            new_path, _old_path, _using_aligned = resolver(pair)
+            return str(new_path)
+
+        new_path = getattr(pair, "new_path", None)
+        return str(new_path) if new_path is not None else None
+
+    def resolve_current_new_image_path(self) -> str | None:
+        return self._resolve_current_new_image_path()
 
     def batch_align(self) -> None:
         if not self._window._image_pairs:
@@ -344,6 +389,7 @@ class DetectionController:
         pipeline = DetectionPipeline(
             detection_params=self.build_detection_params(),
             inference_engine=self._window._inference_engine,
+            exclusion_service=self._get_exclusion_service(),
             patch_size=self._window._config.slice_size,
         )
         result = pipeline.process_pair(
@@ -353,6 +399,8 @@ class DetectionController:
             skip_align=bool(
                 self._window.__dict__.get("_current_pair_using_aligned", False)
             ),
+            header=getattr(self._window, "_new_fits_header", None),
+            image_path=self._resolve_current_new_image_path(),
         )
 
         if result.candidates:

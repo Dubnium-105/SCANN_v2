@@ -119,7 +119,9 @@ class TestImageSessionController:
 
         mock_pixel_to_wcs.assert_called_once_with(64, 32, window._new_fits_header)
         window.status_pixel_coord.set_pixel_coordinates.assert_called_once_with(64, 32)
-        window.status_wcs_coord.set_wcs_coordinates.assert_called_once()
+        window.status_wcs_coord.set_coordinate_text.assert_called_once_with(
+            "12 02 00.00 +45 18 00.00"
+        )
 
     def test_set_image_data_updates_window_state_and_refreshes(self):
         window = _make_window()

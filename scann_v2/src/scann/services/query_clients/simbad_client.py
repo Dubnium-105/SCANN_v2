@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import List
+import warnings
 
-from scann.services.query_models import QueryResult
+from scann.services.query_models import QueryResponse, QueryResult
 from scann.services.query_utils import calculate_distance
 
 
@@ -15,25 +15,22 @@ class SimbadClient:
         ra_deg: float,
         dec_deg: float,
         radius_arcsec: float = 10.0,
-    ) -> List[QueryResult]:
+    ) -> QueryResponse:
         try:
             import astropy.units as u
             from astropy.coordinates import SkyCoord
+            from astroquery.exceptions import NoResultsWarning
             from astroquery.simbad import Simbad
 
-            Simbad.reset_votable_fields()
-            Simbad.add_votable_fields(
-                "ra(d;ICRS;J2000)",
-                "dec(d;ICRS;J2000)",
-                "otype",
-                "flux(V)",
-                "coo_bibcode",
-            )
+            simbad = Simbad()
+            simbad.add_votable_fields("otype", "V")
 
             coord = SkyCoord(ra=ra_deg * u.degree, dec=dec_deg * u.degree, frame="icrs")
-            result_table = Simbad.query_region(coord, radius=radius_arcsec * u.arcsec)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", NoResultsWarning)
+                result_table = simbad.query_region(coord, radius=radius_arcsec * u.arcsec)
             if result_table is None:
-                return []
+                return QueryResponse(results=[])
 
             type_map = {
                 "*": "Star",
@@ -51,15 +48,22 @@ class SimbadClient:
             }
             results = []
             for row in result_table:
-                name = row["MAIN_ID"].decode() if isinstance(row["MAIN_ID"], bytes) else row["MAIN_ID"]
-                item_ra = float(row["RA_d_ICRS_J2000"])
-                item_dec = float(row["DEC_d_ICRS_J2000"])
+                name_value = row["main_id"]
+                name = name_value.decode() if isinstance(name_value, bytes) else str(name_value)
+                row_coord = SkyCoord(
+                    ra=str(row["ra"]),
+                    dec=str(row["dec"]),
+                    unit=(u.hourangle, u.deg),
+                    frame="icrs",
+                )
+                item_ra = row_coord.ra.degree
+                item_dec = row_coord.dec.degree
                 distance = calculate_distance(ra_deg, dec_deg, item_ra, item_dec)
-                obj_type = row["OTYPE"]
+                obj_type = row["otype"]
                 if isinstance(obj_type, bytes):
                     obj_type = obj_type.decode()
                 magnitude = 0.0
-                mag_value = row["FLUX_V"]
+                mag_value = row["V"]
                 if mag_value is not None:
                     try:
                         magnitude = float(mag_value)
@@ -72,12 +76,14 @@ class SimbadClient:
                         object_type=type_map.get(obj_type, obj_type),
                         distance_arcsec=distance,
                         magnitude=magnitude,
-                        url=f"http://simbad.u-strasbg.fr/simbad/sim-id?Ident={name}",
+                        url=f"https://simbad.cds.unistra.fr/simbad/sim-id?Ident={name}",
                         raw_data={"row": row},
                     )
                 )
-            return results
+            return QueryResponse(results=results)
         except ImportError:
-            return []
-        except Exception:
-            return []
+            return QueryResponse(error="SIMBAD 查询依赖缺失: astroquery 或 astropy 未安装")
+        except OSError as exc:
+            return QueryResponse(error=f"SIMBAD 网络访问失败: {exc}")
+        except Exception as exc:
+            return QueryResponse(error=f"SIMBAD 查询异常: {exc}")

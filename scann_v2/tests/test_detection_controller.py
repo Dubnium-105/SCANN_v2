@@ -18,6 +18,7 @@ def _make_window() -> Mock:
     window._candidates_cache = {}
     window._new_image_data = None
     window._old_image_data = None
+    window._new_fits_header = None
     window._current_pair_using_aligned = False
     window._image_pairs = []
     window._new_folder = ""
@@ -38,6 +39,8 @@ def _make_window() -> Mock:
         extent_max=0.8,
         topk=25,
         slice_size=128,
+        mpcorb_path="",
+        observatory=None,
     )
     window.suspect_table = Mock()
     window.image_viewer = Mock()
@@ -52,6 +55,7 @@ def _make_window() -> Mock:
     window._aligned_artifact_paths = Mock()
     window._pair_has_aligned_artifacts = Mock(return_value=False)
     window._calc_overlap_crop_bounds = Mock(return_value=(0, 4, 0, 4))
+    window._resolve_pair_image_paths = Mock(return_value=(Path("/tmp/new.fits"), Path("/tmp/old.fits"), False))
     window._load_pair = Mock()
     return window
 
@@ -125,6 +129,38 @@ def test_batch_detect_updates_candidates_and_cache(mock_pipeline_cls) -> None:
 
     window.set_candidates.assert_called_once_with(candidates)
     assert window._candidates_cache[2] == candidates
+
+
+@patch("scann.gui.controllers.detection_controller.ExclusionService")
+@patch("scann.gui.controllers.detection_controller.DetectionPipeline")
+def test_batch_detect_passes_header_and_image_path_to_pipeline(
+    mock_pipeline_cls,
+    mock_exclusion_service_cls,
+) -> None:
+    from scann.services.detection_service import PipelineResult
+
+    window = _make_window()
+    controller = DetectionController(window)
+    window._new_image_data = np.zeros((8, 8), dtype=np.float32)
+    window._old_image_data = np.ones((8, 8), dtype=np.float32)
+    window._new_fits_header = FitsHeader(raw={"RA": 180.0, "DEC": 0.0})
+    window._current_pair_idx = 0
+    window._image_pairs = [SimpleNamespace(new_path=Path("/tmp/new.fits"), old_path=Path("/tmp/old.fits"))]
+    window._config.mpcorb_path = "/tmp/MPCORB.DAT"
+
+    mock_exclusion_service = Mock()
+    mock_exclusion_service_cls.return_value = mock_exclusion_service
+
+    mock_pipeline = Mock()
+    mock_pipeline.process_pair.return_value = PipelineResult(pair_name="pair", candidates=[])
+    mock_pipeline_cls.return_value = mock_pipeline
+
+    controller.batch_detect()
+
+    assert mock_pipeline_cls.call_args.kwargs["exclusion_service"] is mock_exclusion_service
+    assert mock_pipeline.process_pair.call_args.kwargs["header"] is window._new_fits_header
+    assert Path(mock_pipeline.process_pair.call_args.kwargs["image_path"]) == Path("/tmp/new.fits")
+    mock_exclusion_service.load_mpcorb.assert_called_once_with()
 
 
 @patch("scann.gui.controllers.detection_controller.scan_fits_folder")

@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 from scann.core.models import Candidate, FitsHeader
 from scann.gui.controllers import DetectionController, QueryController
 from scann.gui.presenters import StatusPresenter
-from scann.services.query_service import QueryResult
+from scann.services.query_service import QueryResponse, QueryResult
 
 
 class _Signal:
@@ -153,14 +153,16 @@ class TestMainWindowQueryFlow:
         mock_pixel_to_wcs.return_value = sky
 
         service = Mock()
-        service.query_tns.return_value = [
-            QueryResult(
-                source="TNS",
-                name="AT2025abc",
-                object_type="Supernova",
-                distance_arcsec=1.5,
-            )
-        ]
+        service.execute_query.return_value = QueryResponse(
+            results=[
+                QueryResult(
+                    source="TNS",
+                    name="AT2025abc",
+                    object_type="Supernova",
+                    distance_arcsec=1.5,
+                )
+            ]
+        )
         mock_service_cls.return_value = service
 
         popup = Mock()
@@ -168,11 +170,16 @@ class TestMainWindowQueryFlow:
 
         window._do_query("tns", 50, 60)
 
-        service.query_tns.assert_called_once_with(180.5, -20.25)
+        service.execute_query.assert_called_once_with(
+            "tns",
+            180.5,
+            -20.25,
+            obs_datetime=None,
+        )
         popup.set_success.assert_called_once_with(count=1)
         popup.set_content.assert_called_once()
         content_args = popup.set_content.call_args.args
         content_kwargs = popup.set_content.call_args.kwargs
         assert "AT2025abc" in content_args[0]
-        assert "RA=180.5000" in content_kwargs["coords"]
+        assert content_kwargs["coords"] == "12 02 00.00 -20 15 00.00"
         popup.show.assert_called_once()

@@ -658,6 +658,9 @@ class MainWindow(QMainWindow):
         """设置检测到的候选体列表"""
         self._candidates = candidates
         self._current_candidate_idx = 0 if candidates else -1
+        query_controller = self.__dict__.get("query_controller")
+        if query_controller is not None:
+            query_controller.populate_candidate_coordinates(candidates)
         self.candidate_presenter.set_candidates(candidates)
         self._update_markers()
 

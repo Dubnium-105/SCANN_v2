@@ -3,6 +3,8 @@ torchvision
 numpy
 opencv-python
 PyQt5
+astropy
+astroquery
 requests
 beautifulsoup4
 urllib3

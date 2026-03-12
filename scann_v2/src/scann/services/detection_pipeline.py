@@ -55,6 +55,8 @@ class DetectionPipeline:
         new_data: np.ndarray,
         old_data: np.ndarray,
         skip_align: bool = False,
+        header=None,
+        image_path: str | None = None,
     ) -> PipelineResult:
         """处理单对图像。"""
         ai_available = (
@@ -159,6 +161,11 @@ class DetectionPipeline:
             )
 
         if self.exclusion_service:
+            candidates = self.exclusion_service.check_candidates(
+                candidates,
+                header=header,
+                image_path=image_path,
+            )
             candidates = self._exclude_known(candidates)
 
         candidates.sort(key=lambda candidate: candidate.ai_score, reverse=True)

@@ -432,6 +432,9 @@ class TestPublicAPI:
         w.set_candidates(cands)
         assert w._candidates is cands
         assert w._current_candidate_idx == 0
+        query_controller = w.__dict__.get("query_controller")
+        if query_controller is not None:
+            query_controller.populate_candidate_coordinates.assert_called_once_with(cands)
         w.suspect_table.set_candidates.assert_called_with(cands)
 
     def test_set_candidates_empty(self):

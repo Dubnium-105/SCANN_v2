@@ -6,11 +6,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import List, Optional
 
-import numpy as np
-
 from scann.core.models import Candidate, FitsHeader, ObservatoryConfig, SkyPosition
+from scann.services.siril_astrometry import (
+    CandidateSkyCoordinateCache,
+    ResolvedSkyCoordinate,
+    SirilAstrometryResolver,
+)
 
 
 class ExclusionService:
@@ -25,12 +29,16 @@ class ExclusionService:
         observatory: Optional[ObservatoryConfig] = None,
         limit_magnitude: float = 20.0,
         match_radius_arcsec: float = DEFAULT_MATCH_RADIUS_ARCSEC,
+        coordinate_resolver=None,
+        coordinate_cache: Optional[CandidateSkyCoordinateCache] = None,
     ):
         self.mpcorb_path = mpcorb_path
         self.observatory = observatory or ObservatoryConfig()
         self.limit_magnitude = limit_magnitude
         self.match_radius_arcsec = match_radius_arcsec
         self._asteroids = None
+        self._coordinate_resolver = coordinate_resolver or SirilAstrometryResolver()
+        self._coordinate_cache = coordinate_cache or CandidateSkyCoordinateCache()
 
     def load_mpcorb(self) -> int:
         """加载 MPCORB 数据
@@ -47,41 +55,107 @@ class ExclusionService:
         self._asteroids = filter_by_magnitude(all_asteroids, self.limit_magnitude)
         return len(self._asteroids)
 
-    def _pixel_to_sky(self, header: FitsHeader, x: float, y: float) -> SkyPosition:
-        """将像素坐标转换为天球坐标
+    def get_candidate_sky_coordinate(
+        self,
+        header: FitsHeader,
+        x: float,
+        y: float,
+        image_path: Optional[str | Path] = None,
+    ) -> ResolvedSkyCoordinate:
+        """获取候选体天球坐标，并在服务层缓存结果。"""
+        if image_path:
+            try:
+                return self._coordinate_cache.get_or_resolve(
+                    image_path,
+                    x,
+                    y,
+                    self._coordinate_resolver,
+                )
+            except Exception:
+                pass
 
-        使用简单的 WCS 转换（假设线性 WCS）：
-        sky = CRVAL + (pixel - CRPIX) * CDELT
+        return self._fallback_coordinate(header, x, y)
 
-        Args:
-            header: FITS 头
-            x: 像素 X 坐标
-            y: 像素 Y 坐标
+    def get_cached_candidate_sky_coordinate(
+        self,
+        image_path: str | Path,
+        x: float,
+        y: float,
+    ) -> Optional[ResolvedSkyCoordinate]:
+        """返回当前已缓存的候选体天球坐标。"""
+        return self._coordinate_cache.get(image_path, x, y)
 
-        Returns:
-            天球坐标
-        """
-        # 获取 WCS 参数
+    def _pixel_to_sky(
+        self,
+        header: FitsHeader,
+        x: float,
+        y: float,
+        image_path: Optional[str | Path] = None,
+    ) -> SkyPosition:
+        """将像素坐标转换为天球坐标。"""
+        return self.get_candidate_sky_coordinate(
+            header,
+            x,
+            y,
+            image_path=image_path,
+        ).position
+
+    def _fallback_coordinate(
+        self,
+        header: FitsHeader,
+        x: float,
+        y: float,
+    ) -> ResolvedSkyCoordinate:
+        """当 Siril 无法解析时，退回到 FITS header 的线性 WCS。"""
         crval1 = header.raw.get("CRVAL1")
         crval2 = header.raw.get("CRVAL2")
         crpix1 = header.raw.get("CRPIX1", 1.0)
         crpix2 = header.raw.get("CRPIX2", 1.0)
-        cdelt1 = header.raw.get("CDELT1", 1.0/3600.0)  # 默认 1 角秒/像素
+        cdelt1 = header.raw.get("CDELT1", 1.0/3600.0)
         cdelt2 = header.raw.get("CDELT2", 1.0/3600.0)
 
         if crval1 is None or crval2 is None:
-            # 如果没有 WCS 信息，使用 RA/DEC 字段
             ra = header.ra or 0.0
             dec = header.dec or 0.0
-            return SkyPosition(ra=ra, dec=dec)
+            if header.ra is None or header.dec is None:
+                raise ValueError("FITS 头缺少可用的天球坐标信息")
+            return self._resolved_from_position(SkyPosition(ra=ra, dec=dec))
 
-        # 计算 RA
         ra = float(crval1) + (x - float(crpix1)) * float(cdelt1)
-
-        # 计算 Dec
         dec = float(crval2) + (y - float(crpix2)) * float(cdelt2)
 
-        return SkyPosition(ra=ra, dec=dec)
+        return self._resolved_from_position(SkyPosition(ra=ra, dec=dec))
+
+    def _resolved_from_position(self, position: SkyPosition) -> ResolvedSkyCoordinate:
+        ra_hms, dec_dms = self._to_hms_dms(position)
+        return ResolvedSkyCoordinate(
+            position=position,
+            raw_coordinate=f"{ra_hms}{dec_dms}",
+            normalized_coordinate=self._normalize_hms_dms(ra_hms, dec_dms),
+        )
+
+    def _to_hms_dms(self, position: SkyPosition) -> tuple[str, str]:
+        ra_hours = position.ra / 15.0
+        ra_h = int(ra_hours)
+        ra_m_float = (ra_hours - ra_h) * 60.0
+        ra_m = int(ra_m_float)
+        ra_s = (ra_m_float - ra_m) * 60.0
+
+        dec_sign = "+" if position.dec >= 0 else "-"
+        dec_abs = abs(position.dec)
+        dec_d = int(dec_abs)
+        dec_m_float = (dec_abs - dec_d) * 60.0
+        dec_m = int(dec_m_float)
+        dec_s = (dec_m_float - dec_m) * 60.0
+
+        return (
+            f"{ra_h:02d}h{ra_m:02d}m{ra_s:05.2f}s",
+            f"{dec_sign}{dec_d:02d}°{dec_m:02d}'{dec_s:05.2f}\"",
+        )
+
+    def _normalize_hms_dms(self, ra_hms: str, dec_dms: str) -> str:
+        resolved = ResolvedSkyCoordinate.from_hms_dms(ra_hms=ra_hms, dec_dms=dec_dms)
+        return resolved.normalized_coordinate
 
     def _calculate_angular_distance(
         self,
@@ -124,6 +198,7 @@ class ExclusionService:
         self,
         candidates: List[Candidate],
         header: Optional[FitsHeader] = None,
+        image_path: Optional[str | Path] = None,
     ) -> List[Candidate]:
         """检查候选体是否为已知天体
 
@@ -154,8 +229,12 @@ class ExclusionService:
 
         # 检查每个候选体
         for candidate in candidates:
-            # 将像素坐标转为天球坐标
-            sky_pos = self._pixel_to_sky(header, candidate.x, candidate.y)
+            sky_pos = self._pixel_to_sky(
+                header,
+                candidate.x,
+                candidate.y,
+                image_path=image_path,
+            )
 
             # 查找匹配的已知天体
             for known in known_objects:
@@ -163,7 +242,6 @@ class ExclusionService:
                 distance = self._calculate_angular_distance(sky_pos, known_pos)
 
                 if distance <= self.match_radius_arcsec:
-                    # 找到匹配，标记为已知
                     candidate.is_known = True
                     candidate.known_id = known['id']
                     break

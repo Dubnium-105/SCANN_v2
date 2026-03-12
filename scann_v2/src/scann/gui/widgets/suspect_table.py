@@ -207,8 +207,8 @@ class SuspectTableWidget(QWidget):
         item_pixel.setTextAlignment(Qt.AlignCenter)
         self.table.setItem(row, self.COL_PIXEL, item_pixel)
 
-        # WCS 坐标 (暂用占位)
-        item_wcs = QTableWidgetItem("--")
+        wcs_text = getattr(cand, "wcs_text", "--") or "--"
+        item_wcs = QTableWidgetItem(wcs_text)
         item_wcs.setTextAlignment(Qt.AlignCenter)
         self.table.setItem(row, self.COL_WCS, item_wcs)
 

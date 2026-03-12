@@ -31,7 +31,7 @@ from scann.core.models import (
 from scann.services.blink_service import BlinkState
 from scann.gui.controllers import ModelController
 from scann.services.model_service import ModelService
-from scann.services.query_service import QueryResult
+from scann.services.query_service import QueryResponse, QueryResult
 
 
 # ═══════════════════════════════════════════════
@@ -806,7 +806,9 @@ class TestWCSSync:
             w._on_mouse_moved(64, 64)
 
             mock_p2w.assert_called_once()
-            w.status_wcs_coord.set_wcs_coordinates.assert_called()
+            w.status_wcs_coord.set_coordinate_text.assert_called_once_with(
+                "12 02 00.00 +45 18 00.00"
+            )
 
     def test_mouse_moved_no_wcs_header(self):
         """无WCS头信息时不应更新天球坐标"""
@@ -816,7 +818,7 @@ class TestWCSSync:
         w._on_mouse_moved(64, 64)
 
         w.status_pixel_coord.set_pixel_coordinates.assert_called_with(64, 64)
-        w.status_wcs_coord.set_wcs_coordinates.assert_not_called()
+        w.status_wcs_coord.set_coordinate_text.assert_not_called()
 
 
 # ═══════════════════════════════════════════════
@@ -1161,12 +1163,12 @@ class TestQueryIntegration:
         with patch("scann.gui.controllers.query_controller.pixel_to_wcs", return_value=mock_sky):
             with patch("scann.gui.controllers.query_controller.QueryService") as mock_svc_cls:
                 mock_svc = Mock()
-                mock_svc.query_vsx.return_value = [
+                mock_svc.execute_query.return_value = QueryResponse(results=[
                     QueryResult(
                         source="VSX", name="V1234 Sgr",
                         object_type="EA", distance_arcsec=2.5,
                     )
-                ]
+                ])
                 mock_svc_cls.return_value = mock_svc
 
                 with patch("scann.gui.controllers.query_controller.QueryResultPopup") as mock_popup_cls:
@@ -1175,7 +1177,9 @@ class TestQueryIntegration:
 
                     w._do_query("vsx", 50, 50)
 
-                    mock_svc.query_vsx.assert_called_once()
+                    mock_svc.execute_query.assert_called_once_with(
+                        "vsx", 180.0, 45.0, obs_datetime=None
+                    )
                     mock_popup.set_content.assert_called_once()
                     mock_popup.show.assert_called_once()
 
@@ -1191,7 +1195,7 @@ class TestQueryIntegration:
         with patch("scann.gui.controllers.query_controller.pixel_to_wcs", return_value=mock_sky):
             with patch("scann.gui.controllers.query_controller.QueryService") as mock_svc_cls:
                 mock_svc = Mock()
-                mock_svc.query_mpc.return_value = []
+                mock_svc.execute_query.return_value = QueryResponse(results=[])
                 mock_svc_cls.return_value = mock_svc
 
                 with patch("scann.gui.controllers.query_controller.QueryResultPopup") as mock_popup_cls:
@@ -1200,7 +1204,9 @@ class TestQueryIntegration:
 
                     w._do_query("mpc", 50, 50)
 
-                    mock_svc.query_mpc.assert_called_once()
+                    mock_svc.execute_query.assert_called_once_with(
+                        "mpc", 200.0, -10.0, obs_datetime=None
+                    )
 
     def test_do_query_simbad(self):
         """SIMBAD 查询应调用 query_simbad"""
@@ -1214,7 +1220,7 @@ class TestQueryIntegration:
         with patch("scann.gui.controllers.query_controller.pixel_to_wcs", return_value=mock_sky):
             with patch("scann.gui.controllers.query_controller.QueryService") as mock_svc_cls:
                 mock_svc = Mock()
-                mock_svc.query_simbad.return_value = []
+                mock_svc.execute_query.return_value = QueryResponse(results=[])
                 mock_svc_cls.return_value = mock_svc
 
                 with patch("scann.gui.controllers.query_controller.QueryResultPopup") as mock_popup_cls:
@@ -1223,7 +1229,9 @@ class TestQueryIntegration:
 
                     w._do_query("simbad", 50, 50)
 
-                    mock_svc.query_simbad.assert_called_once()
+                    mock_svc.execute_query.assert_called_once_with(
+                        "simbad", 100.0, 20.0, obs_datetime=None
+                    )
 
     def test_do_query_no_wcs_fallback(self):
         """无 WCS 时应提示并使用像素坐标"""
@@ -1248,7 +1256,7 @@ class TestQueryIntegration:
         with patch("scann.gui.controllers.query_controller.pixel_to_wcs", return_value=mock_sky):
             with patch("scann.gui.controllers.query_controller.QueryService") as mock_svc_cls:
                 mock_svc = Mock()
-                mock_svc.query_tns.return_value = []
+                mock_svc.execute_query.return_value = QueryResponse(results=[])
                 mock_svc_cls.return_value = mock_svc
 
                 with patch("scann.gui.controllers.query_controller.QueryResultPopup") as mock_popup_cls:
@@ -1257,7 +1265,9 @@ class TestQueryIntegration:
 
                     w._do_query("tns", 50, 50)
 
-                    mock_svc.query_tns.assert_called_once()
+                    mock_svc.execute_query.assert_called_once_with(
+                        "tns", 150.0, 30.0, obs_datetime=None
+                    )
 
 
 # ═══════════════════════════════════════════════

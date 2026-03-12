@@ -82,6 +82,11 @@ class TestSetCandidates:
         table.set_candidates(sample_candidates)
         assert "(100, 200)" in table.table.item(0, 2).text()
 
+    def test_wcs_column_uses_candidate_wcs_text(self, table, sample_candidates):
+        sample_candidates[0].wcs_text = "10 49 28.34 +34 43 01.27"
+        table.set_candidates(sample_candidates)
+        assert table.table.item(0, table.COL_WCS).text() == "10 49 28.34 +34 43 01.27"
+
     def test_verdict_column_default_unknown(self, table, sample_candidates):
         table.set_candidates(sample_candidates)
         assert "──" in table.table.item(0, 4).text()

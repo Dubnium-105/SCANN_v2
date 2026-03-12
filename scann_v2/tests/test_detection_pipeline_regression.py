@@ -3,6 +3,7 @@ from unittest.mock import Mock, patch
 import numpy as np
 
 from scann.core.models import AlignResult, Candidate
+from scann.core.models import FitsHeader
 from scann.services.detection_service import DetectionPipeline, PipelineResult
 
 
@@ -81,6 +82,10 @@ class TestDetectionPipelineRegression:
             exclusion_service=Mock(),
             patch_size=16,
         )
+        pipeline.exclusion_service.check_candidates.return_value = [
+            kept_candidate,
+            removed_candidate,
+        ]
         mock_align.return_value = AlignResult(
             aligned_old=np.zeros((32, 32), dtype=np.float32),
             success=True,
@@ -93,6 +98,41 @@ class TestDetectionPipelineRegression:
 
         assert result.candidates == [kept_candidate]
         mock_exclude.assert_called_once()
+
+    @patch("scann.services.detection_service.detect_candidates")
+    @patch("scann.services.detection_service.align")
+    def test_process_pair_passes_header_and_image_path_to_exclusion_service(
+        self,
+        mock_align,
+        mock_detect,
+    ):
+        exclusion_service = Mock()
+        exclusion_service.check_candidates.side_effect = lambda candidates, header=None, image_path=None: candidates
+
+        pipeline = DetectionPipeline(exclusion_service=exclusion_service)
+        mock_align.return_value = AlignResult(
+            aligned_old=np.zeros((16, 16), dtype=np.float32),
+            success=True,
+        )
+        mock_detect.return_value = [Candidate(x=5, y=6)]
+
+        image = np.ones((16, 16), dtype=np.float32)
+        header = FitsHeader(raw={"RA": 1.0, "DEC": 2.0})
+        image_path = "C:/data/example.fit"
+
+        pipeline.process_pair(
+            "pair-005",
+            image,
+            image,
+            header=header,
+            image_path=image_path,
+        )
+
+        exclusion_service.check_candidates.assert_called_once_with(
+            mock_detect.return_value,
+            header=header,
+            image_path=image_path,
+        )
 
     @patch("scann.services.detection_service.align")
     def test_process_pair_skip_align_bypasses_alignment(self, mock_align):
