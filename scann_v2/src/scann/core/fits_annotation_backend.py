@@ -23,6 +23,10 @@ from scann.core.annotation_models import (
     BBox,
     ExportResult,
 )
+from scann.core.fits_io import read_fits, write_fits
+from scann.core.image_aligner import align
+from scann.data.file_manager import match_new_old_pairs
+from scann.services.pair_service import PairService
 
 logger = logging.getLogger(__name__)
 
@@ -44,11 +48,12 @@ class FitsAnnotationBackend(AnnotationBackend):
         self._annotations_path: Optional[Path] = None
         # 内部映射: sample_id → {new_path, old_path}
         self._image_paths: dict[str, dict[str, str]] = {}
+        self._pair_service = PairService()
 
     # ─── 抽象方法实现 ───
 
     def load_samples(self, path: str, filter: str = "all") -> list[AnnotationSample]:
-        """扫描 FITS 目录并自动配对 new/old 文件"""
+        """扫描 FITS 目录；v2 优先对齐配对并只读取 __aligned_crop.fts。"""
         root = Path(path)
         if not root.exists():
             raise FileNotFoundError(f"数据集路径不存在: {path}")
@@ -57,86 +62,17 @@ class FitsAnnotationBackend(AnnotationBackend):
         self._samples.clear()
         self._image_paths.clear()
 
-        new_dir = root / "new"
-        old_dir = root / "old"
-
-        # 收集 FITS 文件
-        new_files: dict[str, Path] = {}
-        old_files: dict[str, Path] = {}
-
-        if new_dir.is_dir():
-            for f in sorted(new_dir.iterdir()):
-                if f.suffix.lower() in _FITS_EXTS:
-                    new_files[f.stem] = f
-
-        if old_dir.is_dir():
-            for f in sorted(old_dir.iterdir()):
-                if f.suffix.lower() in _FITS_EXTS:
-                    old_files[f.stem] = f
-
-        # 也扫描根目录下的 FITS 文件 (无 new/old 子目录时)
-        if not new_files and not old_files:
-            for f in sorted(root.iterdir()):
-                if f.is_file() and f.suffix.lower() in _FITS_EXTS:
-                    new_files[f.stem] = f
-
-        # ─── 智能配对: 处理 FW_ 等常见前缀差异 ───
-        # 构建旧图名称→路径映射 (去掉 FW_ 前缀后匹配)
-        _STRIP_PREFIXES = ("FW_", "fw_", "Fw_")
-
-        def _normalize_stem(stem: str) -> str:
-            """去除常见前缀用于匹配"""
-            for prefix in _STRIP_PREFIXES:
-                if stem.startswith(prefix):
-                    return stem[len(prefix):]
-            return stem
-
-        # 为旧图建立 normalized_stem → original_stem 映射
-        old_norm_map: dict[str, str] = {}
-        for stem in old_files:
-            norm = _normalize_stem(stem)
-            old_norm_map[norm] = stem
-
-        # 尝试将 new 文件与 old 文件匹配（先精确匹配，再去前缀匹配）
-        matched_old_stems: set[str] = set()
-        new_to_old: dict[str, str] = {}  # new_stem → old_stem
-        for stem in new_files:
-            if stem in old_files:
-                new_to_old[stem] = stem
-                matched_old_stems.add(stem)
-            else:
-                # 尝试 normalize 后匹配
-                norm = _normalize_stem(stem)
-                if norm in old_norm_map:
-                    old_stem = old_norm_map[norm]
-                    if old_stem not in matched_old_stems:
-                        new_to_old[stem] = old_stem
-                        matched_old_stems.add(old_stem)
-
-        # 配对: 以 new 为主 + 未匹配的 old
-        unmatched_old = set(old_files.keys()) - matched_old_stems
-        all_stems = sorted(new_files.keys())
-        # 追加仅存在于 old 中的未匹配项
-        all_stems.extend(sorted(unmatched_old))
+        self._ensure_aligned_crop_files(root)
+        aligned_pairs = self._collect_aligned_pairs(root)
 
         # 加载已有 JSON 标注
         existing_annotations = self._load_annotations_json(root)
 
-        for stem in all_stems:
-            new_path = new_files.get(stem)
-            # 使用智能配对映射查找对应旧图
-            old_stem = new_to_old.get(stem, stem)
-            old_path = old_files.get(old_stem) if new_path else old_files.get(stem)
-
-            # 使用 new 或 old 中存在的扩展名
+        for sample_id, new_path, old_path in aligned_pairs:
             ref_file = new_path or old_path
-            if ref_file is None:
-                continue
-
-            sample_id = stem
             sample = AnnotationSample(
                 id=sample_id,
-                source_path=str(new_path or old_path),
+                source_path=str(new_path or old_path or ""),
                 display_name=ref_file.name,
             )
 
@@ -154,6 +90,8 @@ class FitsAnnotationBackend(AnnotationBackend):
                     sample.label = ann["label"]
                 if ann.get("detail_type"):
                     sample.detail_type = ann["detail_type"]
+                sample.ai_suggestion = ann.get("ai_suggestion")
+                sample.ai_confidence = ann.get("ai_confidence")
 
             self._image_paths[sample_id] = {
                 "new": str(new_path) if new_path else "",
@@ -220,6 +158,43 @@ class FitsAnnotationBackend(AnnotationBackend):
         ))
 
         # 持久化到 JSON
+        self._save_annotations_json()
+
+    def apply_ai_preannotations(
+        self,
+        sample_id: str,
+        bboxes: list[BBox],
+        ai_suggestion: Optional[str] = None,
+        ai_confidence: Optional[float] = None,
+    ) -> None:
+        """写入 AI 预标注结果并持久化。"""
+        sample = self.get_sample(sample_id)
+        if sample is None:
+            logger.warning("AI预标注失败: 样本 %s 不存在", sample_id)
+            return
+
+        old_value = {
+            "bboxes": [bbox.to_dict() for bbox in sample.bboxes],
+            "ai_suggestion": sample.ai_suggestion,
+            "ai_confidence": sample.ai_confidence,
+        }
+
+        sample.bboxes = [BBox.from_dict(bbox.to_dict()) for bbox in bboxes]
+        sample.ai_suggestion = ai_suggestion
+        sample.ai_confidence = ai_confidence
+
+        new_value = {
+            "bboxes": [bbox.to_dict() for bbox in sample.bboxes],
+            "ai_suggestion": sample.ai_suggestion,
+            "ai_confidence": sample.ai_confidence,
+        }
+
+        self._push_undo(AnnotationAction(
+            action_type="ai_prelabel",
+            sample_id=sample_id,
+            old_value=old_value,
+            new_value=new_value,
+        ))
         self._save_annotations_json()
 
     def get_image_data(
@@ -363,6 +338,183 @@ class FitsAnnotationBackend(AnnotationBackend):
             logger.warning(f"无法解析标注文件: {e}")
             return {}
 
+    def _ensure_aligned_crop_files(self, root: Path) -> None:
+        """为可匹配的新旧图生成对齐裁剪产物。"""
+        new_dir = root / "new"
+        old_dir = root / "old"
+        if not new_dir.is_dir() or not old_dir.is_dir():
+            return
+
+        pairs, _only_new, _only_old = match_new_old_pairs(str(new_dir), str(old_dir))
+        for pair in pairs:
+            new_aligned_path, old_aligned_path, new_marker_path, old_marker_path = (
+                self._pair_service.aligned_artifact_paths(pair)
+            )
+            if new_aligned_path.is_file() and old_aligned_path.is_file():
+                if not new_marker_path.exists() or not old_marker_path.exists():
+                    marker_text = "aligned=1\n"
+                    new_marker_path.write_text(marker_text, encoding="utf-8")
+                    old_marker_path.write_text(marker_text, encoding="utf-8")
+                continue
+
+            self._align_pair_to_crop(
+                pair,
+                new_aligned_path,
+                old_aligned_path,
+                new_marker_path,
+                old_marker_path,
+            )
+
+    def _align_pair_to_crop(
+        self,
+        pair,
+        new_aligned_path: Path,
+        old_aligned_path: Path,
+        new_marker_path: Path,
+        old_marker_path: Path,
+    ) -> None:
+        """执行单对图像对齐并写出裁剪产物。"""
+        try:
+            new_fits = read_fits(pair.new_path)
+            old_fits = read_fits(pair.old_path)
+        except Exception as exc:
+            logger.warning("标注集对齐读取失败: %s (%s)", pair.name, exc)
+            return
+
+        new_data = np.nan_to_num(
+            new_fits.data.astype(np.float32),
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+        old_data = np.nan_to_num(
+            old_fits.data.astype(np.float32),
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+
+        h, w = new_data.shape[:2]
+        fallback_max_shift = max(100, int(min(h, w) * 0.45))
+        result = align(
+            new_fits.data,
+            old_fits.data,
+            method="auto",
+            max_shift=fallback_max_shift,
+        )
+
+        if not result.success or result.aligned_old is None:
+            logger.warning("标注集对齐失败: %s (%s)", pair.name, result.error_message)
+            return
+
+        crop_bounds = self._pair_service.calc_overlap_crop_bounds(
+            w=w,
+            h=h,
+            dx=result.dx,
+            dy=result.dy,
+            aligned_old=result.aligned_old,
+        )
+        if crop_bounds is None:
+            logger.warning("标注集对齐后无有效重叠区域: %s", pair.name)
+            return
+
+        x0, x1, y0, y1 = crop_bounds
+        cropped_new = new_data[y0:y1, x0:x1]
+        cropped_old = result.aligned_old[y0:y1, x0:x1]
+
+        write_fits(new_aligned_path, cropped_new, new_fits.header)
+        write_fits(old_aligned_path, cropped_old, old_fits.header)
+        marker_text = (
+            "aligned=1\n"
+            f"dx={result.dx:.6f}\n"
+            f"dy={result.dy:.6f}\n"
+            f"crop={x0},{x1},{y0},{y1}\n"
+        )
+        new_marker_path.write_text(marker_text, encoding="utf-8")
+        old_marker_path.write_text(marker_text, encoding="utf-8")
+
+    def _collect_aligned_pairs(
+        self,
+        root: Path,
+    ) -> list[tuple[str, Optional[Path], Optional[Path]]]:
+        """仅收集 __aligned_crop.fts 产物，并按原始样本名配对。"""
+        new_dir = root / "new"
+        old_dir = root / "old"
+
+        if new_dir.is_dir() or old_dir.is_dir():
+            new_files = self._collect_aligned_files(new_dir)
+            old_files = self._collect_aligned_files(old_dir)
+            if not new_files and not old_files:
+                return []
+            return self._pair_aligned_files(new_files, old_files)
+
+        new_files = self._collect_aligned_files(root)
+        return [(sample_id, path, None) for sample_id, path in sorted(new_files.items())]
+
+    def _collect_aligned_files(self, folder: Path) -> dict[str, Path]:
+        """扫描目录中的 __aligned_crop.fts 文件。"""
+        if not folder.is_dir():
+            return {}
+
+        files: dict[str, Path] = {}
+        for file_path in sorted(folder.iterdir()):
+            if not file_path.is_file():
+                continue
+            if file_path.suffix.lower() != ".fts":
+                continue
+            if not file_path.stem.lower().endswith("__aligned_crop"):
+                continue
+            files[self._strip_aligned_crop_suffix(file_path.stem)] = file_path
+        return files
+
+    def _pair_aligned_files(
+        self,
+        new_files: dict[str, Path],
+        old_files: dict[str, Path],
+    ) -> list[tuple[str, Optional[Path], Optional[Path]]]:
+        """对齐产物配对，支持 FW_ 前缀兼容。"""
+        if not old_files:
+            return [(sample_id, path, None) for sample_id, path in sorted(new_files.items())]
+
+        old_norm_map = {
+            self._normalize_pair_stem(stem): stem
+            for stem in old_files
+        }
+
+        pairs: list[tuple[str, Optional[Path], Optional[Path]]] = []
+        matched_old: set[str] = set()
+        for sample_id, new_path in sorted(new_files.items()):
+            old_stem = None
+            if sample_id in old_files:
+                old_stem = sample_id
+            else:
+                norm = self._normalize_pair_stem(sample_id)
+                candidate = old_norm_map.get(norm)
+                if candidate is not None and candidate not in matched_old:
+                    old_stem = candidate
+
+            if old_stem is None:
+                continue
+
+            matched_old.add(old_stem)
+            pairs.append((sample_id, new_path, old_files[old_stem]))
+
+        return pairs
+
+    @staticmethod
+    def _strip_aligned_crop_suffix(stem: str) -> str:
+        suffix = "__aligned_crop"
+        if stem.lower().endswith(suffix):
+            return stem[:-len(suffix)]
+        return stem
+
+    @staticmethod
+    def _normalize_pair_stem(stem: str) -> str:
+        for prefix in ("FW_", "fw_", "Fw_"):
+            if stem.startswith(prefix):
+                return stem[len(prefix):]
+        return stem
+
     def _save_annotations_json(self) -> None:
         """将所有标注保存到 annotations.json"""
         if self._annotations_path is None:
@@ -382,6 +534,10 @@ class FitsAnnotationBackend(AnnotationBackend):
                 img_data["detail_type"] = s.detail_type
             if s.bboxes:
                 img_data["annotations"] = [b.to_dict() for b in s.bboxes]
+            if s.ai_suggestion is not None:
+                img_data["ai_suggestion"] = s.ai_suggestion
+            if s.ai_confidence is not None:
+                img_data["ai_confidence"] = s.ai_confidence
             images.append(img_data)
 
         doc = {

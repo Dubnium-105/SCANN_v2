@@ -132,7 +132,7 @@ class TestFitsLoad:
     def test_loaded_samples_have_ids(self, fits_backend):
         for s in fits_backend.samples:
             assert s.id  # 非空
-            assert s.display_name.endswith(".fits")
+            assert s.display_name.endswith("__aligned_crop.fts")
 
     def test_load_with_existing_annotations(self, fits_backend_with_annotations):
         """加载时应合并 JSON 中已有的标注"""
@@ -162,6 +162,34 @@ class TestFitsLoad:
     def test_samples_sorted(self, fits_backend):
         names = [s.display_name for s in fits_backend.samples]
         assert names == sorted(names)
+
+    def test_load_samples_aligns_pairs_and_only_reads_aligned_crop_fts(
+        self,
+        fits_dataset: Path,
+    ):
+        """加载 v2 数据集时应先对齐，再只读取 __aligned_crop.fts 产物。"""
+        from scann.core.fits_annotation_backend import FitsAnnotationBackend
+        from scann.core.models import AlignResult
+
+        backend = FitsAnnotationBackend()
+
+        def fake_align(new_data, old_data, method="auto", max_shift=None):
+            return AlignResult(
+                aligned_old=old_data.astype(np.float32),
+                dx=0.0,
+                dy=0.0,
+                success=True,
+            )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("scann.core.fits_annotation_backend.align", fake_align)
+            samples = backend.load_samples(str(fits_dataset))
+
+        assert len(samples) == 3
+        assert all(sample.display_name.endswith("__aligned_crop.fts") for sample in samples)
+        assert all(sample.source_path.endswith("__aligned_crop.fts") for sample in samples)
+        assert (fits_dataset / "new" / "field_001__aligned_crop.fts").exists()
+        assert (fits_dataset / "old" / "field_001__aligned_crop.fts").exists()
 
 
 # ─── supports_bbox ───
@@ -267,6 +295,40 @@ class TestFitsPersistence:
         assert "version" in data
         assert data["version"] == "2.0"
 
+    def test_apply_ai_preannotations_persists_ai_metadata(
+        self,
+        fits_backend,
+        fits_dataset: Path,
+    ):
+        """AI 预标注结果应写入并在重新加载后保留"""
+        from scann.core.fits_annotation_backend import FitsAnnotationBackend
+
+        sample = fits_backend.samples[0]
+        fits_backend.apply_ai_preannotations(
+            sample.id,
+            [
+                BBox(
+                    x=40,
+                    y=60,
+                    width=24,
+                    height=24,
+                    label=None,
+                    confidence=0.91,
+                )
+            ],
+            ai_suggestion="real",
+            ai_confidence=0.91,
+        )
+
+        reloaded = FitsAnnotationBackend()
+        reloaded.load_samples(str(fits_dataset))
+        restored = next(s for s in reloaded.samples if s.id == sample.id)
+
+        assert restored.ai_suggestion == "real"
+        assert restored.ai_confidence == pytest.approx(0.91)
+        assert len(restored.bboxes) == 1
+        assert restored.bboxes[0].confidence == pytest.approx(0.91)
+
 
 # ─── 图像数据测试 ───
 
@@ -280,7 +342,9 @@ class TestFitsImageData:
     def test_get_image_data_shape(self, fits_backend):
         sample = fits_backend.samples[0]
         img = fits_backend.get_image_data(sample)
-        assert img.shape == (256, 256)
+        assert img.ndim == 2
+        assert 0 < img.shape[0] <= 256
+        assert 0 < img.shape[1] <= 256
 
     def test_get_display_info(self, fits_backend):
         sample = fits_backend.samples[0]
@@ -490,20 +554,32 @@ class TestFwPrefixPairing:
     def test_fw_prefix_old_image_accessible(self, fw_dataset: Path):
         """配对后应能正确加载旧图数据"""
         from scann.core.fits_annotation_backend import FitsAnnotationBackend
+        from scann.core.models import AlignResult
 
         b = FitsAnnotationBackend()
-        samples = b.load_samples(str(fw_dataset))
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "scann.core.fits_annotation_backend.align",
+                lambda new_data, old_data, method="auto", max_shift=None: AlignResult(
+                    aligned_old=old_data.astype(np.float32),
+                    dx=0.0,
+                    dy=0.0,
+                    success=True,
+                ),
+            )
+            samples = b.load_samples(str(fw_dataset))
         sample = samples[0]
 
         # 加载新图
         new_data = b.get_image_data(sample, image_type="new")
         assert new_data is not None
-        assert new_data.shape == (64, 64)
 
         # 加载旧图
         old_data = b.get_image_data(sample, image_type="old")
         assert old_data is not None
-        assert old_data.shape == (64, 64)
+        assert new_data.shape == old_data.shape
+        assert 0 < new_data.shape[0] <= 64
+        assert 0 < new_data.shape[1] <= 64
 
     def test_exact_match_takes_priority(self, tmp_dir: Path):
         """精确名称匹配应优先于前缀去除匹配"""
@@ -528,10 +604,20 @@ class TestFwPrefixPairing:
         astro_fits.writeto(str(old_dir / "FW_img_001.fits"), data, header=hdr, overwrite=True)
 
         from scann.core.fits_annotation_backend import FitsAnnotationBackend
+        from scann.core.models import AlignResult
 
         b = FitsAnnotationBackend()
-        samples = b.load_samples(str(ds))
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "scann.core.fits_annotation_backend.align",
+                lambda new_data, old_data, method="auto", max_shift=None: AlignResult(
+                    aligned_old=old_data.astype(np.float32),
+                    dx=0.0,
+                    dy=0.0,
+                    success=True,
+                ),
+            )
+            samples = b.load_samples(str(ds))
 
-        # img_001 精确匹配 old/img_001, FW_img_001 为独立样本
-        # 应有 2 个样本: img_001 + FW_img_001
-        assert len(samples) == 2
+        assert len(samples) == 1
+        assert samples[0].id == "img_001"

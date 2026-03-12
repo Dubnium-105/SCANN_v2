@@ -61,8 +61,8 @@ class PairService:
         new_path = Path(pair.new_path)
         old_path = Path(pair.old_path)
         return (
-            new_path.with_name(f"{new_path.stem}__aligned_crop{new_path.suffix}"),
-            old_path.with_name(f"{old_path.stem}__aligned_crop{old_path.suffix}"),
+            new_path.with_name(f"{new_path.stem}__aligned_crop.fts"),
+            old_path.with_name(f"{old_path.stem}__aligned_crop.fts"),
             new_path.with_name(f"{new_path.stem}__aligned.marker"),
             old_path.with_name(f"{old_path.stem}__aligned.marker"),
         )

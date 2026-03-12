@@ -57,7 +57,7 @@
   "auto_collapse_sidebar": true,
   "confirm_before_close": true,
   "stretch_black_point": 0.0,
-  "stretch_white_point": 32767.0,
+  "stretch_white_point": 65535.0,
   "stretch_mode": "线性",
   "show_markers": true,
   "show_mpcorb": true,

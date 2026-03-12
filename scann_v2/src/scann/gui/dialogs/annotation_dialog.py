@@ -45,6 +45,7 @@ from scann.core.annotation_models import (
     AnnotationSample,
     BBox,
 )
+from scann.core.candidate_detector import DetectionParams
 from scann.core.models import AppConfig
 from scann.gui.widgets.annotation_list import AnnotationListWidget
 from scann.gui.widgets.annotation_stats import AnnotationStatsPanel
@@ -54,6 +55,7 @@ from scann.gui.widgets.triplet_preview import TripletPreviewPanel
 from scann.gui.widgets.histogram_panel import HistogramPanel
 from scann.gui.widgets.overlay_label import OverlayLabel
 from scann.core.image_processor import histogram_stretch
+from scann.services.detection_pipeline import DetectionPipeline
 
 
 class AnnotationDialog(QDialog):
@@ -615,6 +617,7 @@ class AnnotationDialog(QDialog):
         self._btn_close.clicked.connect(self.close)
         self._chk_auto_advance.toggled.connect(self._on_auto_advance_changed)
         self._btn_export.clicked.connect(self._on_export)
+        self._btn_ai_prelabel.clicked.connect(self._on_ai_prelabel)
 
         # 绘制工具栏 → 标注查看器
         self._draw_toolbar.tool_changed.connect(self._annotation_viewer.set_tool)
@@ -1131,6 +1134,137 @@ class AnnotationDialog(QDialog):
     def _save_annotations(self) -> None:
         """保存标注 (v2 FITS 模式自动持久化，此处为显式保存)"""
         pass  # FitsAnnotationBackend 自动持久化到 JSON
+
+    def _on_ai_prelabel(self) -> None:
+        """批量运行 v2 AI 预标注。"""
+        if self._current_mode != "v2":
+            self._show_status_message("AI预标注仅支持 v2 FITS 模式", level="WARNING")
+            return
+        if not isinstance(self._backend, FitsAnnotationBackend) or not self._samples:
+            self._show_status_message("请先加载 v2 标注数据集", level="WARNING")
+            return
+
+        inference_engine = self._resolve_inference_engine()
+        if inference_engine is None or not getattr(inference_engine, "is_ready", False):
+            self._show_status_message("请先在主窗口加载可用的 AI 模型", level="WARNING")
+            return
+
+        processed_count, bbox_count = self._apply_batch_ai_prelabel(inference_engine)
+        self._update_display()
+        self._update_stats()
+        self._show_status_message(
+            f"AI预标注完成: 处理 {processed_count} 张，生成 {bbox_count} 个候选框",
+            timeout=5000,
+        )
+
+    def _apply_batch_ai_prelabel(self, inference_engine) -> tuple[int, int]:
+        """对当前数据集中的未标注样本批量执行 AI 预标注。"""
+        if not isinstance(self._backend, FitsAnnotationBackend):
+            return 0, 0
+
+        pipeline = DetectionPipeline(
+            detection_params=self._build_detection_params(),
+            inference_engine=inference_engine,
+            patch_size=self._config.slice_size,
+        )
+
+        processed_count = 0
+        bbox_count = 0
+        for sample in self._samples:
+            if sample.label is not None or sample.bboxes:
+                continue
+
+            new_data = self._backend.get_image_data(sample, image_type="new")
+            try:
+                old_data = self._backend.get_image_data(sample, image_type="old")
+            except Exception:
+                old_data = np.zeros_like(new_data)
+
+            result = pipeline.process_pair(
+                pair_name=sample.id,
+                new_data=new_data,
+                old_data=old_data,
+                image_path=sample.source_path,
+            )
+
+            bboxes = [
+                self._candidate_to_bbox(candidate, new_data.shape)
+                for candidate in getattr(result, "candidates", [])
+            ]
+            ai_confidence = max((bbox.confidence for bbox in bboxes), default=None)
+            self._backend.apply_ai_preannotations(
+                sample.id,
+                bboxes,
+                ai_suggestion="real" if bboxes else None,
+                ai_confidence=ai_confidence,
+            )
+            processed_count += 1
+            bbox_count += len(bboxes)
+
+        return processed_count, bbox_count
+
+    def _build_detection_params(self) -> DetectionParams:
+        """从当前配置构造检测参数。"""
+        return DetectionParams(
+            thresh=self._config.thresh,
+            min_area=self._config.min_area,
+            max_area=self._config.max_area,
+            sharpness_min=self._config.sharpness,
+            sharpness_max=self._config.max_sharpness,
+            contrast_min=self._config.contrast,
+            edge_margin=self._config.edge_margin,
+            dynamic_thresh=self._config.dynamic_thresh,
+            kill_flat=self._config.kill_flat,
+            kill_dipole=self._config.kill_dipole,
+            aspect_ratio_max=self._config.aspect_ratio_max,
+            extent_max=self._config.extent_max,
+            topk=self._config.topk,
+        )
+
+    def _candidate_to_bbox(self, candidate, image_shape: tuple[int, ...]) -> BBox:
+        """将候选体中心点转换为固定大小的标注框。"""
+        height, width = image_shape[:2]
+        patch_size = int(self._config.slice_size)
+        half_size = patch_size // 2
+
+        left = max(0, int(candidate.x) - half_size)
+        top = max(0, int(candidate.y) - half_size)
+        bbox_width = min(patch_size, width - left)
+        bbox_height = min(patch_size, height - top)
+
+        return BBox(
+            x=left,
+            y=top,
+            width=max(1, bbox_width),
+            height=max(1, bbox_height),
+            label=None,
+            confidence=float(getattr(candidate, "ai_score", 0.0)),
+        )
+
+    def _resolve_inference_engine(self):
+        """从父窗口解析当前活动的推理引擎。"""
+        parent = self.parentWidget()
+        if parent is None:
+            return None
+        return getattr(parent, "_inference_engine", None)
+
+    def _show_status_message(
+        self,
+        message: str,
+        timeout: int = 3000,
+        level: str = "INFO",
+    ) -> None:
+        """优先复用主窗口状态栏消息，缺失时回退到消息框。"""
+        parent = self.parentWidget()
+        show_message = getattr(parent, "_show_message", None) if parent is not None else None
+        if callable(show_message):
+            show_message(message, timeout, level=level)
+            return
+
+        if level in {"WARNING", "ERROR"}:
+            QMessageBox.warning(self, "AI预标注", message)
+        else:
+            QMessageBox.information(self, "AI预标注", message)
 
     def _on_show_dir_help(self) -> None:
         """显示目录格式要求说明"""
