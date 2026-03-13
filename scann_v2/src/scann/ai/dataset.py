@@ -184,6 +184,61 @@ class TripletPNGDataset:
         return counts
 
 
+class TripletArrayDataset:
+    """内存三通道 patch 数据集。
+
+    用于承载从 v2 new/old + annotations.json 动态提取的三通道样本，
+    保持与 TripletPNGDataset 相同的增强和归一化流程。
+    """
+
+    def __init__(
+        self,
+        samples: List[Tuple[np.ndarray, int]],
+        split: str = "train",
+        resize: int = 224,
+        mean: Tuple[float, ...] = (0.264, 0.282, 0.284),
+        std: Tuple[float, ...] = (0.089, 0.123, 0.128),
+        augment: bool = True,
+    ):
+        self.samples = samples
+        self.split = split
+        self.resize = resize
+        self.mean = mean
+        self.std = std
+        self.augment = augment and (split == "train")
+        self.normalize = transforms.Normalize(list(mean), list(std))
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, idx: int):
+        import torch
+        from torchvision.transforms import functional as TF
+
+        triplet, y = self.samples[idx]
+        x = torch.tensor(triplet, dtype=torch.float32)
+        x = TF.resize(x, [self.resize, self.resize])
+
+        if self.augment:
+            if random.random() < 0.5:
+                x = TF.hflip(x)
+            if random.random() < 0.5:
+                x = TF.vflip(x)
+            k = random.randint(0, 3)
+            if k > 0:
+                x = torch.rot90(x, k, dims=[1, 2])
+
+        x = self.normalize(x)
+        return x, torch.tensor(y, dtype=torch.long)
+
+    def get_label_counts(self) -> dict:
+        """统计各类别数量"""
+        counts = {0: 0, 1: 0}
+        for _, y in self.samples:
+            counts[y] = counts.get(y, 0) + 1
+        return counts
+
+
 class FitsDetectionDataset:
     """FITS 全图检测数据集 (v2 新格式)
 

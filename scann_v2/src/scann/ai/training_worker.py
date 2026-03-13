@@ -8,11 +8,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import random
 import os
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Optional
 
 import numpy as np
 from PyQt5.QtCore import pyqtSignal, QObject, QThread
@@ -35,6 +36,10 @@ import torch  # 现在导入torch
 
 from scann.ai.model import ModelFormat, SCANNClassifier
 from scann.ai.trainer import TrainConfig, compute_metrics, find_threshold_for_recall
+from scann.core.annotation_models import DETAIL_TYPE_TO_LABEL, DetailType
+from scann.core.fits_io import read_fits
+from scann.data.file_manager import FitsImagePair, match_new_old_pairs
+from scann.services.detection_image_adapter import robust_to_uint8
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +70,235 @@ class TrainingWorker(QThread):
         self._params = params
         self._should_stop = False
 
+    def _resolve_dataset_format(self) -> str:
+        dataset_format = str(self._params.get("dataset_format", "")).strip().lower()
+        if dataset_format in {"v1", "v1_triplet", "triplet"}:
+            return "v1"
+        if dataset_format in {"v2", "v2_fits", "fits"}:
+            return "v2"
+        if self._params.get("pos_dir") and self._params.get("neg_dir"):
+            return "v1"
+
+        save_format = str(self._params.get("save_format", "")).strip().lower()
+        if save_format == "v1_classifier":
+            return "v1"
+        return "v2"
+
+    def _collect_v1_samples_from_dirs(
+        self,
+        pos_dir: str | Path,
+        neg_dir: str | Path,
+    ) -> list[tuple[str, int]]:
+        all_samples: list[tuple[str, int]] = []
+        supported_exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+
+        for dir_path, label in [(Path(pos_dir), 1), (Path(neg_dir), 0)]:
+            if not dir_path.is_dir():
+                raise ValueError(f"目录不存在: {dir_path}")
+            for fn in sorted(dir_path.iterdir()):
+                if fn.is_file() and fn.suffix.lower() in supported_exts:
+                    all_samples.append((str(fn), label))
+
+        if not all_samples:
+            raise ValueError("未找到任何 v1 三联图样本，请检查 positive/negative 子目录")
+        return all_samples
+
+    def _collect_v1_samples_from_root(self, dataset_root: Path) -> list[tuple[str, int]]:
+        return self._collect_v1_samples_from_dirs(
+            dataset_root / "positive",
+            dataset_root / "negative",
+        )
+
+    def _normalize_dataset_key(self, value: str | None) -> str:
+        if not value:
+            return ""
+
+        key = Path(str(value)).stem
+        if key.lower().endswith("__aligned_crop"):
+            key = key[: -len("__aligned_crop")]
+        for prefix in ("FW_", "fw_", "Fw_"):
+            if key.startswith(prefix):
+                key = key[len(prefix):]
+                break
+        return key.strip().lower()
+
+    def _build_pair_lookup(self, pairs: list[FitsImagePair]) -> dict[str, FitsImagePair]:
+        lookup: dict[str, FitsImagePair] = {}
+        for pair in pairs:
+            candidates = {
+                pair.name,
+                pair.new_path.stem,
+                pair.new_path.name,
+                pair.old_path.stem,
+                pair.old_path.name,
+            }
+            for candidate in candidates:
+                key = self._normalize_dataset_key(candidate)
+                if key:
+                    lookup[key] = pair
+        return lookup
+
+    def _resolve_annotation_label(self, ann: dict[str, Any], image_info: dict[str, Any]) -> str | None:
+        label = str(ann.get("label") or "").strip().lower()
+        if label in {"real", "bogus"}:
+            return label
+
+        detail_type = str(ann.get("detail_type") or image_info.get("detail_type") or "").strip()
+        if detail_type:
+            try:
+                return DETAIL_TYPE_TO_LABEL[DetailType(detail_type)].value
+            except Exception:
+                normalized = detail_type.lower()
+                if normalized in {"real", "bogus"}:
+                    return normalized
+
+        image_label = str(image_info.get("label") or "").strip().lower()
+        if image_label in {"real", "bogus"}:
+            return image_label
+        return None
+
+    def _ensure_2d_image(self, data: np.ndarray, path: Path) -> np.ndarray:
+        arr = np.asarray(data)
+        arr = np.squeeze(arr)
+        if arr.ndim != 2:
+            raise ValueError(f"FITS 图像维度不受支持: {path} -> {arr.shape}")
+        return arr
+
+    def _load_pair_uint8(self, pair: FitsImagePair) -> tuple[np.ndarray, np.ndarray]:
+        new_data = self._ensure_2d_image(read_fits(pair.new_path).data, pair.new_path)
+        old_data = self._ensure_2d_image(read_fits(pair.old_path).data, pair.old_path)
+        new_u8 = robust_to_uint8(new_data)
+        old_u8 = robust_to_uint8(old_data)
+        height = min(new_u8.shape[0], old_u8.shape[0])
+        width = min(new_u8.shape[1], old_u8.shape[1])
+        if height <= 0 or width <= 0:
+            raise ValueError(f"图像尺寸无效: {pair.new_path.name} / {pair.old_path.name}")
+        return new_u8[:height, :width], old_u8[:height, :width]
+
+    def _extract_center_patch(self, image: np.ndarray, center_x: float, center_y: float, size: int) -> np.ndarray:
+        patch = np.zeros((size, size), dtype=np.uint8)
+        left = int(round(center_x - size / 2.0))
+        top = int(round(center_y - size / 2.0))
+        right = left + size
+        bottom = top + size
+
+        src_left = max(left, 0)
+        src_top = max(top, 0)
+        src_right = min(right, image.shape[1])
+        src_bottom = min(bottom, image.shape[0])
+        if src_left >= src_right or src_top >= src_bottom:
+            return patch
+
+        dst_left = src_left - left
+        dst_top = src_top - top
+        dst_right = dst_left + (src_right - src_left)
+        dst_bottom = dst_top + (src_bottom - src_top)
+        patch[dst_top:dst_bottom, dst_left:dst_right] = image[src_top:src_bottom, src_left:src_right]
+        return patch
+
+    def _build_triplet_patch(
+        self,
+        new_u8: np.ndarray,
+        old_u8: np.ndarray,
+        center_x: float,
+        center_y: float,
+        size: int,
+    ) -> np.ndarray:
+        patch_new = self._extract_center_patch(new_u8, center_x, center_y, size)
+        patch_old = self._extract_center_patch(old_u8, center_x, center_y, size)
+        patch_diff = np.clip(
+            patch_new.astype(np.float32) - patch_old.astype(np.float32),
+            -255.0,
+            255.0,
+        )
+        channels = [
+            (patch_diff + 255.0) / 510.0,
+            patch_new.astype(np.float32) / 255.0,
+            patch_old.astype(np.float32) / 255.0,
+        ]
+        return np.stack(channels, axis=0).astype(np.float32)
+
+    def _collect_v2_samples_from_root(self, dataset_root: Path) -> list[tuple[np.ndarray, int]]:
+        new_dir = dataset_root / "new"
+        old_dir = dataset_root / "old"
+        ann_path = dataset_root / "annotations.json"
+        if not new_dir.is_dir() or not old_dir.is_dir():
+            raise ValueError("v2 数据集目录下必须包含 new 和 old 子目录")
+        if not ann_path.is_file():
+            raise ValueError("v2 数据集目录下缺少 annotations.json")
+
+        pairs, _only_new, _only_old = match_new_old_pairs(str(new_dir), str(old_dir))
+        if not pairs:
+            raise ValueError("v2 数据集未找到可配对的 new/old 图像")
+
+        try:
+            annotations_doc = json.loads(ann_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"annotations.json 无法解析: {exc}") from exc
+
+        images = annotations_doc.get("images", [])
+        if not images:
+            raise ValueError("annotations.json 中没有 images 条目")
+
+        pair_lookup = self._build_pair_lookup(pairs)
+        pair_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        all_samples: list[tuple[np.ndarray, int]] = []
+
+        for image_info in images:
+            annotations = image_info.get("annotations") or []
+            if not annotations:
+                continue
+
+            pair = None
+            for candidate in (
+                image_info.get("id"),
+                image_info.get("file_name"),
+                image_info.get("file"),
+            ):
+                key = self._normalize_dataset_key(candidate)
+                if key and key in pair_lookup:
+                    pair = pair_lookup[key]
+                    break
+            if pair is None:
+                continue
+
+            pair_key = self._normalize_dataset_key(pair.name)
+            if pair_key not in pair_cache:
+                pair_cache[pair_key] = self._load_pair_uint8(pair)
+            new_u8, old_u8 = pair_cache[pair_key]
+
+            for ann in annotations:
+                label = self._resolve_annotation_label(ann, image_info)
+                if label is None:
+                    continue
+                center_x = float(ann.get("x", 0)) + float(ann.get("width", 0)) / 2.0
+                center_y = float(ann.get("y", 0)) + float(ann.get("height", 0)) / 2.0
+                patch_size = max(
+                    80,
+                    int(round(max(float(ann.get("width", 0) or 0), float(ann.get("height", 0) or 0), 0.0))),
+                )
+                triplet = self._build_triplet_patch(new_u8, old_u8, center_x, center_y, patch_size)
+                all_samples.append((triplet, 1 if label == "real" else 0))
+
+        if not all_samples:
+            raise ValueError("v2 数据集里未找到可训练的已标注样本")
+        return all_samples
+
+    def _build_sample_pool(self) -> tuple[list[tuple[Any, int]], str]:
+        pos_dir = self._params.get("pos_dir")
+        neg_dir = self._params.get("neg_dir")
+        if pos_dir and neg_dir:
+            return self._collect_v1_samples_from_dirs(pos_dir, neg_dir), "file"
+
+        dataset_dir = Path(str(self._params.get("dataset_dir", "")).strip())
+        if not str(dataset_dir):
+            raise ValueError("未设置数据集目录")
+
+        dataset_format = self._resolve_dataset_format()
+        if dataset_format == "v2":
+            return self._collect_v2_samples_from_root(dataset_dir), "array"
+        return self._collect_v1_samples_from_root(dataset_dir), "file"
+
     def run(self) -> None:
         """执行训练流程"""
         try:
@@ -76,8 +310,6 @@ class TrainingWorker(QThread):
             from torchvision import models, transforms
 
             # 解析参数
-            pos_dir = self._params["pos_dir"]
-            neg_dir = self._params["neg_dir"]
             epochs = self._params["epochs"]
             batch_size = self._params["batch_size"]
             lr = self._params["lr"]
@@ -85,6 +317,7 @@ class TrainingWorker(QThread):
             save_format = self._params.get("save_format", "v2_classifier")
             val_split = self._params.get("val_split", 0.2)
             augment = self._params.get("augment", True)
+            dataset_format = self._resolve_dataset_format()
 
             # 设备
             requested_device = str(self._params.get("device", "auto")).strip().lower()
@@ -109,24 +342,23 @@ class TrainingWorker(QThread):
             logger.info(f"训练设备: {device}")
 
             # === 1. 数据集加载 ===
+            all_samples, sample_kind = self._build_sample_pool()
+            if len(all_samples) < 2:
+                raise ValueError("训练至少需要 2 个样本")
 
-            # 收集所有样本
-            all_samples = []
-            for dir_path, label in [(pos_dir, 1), (neg_dir, 0)]:
-                if not os.path.isdir(dir_path):
-                    raise ValueError(f"目录不存在: {dir_path}")
-                for fn in os.listdir(dir_path):
-                    if fn.lower().endswith((".png", ".fts", ".fit")):
-                        all_samples.append((os.path.join(dir_path, fn), label))
-
-            if not all_samples:
-                raise ValueError("未找到任何样本文件")
+            logger.info(
+                "训练数据集: format=%s, kind=%s, samples=%d",
+                dataset_format,
+                sample_kind,
+                len(all_samples),
+            )
 
             # 划分训练集/验证集
             n = len(all_samples)
             idx = np.arange(n)
             np.random.shuffle(idx)
             split = int((1.0 - val_split) * n)
+            split = min(max(split, 1), n - 1)
             train_idx = idx[:split].tolist()
             val_idx = idx[split:].tolist()
 
@@ -137,15 +369,16 @@ class TrainingWorker(QThread):
 
             # 创建数据集（内联实现以避免复杂依赖）
             # 直接传入预构建的样本列表，避免 TripletPNGDataset 重复收集
-            from scann.ai.dataset import TripletPNGDataset
+            from scann.ai.dataset import TripletArrayDataset, TripletPNGDataset
 
-            train_set = TripletPNGDataset(
+            dataset_cls = TripletArrayDataset if sample_kind == "array" else TripletPNGDataset
+            train_set = dataset_cls(
                 samples=train_samples,
                 split="train",
                 resize=224,
                 augment=augment,
             )
-            val_set = TripletPNGDataset(
+            val_set = dataset_cls(
                 samples=val_samples,
                 split="val",
                 resize=224,

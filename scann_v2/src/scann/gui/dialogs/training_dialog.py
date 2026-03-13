@@ -1,7 +1,7 @@
 """AI 模型训练对话框
 
 功能:
-- 数据集路径配置
+- 数据集目录配置
 - 训练超参数设置
 - 训练进度条
 - 实时 loss 曲线显示 (简易文本模式)
@@ -61,23 +61,30 @@ class TrainingDialog(QDialog):
         grp_data = QGroupBox("数据集")
         data_form = QFormLayout(grp_data)
 
-        pos_layout = QHBoxLayout()
-        self.edit_pos_dir = QLineEdit()
-        self.edit_pos_dir.setPlaceholderText("正样本文件夹 (positive)")
-        btn_pos = QPushButton("浏览...")
-        btn_pos.clicked.connect(lambda: self._browse_dir(self.edit_pos_dir))
-        pos_layout.addWidget(self.edit_pos_dir)
-        pos_layout.addWidget(btn_pos)
-        data_form.addRow("正样本:", pos_layout)
+        self.combo_dataset_format = QComboBox()
+        self.combo_dataset_format.addItem("v1 三联图分类", "v1")
+        self.combo_dataset_format.addItem("v2 FITS 配对", "v2")
+        self.combo_dataset_format.setToolTip(
+            "选择训练数据集格式\n"
+            "v1: 数据集目录下应包含 positive/negative\n"
+            "v2: 数据集目录下应包含 new/old 与 annotations.json"
+        )
+        self.combo_dataset_format.currentIndexChanged.connect(self._update_dataset_dir_hint)
+        data_form.addRow("数据集类型:", self.combo_dataset_format)
 
-        neg_layout = QHBoxLayout()
-        self.edit_neg_dir = QLineEdit()
-        self.edit_neg_dir.setPlaceholderText("负样本文件夹 (negative)")
-        btn_neg = QPushButton("浏览...")
-        btn_neg.clicked.connect(lambda: self._browse_dir(self.edit_neg_dir))
-        neg_layout.addWidget(self.edit_neg_dir)
-        neg_layout.addWidget(btn_neg)
-        data_form.addRow("负样本:", neg_layout)
+        dataset_layout = QHBoxLayout()
+        self.edit_dataset_dir = QLineEdit()
+        btn_dataset = QPushButton("浏览...")
+        btn_dataset.clicked.connect(lambda: self._browse_dir(self.edit_dataset_dir))
+        dataset_layout.addWidget(self.edit_dataset_dir)
+        dataset_layout.addWidget(btn_dataset)
+        data_form.addRow("数据集目录:", dataset_layout)
+
+        self.lbl_dataset_hint = QLabel()
+        self.lbl_dataset_hint.setWordWrap(True)
+        self.lbl_dataset_hint.setStyleSheet("font-size: 11px; color: #666;")
+        data_form.addRow("目录要求:", self.lbl_dataset_hint)
+        self._update_dataset_dir_hint()
 
         self.spin_val_split = QDoubleSpinBox()
         self.spin_val_split.setRange(0.05, 0.5)
@@ -236,8 +243,8 @@ class TrainingDialog(QDialog):
     # ── 事件 ──
 
     def _on_start(self) -> None:
-        if not self.edit_pos_dir.text() or not self.edit_neg_dir.text():
-            self.log_text.appendPlainText("⚠ 请先设置正负样本文件夹")
+        if not self.edit_dataset_dir.text().strip():
+            self.log_text.appendPlainText("⚠ 请先设置数据集目录")
             return
 
         self._is_training = True
@@ -246,8 +253,8 @@ class TrainingDialog(QDialog):
         self.log_text.clear()
 
         params = {
-            "pos_dir": self.edit_pos_dir.text(),
-            "neg_dir": self.edit_neg_dir.text(),
+            "dataset_dir": self.edit_dataset_dir.text().strip(),
+            "dataset_format": self.combo_dataset_format.currentData() or "v1",
             "val_split": self.spin_val_split.value(),
             "epochs": self.spin_epochs.value(),
             "batch_size": self.spin_batch.value(),
@@ -273,6 +280,16 @@ class TrainingDialog(QDialog):
         path = QFileDialog.getExistingDirectory(self, "选择文件夹")
         if path:
             line_edit.setText(path)
+
+    def _update_dataset_dir_hint(self) -> None:
+        dataset_format = self.combo_dataset_format.currentData() or "v1"
+        if dataset_format == "v2":
+            self.edit_dataset_dir.setPlaceholderText("数据集目录下包含 new、old 和 annotations.json")
+            self.lbl_dataset_hint.setText("v2: 自动读取 new/old 子目录，并结合 annotations.json 提取训练样本")
+            return
+
+        self.edit_dataset_dir.setPlaceholderText("数据集目录下包含 positive 和 negative")
+        self.lbl_dataset_hint.setText("v1: 自动读取 positive/negative 子目录中的已分类样本")
 
     def _refresh_cuda_status(self) -> None:
         """刷新CUDA状态显示"""

@@ -2,7 +2,7 @@
 
 TDD 测试:
 1. 初始化 → 控件默认值
-2. _on_start → 验证文件夹, 发射 training_started(params)
+2. _on_start → 验证数据集目录, 发射 training_started(params)
 3. _on_stop → 发射 training_stopped
 4. update_progress → 更新进度条和标签
 5. training_finished → 恢复按钮状态
@@ -75,7 +75,7 @@ class TestTrainingDialogInit:
 class TestOnStart:
     """测试开始训练"""
 
-    def test_start_without_dirs_shows_warning(self, dialog):
+    def test_start_without_dataset_dir_shows_warning(self, dialog):
         dialog._on_start()
         # 应该显示警告
         assert "⚠" in dialog.log_text.toPlainText()
@@ -84,29 +84,33 @@ class TestOnStart:
     def test_start_emits_signal(self, dialog):
         received = []
         dialog.training_started.connect(lambda p: received.append(p))
-        dialog.edit_pos_dir.setText("/some/pos")
-        dialog.edit_neg_dir.setText("/some/neg")
+        dialog.edit_dataset_dir.setText("/some/dataset")
+        dialog.combo_dataset_format.setCurrentIndex(1)
         dialog._on_start()
         assert len(received) == 1
         params = received[0]
-        assert params["pos_dir"] == "/some/pos"
-        assert params["neg_dir"] == "/some/neg"
+        assert params["dataset_dir"] == "/some/dataset"
+        assert params["dataset_format"] == "v2"
         assert params["epochs"] == 50
         assert params["batch_size"] == 32
         assert params["device"] == "auto"
 
     def test_start_disables_button(self, dialog):
-        dialog.edit_pos_dir.setText("/pos")
-        dialog.edit_neg_dir.setText("/neg")
+        dialog.edit_dataset_dir.setText("/dataset")
         dialog._on_start()
         assert not dialog.btn_start.isEnabled()
         assert dialog.btn_stop.isEnabled()
 
     def test_start_sets_training_flag(self, dialog):
-        dialog.edit_pos_dir.setText("/pos")
-        dialog.edit_neg_dir.setText("/neg")
+        dialog.edit_dataset_dir.setText("/dataset")
         dialog._on_start()
         assert dialog._is_training is True
+
+    def test_dataset_hint_switches_with_format(self, dialog):
+        dialog.combo_dataset_format.setCurrentIndex(0)
+        assert "positive/negative" in dialog.lbl_dataset_hint.text()
+        dialog.combo_dataset_format.setCurrentIndex(1)
+        assert "new/old" in dialog.lbl_dataset_hint.text()
 
 
 class TestOnStop:
