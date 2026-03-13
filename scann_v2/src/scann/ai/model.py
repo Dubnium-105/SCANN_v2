@@ -332,53 +332,144 @@ class SCANNClassifier(nn.Module):
 
 
 class SCANNDetector(nn.Module):
-    """v2 全图检测模型
+    """v2 全图检测模型 (Vision Transformer)
 
-    设计原则:
-    - 显存占用 ≤ 8GB
-    - 支持 CUDA 多线程
-    - 输入为完整天文图像
+    设计目标:
+    - 输入完整 FITS 图像，输出密集检测图
+    - 基于 ViT 编码器提取全局上下文
+    - 保留 `forward()` 兼容输出: [B, 5] (x, y, w, h, confidence)
 
-    TODO: 具体架构待定，可能基于:
-    - YOLOv8-nano (轻量检测)
-    - 滑动窗口 + 分类器
-    - Feature Pyramid + Attention
+    说明:
+    - `forward_dense()` 返回 [B, 5, Hp, Wp] 的密集预测图
+    - `forward()` 对密集预测做全局池化，保持旧接口可用
     """
 
-    def __init__(self, in_channels: int = 1, pretrained: bool = True):
+    def __init__(
+        self,
+        in_channels: int = 1,
+        pretrained: bool = True,
+        patch_size: int = 16,
+        embed_dim: int = 384,
+        num_heads: int = 6,
+        num_layers: int = 6,
+        mlp_ratio: float = 4.0,
+        dropout: float = 0.1,
+    ):
         super().__init__()
-        # 输入通道适配 (天文图像通常为单通道灰度)
+        _ = pretrained
+        self.patch_size = int(patch_size)
+        self.embed_dim = int(embed_dim)
+
         self.input_adapter = (
             nn.Conv2d(in_channels, 3, kernel_size=1, bias=False)
             if in_channels != 3
             else nn.Identity()
         )
-        # 基于轻量化骨干网络
-        if pretrained:
-            self.backbone = models.mobilenet_v3_small(
-                weights=models.MobileNet_V3_Small_Weights.DEFAULT
-            )
-        else:
-            self.backbone = models.mobilenet_v3_small(weights=None)
-        # 检测头 (简化版)
-        self.detect_head = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),
-            nn.Flatten(),
-            nn.Linear(576, 256),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.2),
-            nn.Linear(256, 5),  # x, y, w, h, confidence
+
+        self.patch_embed = nn.Conv2d(
+            3,
+            self.embed_dim,
+            kernel_size=self.patch_size,
+            stride=self.patch_size,
+            bias=False,
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=self.embed_dim,
+            nhead=int(num_heads),
+            dim_feedforward=int(self.embed_dim * mlp_ratio),
+            dropout=float(dropout),
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=int(num_layers))
+        self.norm = nn.LayerNorm(self.embed_dim)
+
+        self.heatmap_head = nn.Sequential(
+            nn.Conv2d(self.embed_dim, self.embed_dim, kernel_size=3, padding=1),
+            nn.GELU(),
+            nn.Conv2d(self.embed_dim, 1, kernel_size=1),
+        )
+        self.bbox_head = nn.Sequential(
+            nn.Conv2d(self.embed_dim, self.embed_dim, kernel_size=3, padding=1),
+            nn.GELU(),
+            nn.Conv2d(self.embed_dim, 4, kernel_size=1),
+        )
+
+    @staticmethod
+    def _build_2d_sincos_pos_embed(
+        h: int,
+        w: int,
+        dim: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        if dim % 4 != 0:
+            raise ValueError("embed_dim 必须能被 4 整除")
+
+        quarter_dim = dim // 4
+        y = torch.linspace(0.0, 1.0, steps=h, device=device, dtype=dtype)
+        x = torch.linspace(0.0, 1.0, steps=w, device=device, dtype=dtype)
+        yy, xx = torch.meshgrid(y, x, indexing="ij")
+
+        freq = torch.arange(quarter_dim, device=device, dtype=dtype)
+        freq = 1.0 / (10000 ** (freq / max(1, quarter_dim)))
+
+        y_proj = yy.reshape(-1, 1) * freq.reshape(1, -1)
+        x_proj = xx.reshape(-1, 1) * freq.reshape(1, -1)
+
+        pos = torch.cat(
+            [
+                torch.sin(y_proj),
+                torch.cos(y_proj),
+                torch.sin(x_proj),
+                torch.cos(x_proj),
+            ],
+            dim=1,
+        )
+        return pos.unsqueeze(0)
+
+    def forward_dense(self, x: torch.Tensor) -> torch.Tensor:
         x = self.input_adapter(x)
-        features = self.backbone.features(x)
-        return self.detect_head(features)
+        feat = self.patch_embed(x)
+        b, c, hp, wp = feat.shape
+
+        tokens = feat.flatten(2).transpose(1, 2)
+        pos = self._build_2d_sincos_pos_embed(
+            hp,
+            wp,
+            c,
+            device=tokens.device,
+            dtype=tokens.dtype,
+        )
+        tokens = tokens + pos
+
+        tokens = self.encoder(tokens)
+        tokens = self.norm(tokens)
+        feat_map = tokens.transpose(1, 2).reshape(b, c, hp, wp)
+
+        heatmap = self.heatmap_head(feat_map)
+        bbox = self.bbox_head(feat_map)
+        return torch.cat([bbox, heatmap], dim=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        dense_pred = self.forward_dense(x)
+        pooled = nn.functional.adaptive_avg_pool2d(dense_pred, output_size=1)
+        return pooled.flatten(1)
 
     def estimate_memory_mb(self, input_size: tuple = (1, 3, 1024, 1024)) -> float:
-        """估算推理时的显存占用 (MB)"""
+        """估算推理显存占用 (MB, 粗略)。"""
+        batch, channels, height, width = input_size
         param_mem = sum(p.numel() * p.element_size() for p in self.parameters())
-        # 粗略估算激活内存
-        activation_mem = input_size[0] * input_size[1] * input_size[2] * input_size[3] * 4
-        total = (param_mem + activation_mem) / 1024 / 1024
-        return total
+
+        hp = max(1, height // self.patch_size)
+        wp = max(1, width // self.patch_size)
+        token_count = hp * wp
+
+        token_mem = batch * token_count * self.embed_dim * 4
+        attn_mem = batch * token_count * token_count * 2
+        activation_mem = batch * channels * height * width * 4
+
+        total = (param_mem + token_mem + attn_mem + activation_mem) / 1024 / 1024
+        return float(total)

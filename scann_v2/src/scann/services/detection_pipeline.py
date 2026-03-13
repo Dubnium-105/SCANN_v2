@@ -10,7 +10,7 @@ import numpy as np
 
 from scann.core.candidate_detector import DetectionParams, detect_candidates
 from scann.core.image_aligner import align
-from scann.core.models import AlignResult, Candidate
+from scann.core.models import AlignResult, Candidate, Detection
 from scann.services.detection_image_adapter import img_brief_stats, robust_to_uint8
 from scann.services.detection_patch_extractor import MODEL_INPUT_SIZE, extract_patch, prepare_triplet_patch
 from scann.services.detection_postprocess import nms_candidates
@@ -42,12 +42,20 @@ class DetectionPipeline:
         exclusion_service=None,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
         patch_size: int = DEFAULT_PATCH_SIZE,
+        detection_mode: str = "patch",
+        hybrid_primary_mode: str = "full_image",
+        hybrid_low_confidence: Optional[float] = None,
     ):
         self.detection_params = detection_params or DetectionParams()
         self.inference_engine = inference_engine
         self.exclusion_service = exclusion_service
         self.progress_callback = progress_callback
         self.patch_size = patch_size
+        self.detection_mode = self._normalize_detection_mode(detection_mode)
+        self.hybrid_primary_mode = self._normalize_hybrid_primary_mode(hybrid_primary_mode)
+        self.hybrid_low_confidence = self._normalize_hybrid_low_confidence(
+            hybrid_low_confidence,
+        )
 
     def process_pair(
         self,
@@ -64,6 +72,7 @@ class DetectionPipeline:
             and self.inference_engine.is_ready
         )
         is_v1 = self._is_v1_model() if ai_available else False
+        mode = self.detection_mode
 
         if ai_available:
             ch = getattr(self.inference_engine, "_channel_order", (0, 1, 2))
@@ -77,6 +86,7 @@ class DetectionPipeline:
                 skip_align,
                 ch,
             )
+            logger.info("检测模式: %s", mode)
 
         align_result = None
         aligned_old = old_data
@@ -95,33 +105,6 @@ class DetectionPipeline:
         if aligned_old is None:
             aligned_old = old_data
 
-        candidates = self._detect_candidates(
-            new_data,
-            aligned_old,
-            params=self.detection_params,
-        )
-        logger.info(
-            "CV检测 (标准参数): 发现 %d 个候选体 (patch_size=%d)",
-            len(candidates),
-            self.patch_size,
-        )
-
-        if not candidates and ai_available:
-            relaxed_params = self._build_relaxed_params()
-            candidates = self._detect_candidates(
-                new_data,
-                aligned_old,
-                params=relaxed_params,
-            )
-            logger.info(
-                "CV检测 (放宽参数): 发现 %d 个候选体 (thresh=%d, kill_flat=%s, kill_dipole=%s, topk=%d)",
-                len(candidates),
-                relaxed_params.thresh,
-                relaxed_params.kill_flat,
-                relaxed_params.kill_dipole,
-                relaxed_params.topk,
-            )
-
         ai_new_data = new_data
         ai_old_data = aligned_old
         if ai_available and is_v1:
@@ -138,26 +121,25 @@ class DetectionPipeline:
                 img_brief_stats("old_u8", ai_old_data),
             )
 
-        if not candidates and ai_available:
-            candidates = self._sliding_window_detect(ai_new_data, ai_old_data)
-            logger.info("AI滑动窗口检测: 发现 %d 个候选体", len(candidates))
-
-        if ai_available and candidates:
-            engine = self.inference_engine
-            if engine is None:
-                return PipelineResult(
-                    pair_name=pair_name,
-                    candidates=candidates,
-                    align_result=align_result,
-                )
-
-            threshold = engine.threshold
-            candidates = self._ai_score(candidates, ai_new_data, ai_old_data)
-            candidates = [candidate for candidate in candidates if candidate.ai_score >= threshold]
-            logger.info(
-                "AI过滤后: %d 个候选体 (阈值=%.4f)",
-                len(candidates),
-                threshold,
+        candidates: List[Candidate]
+        if mode == "full_image":
+            candidates = self._dense_full_image_detect(new_data, aligned_old)
+            logger.info("AI全图检测: 发现 %d 个候选体", len(candidates))
+        elif mode == "hybrid":
+            candidates = self._hybrid_detect(
+                new_data,
+                aligned_old,
+                ai_new_data,
+                ai_old_data,
+                ai_available=ai_available,
+            )
+        else:
+            candidates = self._patch_detect(
+                new_data,
+                aligned_old,
+                ai_new_data,
+                ai_old_data,
+                ai_available=ai_available,
             )
 
         if self.exclusion_service:
@@ -178,6 +160,209 @@ class DetectionPipeline:
 
     def _align_images(self, new_data: np.ndarray, old_data: np.ndarray) -> AlignResult:
         return align(new_data, old_data)
+
+    def _normalize_detection_mode(self, mode: Optional[str]) -> str:
+        if mode in {"patch", "full_image", "hybrid"}:
+            return str(mode)
+        return "patch"
+
+    def _normalize_hybrid_primary_mode(self, mode: Optional[str]) -> str:
+        if mode in {"full_image", "patch"}:
+            return str(mode)
+        return "full_image"
+
+    def _normalize_hybrid_low_confidence(self, threshold: Optional[float]) -> Optional[float]:
+        if threshold is None:
+            return None
+        try:
+            value = float(threshold)
+        except (TypeError, ValueError):
+            return None
+        return max(0.0, min(1.0, value))
+
+    def _hybrid_detect(
+        self,
+        new_data: np.ndarray,
+        old_data: np.ndarray,
+        ai_new_data: np.ndarray,
+        ai_old_data: np.ndarray,
+        *,
+        ai_available: bool,
+    ) -> List[Candidate]:
+        order = [self.hybrid_primary_mode, "patch" if self.hybrid_primary_mode == "full_image" else "full_image"]
+        fallback_reason = ""
+
+        for stage in order:
+            if stage == "full_image":
+                dense_candidates, dense_status = self._dense_full_image_detect_with_status(new_data, old_data)
+                if dense_status == "ok":
+                    if self._is_hybrid_low_confidence(dense_candidates):
+                        dense_threshold = self._get_hybrid_low_confidence_threshold()
+                        best_score = max(candidate.ai_score for candidate in dense_candidates)
+                        fallback_reason = (
+                            f"low_confidence(max={best_score:.4f}, threshold={dense_threshold:.4f})"
+                        )
+                        logger.info("hybrid 回退 patch: %s", fallback_reason)
+                        continue
+                    logger.info(
+                        "hybrid 选择 full_image 结果: %d 个候选体 (order=%s)",
+                        len(dense_candidates),
+                        "->".join(order),
+                    )
+                    return dense_candidates
+
+                fallback_reason = dense_status
+                logger.info(
+                    "hybrid full_image 阶段未产出结果: status=%s, order=%s",
+                    dense_status,
+                    "->".join(order),
+                )
+                continue
+
+            patch_candidates = self._patch_detect(
+                new_data,
+                old_data,
+                ai_new_data,
+                ai_old_data,
+                ai_available=ai_available,
+            )
+            if patch_candidates:
+                logger.info(
+                    "hybrid 使用 patch 结果: %d 个候选体 (fallback_reason=%s, order=%s)",
+                    len(patch_candidates),
+                    fallback_reason or "none",
+                    "->".join(order),
+                )
+                return patch_candidates
+
+            fallback_reason = "patch_empty"
+            logger.info(
+                "hybrid patch 阶段未产出结果: order=%s",
+                "->".join(order),
+            )
+
+        logger.info(
+            "hybrid 检测结束无候选体: order=%s, fallback_reason=%s",
+            "->".join(order),
+            fallback_reason or "none",
+        )
+        return []
+
+    def _patch_detect(
+        self,
+        new_data: np.ndarray,
+        old_data: np.ndarray,
+        ai_new_data: np.ndarray,
+        ai_old_data: np.ndarray,
+        *,
+        ai_available: bool,
+    ) -> List[Candidate]:
+        candidates = self._detect_candidates(
+            new_data,
+            old_data,
+            params=self.detection_params,
+        )
+        logger.info(
+            "CV检测 (标准参数): 发现 %d 个候选体 (patch_size=%d)",
+            len(candidates),
+            self.patch_size,
+        )
+
+        if not candidates and ai_available:
+            relaxed_params = self._build_relaxed_params()
+            candidates = self._detect_candidates(
+                new_data,
+                old_data,
+                params=relaxed_params,
+            )
+            logger.info(
+                "CV检测 (放宽参数): 发现 %d 个候选体 (thresh=%d, kill_flat=%s, kill_dipole=%s, topk=%d)",
+                len(candidates),
+                relaxed_params.thresh,
+                relaxed_params.kill_flat,
+                relaxed_params.kill_dipole,
+                relaxed_params.topk,
+            )
+
+        if not candidates and ai_available:
+            candidates = self._sliding_window_detect(ai_new_data, ai_old_data)
+            logger.info("AI滑动窗口检测: 发现 %d 个候选体", len(candidates))
+
+        if ai_available and candidates:
+            engine = self.inference_engine
+            if engine is None:
+                return candidates
+
+            threshold = engine.threshold
+            candidates = self._ai_score(candidates, ai_new_data, ai_old_data)
+            candidates = [candidate for candidate in candidates if candidate.ai_score >= threshold]
+            logger.info(
+                "AI过滤后: %d 个候选体 (阈值=%.4f)",
+                len(candidates),
+                threshold,
+            )
+
+        return candidates
+
+    def _get_hybrid_low_confidence_threshold(self) -> float:
+        if self.hybrid_low_confidence is not None:
+            return self.hybrid_low_confidence
+        return float(getattr(self.inference_engine, "threshold", 0.5))
+
+    def _is_hybrid_low_confidence(self, candidates: List[Candidate]) -> bool:
+        if not candidates:
+            return False
+        threshold = self._get_hybrid_low_confidence_threshold()
+        best_score = max(candidate.ai_score for candidate in candidates)
+        return best_score < threshold
+
+    def _dense_full_image_detect(
+        self,
+        new_data: np.ndarray,
+        old_data: np.ndarray,
+    ) -> List[Candidate]:
+        candidates, _ = self._dense_full_image_detect_with_status(new_data, old_data)
+        return candidates
+
+    def _dense_full_image_detect_with_status(
+        self,
+        new_data: np.ndarray,
+        old_data: np.ndarray,
+    ) -> tuple[List[Candidate], str]:
+        if not self.inference_engine or not self.inference_engine.is_ready:
+            logger.warning("full_image 检测跳过：AI 模型不可用")
+            return [], "model_unavailable"
+
+        detect_fn = getattr(self.inference_engine, "detect_dense_full_image", None)
+        if not callable(detect_fn):
+            logger.warning("full_image 检测跳过：推理引擎不支持 detect_dense_full_image")
+            return [], "unsupported_dense_api"
+
+        try:
+            threshold = float(getattr(self.inference_engine, "threshold", 0.5))
+            detections = detect_fn(
+                new_data,
+                old_data,
+                score_threshold=threshold,
+            )
+        except Exception:
+            logger.exception("full_image 检测执行失败")
+            return [], "exception"
+
+        candidates: List[Candidate] = []
+        for detection in detections:
+            if not isinstance(detection, Detection):
+                continue
+            candidates.append(
+                Candidate(
+                    x=int(detection.x),
+                    y=int(detection.y),
+                    ai_score=float(detection.confidence),
+                )
+            )
+        if not candidates:
+            return [], "empty"
+        return candidates, "ok"
 
     def _detect_candidates(
         self,

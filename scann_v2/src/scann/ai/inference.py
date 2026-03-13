@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import List, Optional, Sequence
 
 import numpy as np
@@ -18,6 +19,9 @@ import torch.nn.functional as F
 from torchvision import transforms
 
 from scann.core.models import Candidate, Detection, MarkerType
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -364,6 +368,205 @@ class InferenceEngine:
         out = np.zeros((max(h, min_h), max(w, min_w)), dtype=image.dtype)
         out[:h, :w] = image
         return out
+
+    @staticmethod
+    def _normalize_dense_channel(image: np.ndarray) -> np.ndarray:
+        """将单通道图像归一化到 [0, 1]，用于 dense 输入。"""
+        img = np.nan_to_num(image.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+        if img.size == 0:
+            return img
+
+        v_min = float(np.min(img))
+        v_max = float(np.max(img))
+        if not np.isfinite(v_min) or not np.isfinite(v_max) or v_max <= v_min:
+            return np.zeros_like(img, dtype=np.float32)
+
+        img = (img - v_min) / (v_max - v_min)
+        return np.clip(img, 0.0, 1.0).astype(np.float32)
+
+    @torch.no_grad()
+    def detect_dense_full_image(
+        self,
+        new_image: np.ndarray,
+        old_image: Optional[np.ndarray] = None,
+        score_threshold: float = 0.5,
+        top_k: int = 200,
+        iou_threshold: float = 0.5,
+    ) -> List[Detection]:
+        """全图 dense 检测入口。
+
+        说明:
+        - 输入构造为三通道: [diff, new, old]
+        - 调用检测模型 `forward_dense()` 执行前向
+        - 解码输出并执行 NMS 合并
+        """
+        if self.model is None:
+            logger.warning("dense 检测不可用：模型未加载")
+            return []
+
+        if new_image is None or np.size(new_image) == 0:
+            logger.warning("dense 检测跳过：new_image 为空")
+            return []
+
+        new_data = np.asarray(new_image)
+        if new_data.ndim < 2:
+            logger.warning("dense 检测跳过：new_image 维度无效 (ndim=%s)", new_data.ndim)
+            return []
+        if new_data.ndim > 2:
+            new_data = new_data.squeeze()
+            if new_data.ndim != 2:
+                logger.warning("dense 检测跳过：new_image 无法转换为 2D")
+                return []
+
+        if old_image is None:
+            old_data = np.zeros_like(new_data)
+        else:
+            old_data = np.asarray(old_image)
+            if old_data.ndim < 2:
+                logger.warning("dense 检测跳过：old_image 维度无效 (ndim=%s)", old_data.ndim)
+                return []
+            if old_data.ndim > 2:
+                old_data = old_data.squeeze()
+                if old_data.ndim != 2:
+                    logger.warning("dense 检测跳过：old_image 无法转换为 2D")
+                    return []
+
+        height = min(int(new_data.shape[0]), int(old_data.shape[0]))
+        width = min(int(new_data.shape[1]), int(old_data.shape[1]))
+        if height <= 0 or width <= 0:
+            logger.warning("dense 检测跳过：输入尺寸无效 new=%s old=%s", new_data.shape, old_data.shape)
+            return []
+
+        new_data = new_data[:height, :width]
+        old_data = old_data[:height, :width]
+
+        new_norm = self._normalize_dense_channel(new_data)
+        old_norm = self._normalize_dense_channel(old_data)
+        diff = np.abs(new_norm - old_norm).astype(np.float32)
+
+        dense_input = np.stack([diff, new_norm, old_norm], axis=0).astype(np.float32)
+        input_tensor = torch.from_numpy(dense_input).unsqueeze(0).to(self.device)
+
+        dense_forward = getattr(self.model, "forward_dense", None)
+        if not callable(dense_forward):
+            logger.warning("dense 检测不可用：当前模型不支持 forward_dense，返回空结果")
+            return []
+
+        try:
+            if self.config.use_amp and self.device.type == "cuda":
+                amp_mod = getattr(torch, "amp", None)
+                if amp_mod is not None and hasattr(amp_mod, "autocast"):
+                    with amp_mod.autocast("cuda"):
+                        dense_output = dense_forward(input_tensor)
+                else:
+                    with torch.cuda.amp.autocast():
+                        dense_output = dense_forward(input_tensor)
+            else:
+                dense_output = dense_forward(input_tensor)
+        except Exception:
+            logger.exception("dense 检测前向失败，返回空结果")
+            return []
+
+        if not isinstance(dense_output, torch.Tensor):
+            logger.warning("dense 检测前向输出类型无效: %s", type(dense_output).__name__)
+            return []
+
+        if dense_output.ndim != 4 or dense_output.shape[1] < 5:
+            logger.warning("dense 检测前向输出形状无效: %s", tuple(dense_output.shape))
+            return []
+
+        detections = self._decode_dense_predictions(
+            dense_output=dense_output,
+            image_height=height,
+            image_width=width,
+            score_threshold=score_threshold,
+            top_k=top_k,
+        )
+
+        if len(detections) > 1:
+            detections = self._nms(detections, iou_threshold=iou_threshold)
+
+        logger.info(
+            "dense 检测执行完成: input=%s output=%s threshold=%.3f top_k=%d iou=%.3f detections=%d",
+            tuple(input_tensor.shape),
+            tuple(dense_output.shape),
+            float(score_threshold),
+            int(top_k),
+            float(iou_threshold),
+            len(detections),
+        )
+        return detections
+
+    def _decode_dense_predictions(
+        self,
+        dense_output: torch.Tensor,
+        image_height: int,
+        image_width: int,
+        score_threshold: float,
+        top_k: int,
+    ) -> List[Detection]:
+        """将 dense 输出 [B,5,Hp,Wp] 解码为 Detection 列表。"""
+        if dense_output.ndim != 4 or dense_output.shape[1] < 5:
+            return []
+
+        pred = dense_output[0]
+        hp = int(pred.shape[1])
+        wp = int(pred.shape[2])
+        if hp <= 0 or wp <= 0:
+            return []
+
+        heatmap_logits = pred[4]
+        score_map = torch.sigmoid(heatmap_logits)
+        flat_scores = score_map.reshape(-1)
+        if flat_scores.numel() == 0:
+            return []
+
+        k = max(1, min(int(top_k), int(flat_scores.numel())))
+        top_scores, top_indices = torch.topk(flat_scores, k=k)
+        keep_mask = top_scores > float(score_threshold)
+        if not bool(torch.any(keep_mask)):
+            return []
+
+        top_scores = top_scores[keep_mask]
+        top_indices = top_indices[keep_mask]
+
+        stride_x = float(image_width) / float(wp)
+        stride_y = float(image_height) / float(hp)
+
+        bbox = pred[0:4]
+        detections: List[Detection] = []
+        for score, flat_idx in zip(top_scores, top_indices):
+            idx = int(flat_idx.item())
+            row = idx // wp
+            col = idx % wp
+
+            dx = float(torch.tanh(bbox[0, row, col]).item()) * 0.5
+            dy = float(torch.tanh(bbox[1, row, col]).item()) * 0.5
+            width_scale = float(torch.exp(torch.clamp(bbox[2, row, col], min=-2.0, max=2.0)).item())
+            height_scale = float(torch.exp(torch.clamp(bbox[3, row, col], min=-2.0, max=2.0)).item())
+
+            center_x = (float(col) + 0.5 + dx) * stride_x
+            center_y = (float(row) + 0.5 + dy) * stride_y
+            center_x = min(max(center_x, 0.0), max(float(image_width - 1), 0.0))
+            center_y = min(max(center_y, 0.0), max(float(image_height - 1), 0.0))
+
+            box_width = max(1.0, width_scale * stride_x)
+            box_height = max(1.0, height_scale * stride_y)
+            box_width = min(box_width, float(max(1, image_width)))
+            box_height = min(box_height, float(max(1, image_height)))
+
+            detections.append(
+                Detection(
+                    x=int(round(center_x)),
+                    y=int(round(center_y)),
+                    width=int(round(box_width)),
+                    height=int(round(box_height)),
+                    confidence=float(score.item()),
+                    marker_type=MarkerType.BOUNDING_BOX,
+                )
+            )
+
+        return detections
 
     def detect_full_image(
         self,

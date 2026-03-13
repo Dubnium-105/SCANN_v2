@@ -1165,7 +1165,10 @@ class AnnotationDialog(QDialog):
         pipeline = DetectionPipeline(
             detection_params=self._build_detection_params(),
             inference_engine=inference_engine,
-            patch_size=self._config.slice_size,
+            patch_size=getattr(self._config, "slice_size", 80),
+            detection_mode=getattr(self._config, "detection_mode", "patch"),
+            hybrid_primary_mode=getattr(self._config, "hybrid_primary_mode", "full_image"),
+            hybrid_low_confidence=getattr(self._config, "hybrid_low_confidence", 0.5),
         )
 
         processed_count = 0

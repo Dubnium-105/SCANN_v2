@@ -284,6 +284,9 @@ class AppConfig:
     slice_size: int = 80        # 切片大小 (px)，V1 训练使用 80x80
     batch_size: int = 64        # 推理批量大小
     compute_device: str = "auto"  # "auto", "cpu", "cuda"
+    detection_mode: str = "patch"  # "patch", "full_image", "hybrid"
+    hybrid_primary_mode: str = "full_image"  # "full_image", "patch"
+    hybrid_low_confidence: float = 0.50
     crowd_high_score: float = 0.85
     crowd_high_count: int = 10
     crowd_high_penalty: float = 0.50

@@ -1,5 +1,6 @@
 import json
 from types import SimpleNamespace
+import torch
 
 import numpy as np
 from PIL import Image
@@ -86,3 +87,55 @@ class TestTrainingWorkerDatasetParsing:
             assert triplet.dtype == np.float32
             assert np.all(triplet >= 0.0)
             assert np.all(triplet <= 1.0)
+
+
+class TestTrainingWorkerDetectionTask:
+    def test_resolve_task_type_default_and_detection(self):
+        worker_default = TrainingWorker({})
+        assert worker_default._resolve_task_type() == "classification"
+
+        worker_detection = TrainingWorker({"task_type": "detection"})
+        assert worker_detection._resolve_task_type() == "detection"
+
+    def test_compute_dense_detection_loss_returns_positive(self):
+        pred_dense = torch.zeros((1, 5, 2, 2), dtype=torch.float32)
+        target_heatmap = torch.zeros((1, 1, 2, 2), dtype=torch.float32)
+        target_heatmap[0, 0, 0, 0] = 1.0
+        target_bbox = torch.zeros((1, 4, 2, 2), dtype=torch.float32)
+        target_bbox_mask = torch.zeros((1, 1, 2, 2), dtype=torch.float32)
+        target_bbox_mask[0, 0, 0, 0] = 1.0
+
+        total_loss, heatmap_loss, bbox_loss = TrainingWorker._compute_dense_detection_loss(
+            pred_dense,
+            target_heatmap,
+            target_bbox,
+            target_bbox_mask,
+            heatmap_pos_weight=4.0,
+            bbox_loss_weight=2.0,
+        )
+
+        assert total_loss.item() >= 0.0
+        assert heatmap_loss.item() >= 0.0
+        assert bbox_loss.item() >= 0.0
+
+    def test_save_detection_checkpoint_contains_metadata(self, tmp_path):
+        model = torch.nn.Conv2d(3, 5, kernel_size=1)
+        output_path = tmp_path / "dense_ckpt.pth"
+
+        TrainingWorker._save_detection_checkpoint(
+            model=model,
+            save_path=str(output_path),
+            best_epoch=2,
+            best_val_loss=0.123,
+            heatmap_threshold=0.35,
+            bbox_loss_weight=2.0,
+            heatmap_pos_weight=4.0,
+            patch_size=16,
+        )
+
+        ckpt = torch.load(str(output_path), map_location="cpu")
+        assert ckpt["task_type"] == "detection"
+        assert ckpt["model_format"] == "v2_detector"
+        assert ckpt["heatmap_threshold"] == 0.35
+        assert ckpt["bbox_loss_weight"] == 2.0
+        assert ckpt["patch_size"] == 16

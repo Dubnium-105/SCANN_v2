@@ -107,6 +107,19 @@ def load_config(
     config.slice_size = data.get("slice_size", 80)
     config.batch_size = data.get("batch_size", 64)
     config.compute_device = data.get("compute_device", "auto")
+    detection_mode = data.get("detection_mode", "patch")
+    if detection_mode not in {"patch", "full_image", "hybrid"}:
+        detection_mode = "patch"
+    config.detection_mode = detection_mode
+    hybrid_primary_mode = data.get("hybrid_primary_mode", "full_image")
+    if hybrid_primary_mode not in {"full_image", "patch"}:
+        hybrid_primary_mode = "full_image"
+    config.hybrid_primary_mode = hybrid_primary_mode
+    try:
+        hybrid_low_confidence = float(data.get("hybrid_low_confidence", 0.50))
+    except (TypeError, ValueError):
+        hybrid_low_confidence = 0.50
+    config.hybrid_low_confidence = max(0.0, min(1.0, hybrid_low_confidence))
     config.crowd_high_score = data.get("crowd_high_score", 0.85)
     config.crowd_high_count = data.get("crowd_high_count", 10)
     config.crowd_high_penalty = data.get("crowd_high_penalty", 0.50)
@@ -265,6 +278,9 @@ def save_config(
         "slice_size": config.slice_size,
         "batch_size": config.batch_size,
         "compute_device": config.compute_device,
+        "detection_mode": config.detection_mode,
+        "hybrid_primary_mode": config.hybrid_primary_mode,
+        "hybrid_low_confidence": config.hybrid_low_confidence,
         "crowd_high_score": config.crowd_high_score,
         "crowd_high_count": config.crowd_high_count,
         "crowd_high_penalty": config.crowd_high_penalty,

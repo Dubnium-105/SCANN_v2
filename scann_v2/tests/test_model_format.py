@@ -375,6 +375,27 @@ class TestSaveWithFormat:
         finally:
             Path(path).unlink(missing_ok=True)
 
+    def test_save_checkpoint_includes_task_type_metadata(self):
+        """保存 checkpoint 时应保留 task_type 元数据。"""
+        from scann.ai.model import SCANNClassifier
+
+        model = SCANNClassifier(pretrained=False)
+
+        with tempfile.NamedTemporaryFile(suffix=".pth", delete=False) as f:
+            path = f.name
+
+        try:
+            SCANNClassifier.save_checkpoint(
+                model,
+                path,
+                threshold=0.5,
+                task_type="classification",
+            )
+            ckpt = torch.load(path, map_location="cpu", weights_only=False)
+            assert ckpt["task_type"] == "classification"
+        finally:
+            Path(path).unlink(missing_ok=True)
+
 
 # ──────────────────── InferenceEngine 格式支持 ────────────────────
 

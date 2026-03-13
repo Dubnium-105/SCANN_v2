@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 import random
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from torchvision import transforms
+
+
+logger = logging.getLogger(__name__)
 
 
 class TripletDataset:
@@ -476,3 +480,262 @@ class FitsDetectionDataset:
                 label = ann.get("label", "real")
                 counts[label] = counts.get(label, 0) + 1
         return counts
+
+
+class FitsDenseDetectionDataset:
+    """v2 全图 dense 检测训练数据集。
+
+    输入输出约定:
+    - 输入: 3 通道 [diff/new/old]，shape=(3, H, W)
+    - 目标: heatmap=(1, Hp, Wp), bbox=(4, Hp, Wp), bbox_mask=(1, Hp, Wp)
+    - Hp/Wp 与模型 `forward_dense()` 输出空间对齐: H//patch_size, W//patch_size
+    """
+
+    def __init__(
+        self,
+        dataset_root: str,
+        annotation_file: str | None = None,
+        patch_size: int = 16,
+    ):
+        self.dataset_root = Path(dataset_root)
+        self.new_dir = self.dataset_root / "new"
+        self.old_dir = self.dataset_root / "old"
+        self.annotation_file = Path(annotation_file) if annotation_file else (self.dataset_root / "annotations.json")
+        self.patch_size = max(1, int(patch_size))
+
+        if not self.new_dir.is_dir() or not self.old_dir.is_dir():
+            raise ValueError("v2 dense 数据集目录下必须包含 new 和 old 子目录")
+        if not self.annotation_file.is_file():
+            raise ValueError("v2 dense 数据集缺少 annotations.json")
+
+        self.samples = self._load_samples()
+
+    @staticmethod
+    def _normalize_dataset_key(value: str | None) -> str:
+        if not value:
+            return ""
+
+        key = Path(str(value)).stem
+        if key.lower().endswith("__aligned_crop"):
+            key = key[: -len("__aligned_crop")]
+        for prefix in ("FW_", "fw_", "Fw_"):
+            if key.startswith(prefix):
+                key = key[len(prefix):]
+                break
+        return key.strip().lower()
+
+    def _build_pair_lookup(self) -> Dict[str, Any]:
+        from scann.data.file_manager import match_new_old_pairs
+
+        pairs, _only_new, _only_old = match_new_old_pairs(str(self.new_dir), str(self.old_dir))
+        lookup: Dict[str, Any] = {}
+        for pair in pairs:
+            candidates = {
+                pair.name,
+                pair.new_path.stem,
+                pair.new_path.name,
+                pair.old_path.stem,
+                pair.old_path.name,
+            }
+            for candidate in candidates:
+                key = self._normalize_dataset_key(candidate)
+                if key:
+                    lookup[key] = pair
+        return lookup
+
+    @staticmethod
+    def _safe_float(value: Any) -> float | None:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not np.isfinite(number):
+            return None
+        return number
+
+    @staticmethod
+    def _resolve_annotation_label(ann: dict[str, Any], image_info: dict[str, Any]) -> str | None:
+        label = str(ann.get("label") or "").strip().lower()
+        if label in {"real", "bogus"}:
+            return label
+
+        detail_type = str(ann.get("detail_type") or image_info.get("detail_type") or "").strip()
+        if detail_type:
+            try:
+                from scann.core.annotation_models import DETAIL_TYPE_TO_LABEL, DetailType
+
+                mapped = DETAIL_TYPE_TO_LABEL[DetailType(detail_type)]
+                return mapped.value
+            except Exception:
+                detail_lower = detail_type.lower()
+                if detail_lower in {"real", "bogus"}:
+                    return detail_lower
+
+        image_label = str(image_info.get("label") or "").strip().lower()
+        if image_label in {"real", "bogus"}:
+            return image_label
+
+        return None
+
+    def _parse_positive_annotation(
+        self,
+        ann: dict[str, Any],
+        image_info: dict[str, Any],
+    ) -> tuple[float, float, float, float] | None:
+        label = self._resolve_annotation_label(ann, image_info)
+        if label != "real":
+            return None
+
+        x = self._safe_float(ann.get("x"))
+        y = self._safe_float(ann.get("y"))
+        w = self._safe_float(ann.get("width"))
+        h = self._safe_float(ann.get("height"))
+        if x is None or y is None or w is None or h is None or w <= 0 or h <= 0:
+            return None
+
+        center_x = x + w / 2.0
+        center_y = y + h / 2.0
+        return center_x, center_y, w, h
+
+    def _load_samples(self) -> List[Dict[str, Any]]:
+        import json
+
+        try:
+            with open(self.annotation_file, "r", encoding="utf-8") as file_obj:
+                annotations_doc = json.load(file_obj)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"annotations.json 无法解析: {exc}") from exc
+
+        images = annotations_doc.get("images", [])
+        if not isinstance(images, list):
+            raise ValueError("annotations.json 中 images 字段格式无效")
+
+        pair_lookup = self._build_pair_lookup()
+        if not pair_lookup:
+            raise ValueError("v2 dense 数据集未找到可配对的 new/old 图像")
+
+        samples: List[Dict[str, Any]] = []
+        for image_info in images:
+            if not isinstance(image_info, dict):
+                continue
+
+            pair = None
+            for candidate in (
+                image_info.get("id"),
+                image_info.get("file_name"),
+                image_info.get("file"),
+            ):
+                key = self._normalize_dataset_key(candidate)
+                if key and key in pair_lookup:
+                    pair = pair_lookup[key]
+                    break
+
+            if pair is None:
+                logger.warning("dense 数据集跳过样本：找不到匹配 new/old 图像，image=%s", image_info.get("id"))
+                continue
+
+            parsed_annotations: List[tuple[float, float, float, float]] = []
+            for ann in image_info.get("annotations", []) or []:
+                if not isinstance(ann, dict):
+                    logger.warning("dense 数据集跳过异常标注：annotation 非字典，image=%s", image_info.get("id"))
+                    continue
+                parsed = self._parse_positive_annotation(ann, image_info)
+                if parsed is None and (ann.get("label") is not None or ann.get("detail_type") is not None):
+                    logger.warning("dense 数据集跳过异常标注：字段缺失或无效，image=%s ann=%s", image_info.get("id"), ann)
+                if parsed is not None:
+                    parsed_annotations.append(parsed)
+
+            samples.append({
+                "image_id": image_info.get("id") or image_info.get("file_name") or pair.name,
+                "pair": pair,
+                "annotations": parsed_annotations,
+            })
+
+        if not samples:
+            raise ValueError("v2 dense 数据集里没有可用样本")
+        return samples
+
+    @staticmethod
+    def _to_2d_float(image: np.ndarray) -> np.ndarray:
+        arr = np.asarray(image)
+        arr = np.squeeze(arr)
+        if arr.ndim != 2:
+            raise ValueError(f"FITS 图像维度不受支持: {arr.shape}")
+        return np.nan_to_num(arr.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+
+    @staticmethod
+    def _normalize_channel(image: np.ndarray) -> np.ndarray:
+        v_min = float(np.min(image))
+        v_max = float(np.max(image))
+        if not np.isfinite(v_min) or not np.isfinite(v_max) or v_max <= v_min:
+            return np.zeros_like(image, dtype=np.float32)
+        return np.clip((image - v_min) / (v_max - v_min), 0.0, 1.0).astype(np.float32)
+
+    def _encode_dense_targets(
+        self,
+        image_height: int,
+        image_width: int,
+        annotations: List[tuple[float, float, float, float]],
+    ) -> dict[str, np.ndarray]:
+        hp = max(1, image_height // self.patch_size)
+        wp = max(1, image_width // self.patch_size)
+        stride_x = float(image_width) / float(wp)
+        stride_y = float(image_height) / float(hp)
+
+        heatmap = np.zeros((1, hp, wp), dtype=np.float32)
+        bbox = np.zeros((4, hp, wp), dtype=np.float32)
+        bbox_mask = np.zeros((1, hp, wp), dtype=np.float32)
+
+        for center_x, center_y, box_w, box_h in annotations:
+            col = int(center_x / stride_x)
+            row = int(center_y / stride_y)
+            col = max(0, min(wp - 1, col))
+            row = max(0, min(hp - 1, row))
+
+            offset_x = (center_x / stride_x) - (col + 0.5)
+            offset_y = (center_y / stride_y) - (row + 0.5)
+            offset_x = float(np.clip(offset_x, -0.499, 0.499))
+            offset_y = float(np.clip(offset_y, -0.499, 0.499))
+
+            width_scale = max(float(box_w) / stride_x, 1e-6)
+            height_scale = max(float(box_h) / stride_y, 1e-6)
+
+            bbox[0, row, col] = np.arctanh(np.clip(offset_x * 2.0, -0.999, 0.999))
+            bbox[1, row, col] = np.arctanh(np.clip(offset_y * 2.0, -0.999, 0.999))
+            bbox[2, row, col] = float(np.clip(np.log(width_scale), -2.0, 2.0))
+            bbox[3, row, col] = float(np.clip(np.log(height_scale), -2.0, 2.0))
+
+            heatmap[0, row, col] = 1.0
+            bbox_mask[0, row, col] = 1.0
+
+        return {
+            "heatmap": heatmap,
+            "bbox": bbox,
+            "bbox_mask": bbox_mask,
+        }
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, idx: int):
+        from scann.core.fits_io import read_fits
+
+        sample = self.samples[idx]
+        pair = sample["pair"]
+
+        new_raw = self._to_2d_float(read_fits(pair.new_path).data)
+        old_raw = self._to_2d_float(read_fits(pair.old_path).data)
+
+        height = min(new_raw.shape[0], old_raw.shape[0])
+        width = min(new_raw.shape[1], old_raw.shape[1])
+        if height <= 0 or width <= 0:
+            raise ValueError(f"图像尺寸无效: {pair.new_path.name} / {pair.old_path.name}")
+
+        new_img = self._normalize_channel(new_raw[:height, :width])
+        old_img = self._normalize_channel(old_raw[:height, :width])
+        diff_img = np.abs(new_img - old_img).astype(np.float32)
+        input_image = np.stack([diff_img, new_img, old_img], axis=0).astype(np.float32)
+
+        targets = self._encode_dense_targets(height, width, sample["annotations"])
+        targets["image_id"] = sample["image_id"]
+        return input_image, targets

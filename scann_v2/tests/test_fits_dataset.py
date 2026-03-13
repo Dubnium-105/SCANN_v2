@@ -13,7 +13,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from scann.ai.dataset import FitsDetectionDataset
+from scann.ai.dataset import FitsDenseDetectionDataset, FitsDetectionDataset
 
 
 class TestFitsDetectionDataset:
@@ -306,3 +306,87 @@ class TestFitsDetectionDataset:
             assert np.all(patch_data >= 0)
             assert np.all(patch_data <= 1)
             assert patch_data.dtype == np.float32
+
+
+class TestFitsDenseDetectionDataset:
+    """测试 v2 dense 检测训练数据集。"""
+
+    def test_dense_targets_shape_align_with_patch_grid(self, tmp_path):
+        new_dir = tmp_path / "new"
+        old_dir = tmp_path / "old"
+        new_dir.mkdir()
+        old_dir.mkdir()
+
+        new_file = new_dir / "NGC_0001.fts"
+        old_file = old_dir / "NGC_0001.fts"
+        new_file.write_bytes(b"new")
+        old_file.write_bytes(b"old")
+
+        annotations = {
+            "images": [
+                {
+                    "id": "NGC_0001",
+                    "annotations": [
+                        {"x": 8, "y": 16, "width": 12, "height": 20, "label": "real"},
+                    ],
+                }
+            ]
+        }
+        ann_file = tmp_path / "annotations.json"
+        ann_file.write_text(json.dumps(annotations), encoding="utf-8")
+
+        mock_new = np.random.rand(64, 48).astype(np.float32)
+        mock_old = np.random.rand(64, 48).astype(np.float32)
+
+        with patch("scann.core.fits_io.read_fits") as mock_read_fits:
+            mock_read_fits.side_effect = [Mock(data=mock_new), Mock(data=mock_old)]
+            dataset = FitsDenseDetectionDataset(
+                dataset_root=str(tmp_path),
+                patch_size=16,
+            )
+            input_image, targets = dataset[0]
+
+        assert input_image.shape == (3, 64, 48)
+        assert targets["heatmap"].shape == (1, 4, 3)
+        assert targets["bbox"].shape == (4, 4, 3)
+        assert targets["bbox_mask"].shape == (1, 4, 3)
+        assert np.sum(targets["bbox_mask"]) == 1.0
+        assert float(np.max(targets["heatmap"])) == 1.0
+
+    def test_invalid_annotations_are_skipped_with_logging(self, tmp_path, caplog):
+        new_dir = tmp_path / "new"
+        old_dir = tmp_path / "old"
+        new_dir.mkdir()
+        old_dir.mkdir()
+
+        new_file = new_dir / "PAIR_A.fts"
+        old_file = old_dir / "PAIR_A.fts"
+        new_file.write_bytes(b"new")
+        old_file.write_bytes(b"old")
+
+        annotations = {
+            "images": [
+                {
+                    "id": "PAIR_A",
+                    "annotations": [
+                        {"x": 4, "y": 4, "width": 8, "height": 8, "label": "real"},
+                        {"x": 10, "y": 10, "height": 5, "label": "real"},
+                        {"x": 1, "y": 1, "width": 2, "height": 2, "label": "unknown"},
+                    ],
+                }
+            ]
+        }
+        ann_file = tmp_path / "annotations.json"
+        ann_file.write_text(json.dumps(annotations), encoding="utf-8")
+
+        mock_new = np.random.rand(32, 32).astype(np.float32)
+        mock_old = np.random.rand(32, 32).astype(np.float32)
+
+        with patch("scann.core.fits_io.read_fits") as mock_read_fits:
+            mock_read_fits.side_effect = [Mock(data=mock_new), Mock(data=mock_old)]
+            with caplog.at_level("WARNING"):
+                dataset = FitsDenseDetectionDataset(dataset_root=str(tmp_path), patch_size=16)
+                _input_image, targets = dataset[0]
+
+        assert np.sum(targets["bbox_mask"]) == 1.0
+        assert "跳过异常标注" in caplog.text

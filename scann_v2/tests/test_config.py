@@ -60,3 +60,69 @@ class TestConfig:
         content = out.read_text(encoding="utf-8")
         parsed = json.loads(content)
         assert isinstance(parsed, dict)
+
+    def test_detection_mode_default_patch_when_missing(self, config_file):
+        from scann.core.config import load_config
+
+        cfg = load_config(str(config_file))
+        assert cfg.detection_mode == "patch"
+
+    def test_detection_mode_roundtrip(self, config_file, tmp_dir):
+        from scann.core.config import load_config, save_config
+
+        cfg = load_config(str(config_file))
+        cfg.detection_mode = "hybrid"
+        out = tmp_dir / "detection_mode_roundtrip.json"
+        save_config(cfg, str(out))
+
+        cfg2 = load_config(str(out))
+        assert cfg2.detection_mode == "hybrid"
+
+    def test_detection_mode_invalid_value_fallback_to_patch(self, tmp_dir):
+        from scann.core.config import load_config
+
+        cfg_path = tmp_dir / "invalid_detection_mode.json"
+        cfg_path.write_text(
+            json.dumps({"detection_mode": "not_a_mode"}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        cfg = load_config(str(cfg_path))
+        assert cfg.detection_mode == "patch"
+
+    def test_hybrid_defaults_when_missing(self, config_file):
+        from scann.core.config import load_config
+
+        cfg = load_config(str(config_file))
+        assert cfg.hybrid_primary_mode == "full_image"
+        assert cfg.hybrid_low_confidence == pytest.approx(0.5)
+
+    def test_hybrid_config_roundtrip(self, config_file, tmp_dir):
+        from scann.core.config import load_config, save_config
+
+        cfg = load_config(str(config_file))
+        cfg.hybrid_primary_mode = "patch"
+        cfg.hybrid_low_confidence = 0.77
+        out = tmp_dir / "hybrid_config_roundtrip.json"
+        save_config(cfg, str(out))
+
+        cfg2 = load_config(str(out))
+        assert cfg2.hybrid_primary_mode == "patch"
+        assert cfg2.hybrid_low_confidence == pytest.approx(0.77)
+
+    def test_hybrid_config_invalid_values_fallback(self, tmp_dir):
+        from scann.core.config import load_config
+
+        cfg_path = tmp_dir / "invalid_hybrid_config.json"
+        cfg_path.write_text(
+            json.dumps(
+                {
+                    "hybrid_primary_mode": "invalid_mode",
+                    "hybrid_low_confidence": "bad",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        cfg = load_config(str(cfg_path))
+        assert cfg.hybrid_primary_mode == "full_image"
+        assert cfg.hybrid_low_confidence == pytest.approx(0.5)

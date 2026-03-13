@@ -124,6 +124,12 @@ class TrainingDialog(QDialog):
         self.combo_backbone.addItems(["ResNet18", "ResNet34", "ResNet50", "ViT_B_16"])
         hyper_form.addRow("骨干网络:", self.combo_backbone)
 
+        self.combo_task_type = QComboBox()
+        self.combo_task_type.addItem("classification", "classification")
+        self.combo_task_type.addItem("detection (dense)", "detection")
+        self.combo_task_type.setToolTip("选择训练任务类型：分类或全图 dense 检测")
+        hyper_form.addRow("任务类型:", self.combo_task_type)
+
         # 设备选择
         device_layout = QHBoxLayout()
         self.combo_device = QComboBox()
@@ -261,6 +267,7 @@ class TrainingDialog(QDialog):
             "lr": self.spin_lr.value(),
             "optimizer": self.combo_optimizer.currentText(),
             "backbone": self.combo_backbone.currentText(),
+            "task_type": self.combo_task_type.currentData() or "classification",
             "device": (self.combo_device.currentData() or "auto"),
             "augment": self.chk_augment.isChecked(),
             "early_stop": self.chk_early_stop.isChecked(),

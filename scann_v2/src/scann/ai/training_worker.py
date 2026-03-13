@@ -84,6 +84,12 @@ class TrainingWorker(QThread):
             return "v1"
         return "v2"
 
+    def _resolve_task_type(self) -> str:
+        task_type = str(self._params.get("task_type", "classification")).strip().lower()
+        if task_type in {"classification", "detection"}:
+            return task_type
+        return "classification"
+
     def _collect_v1_samples_from_dirs(
         self,
         pos_dir: str | Path,
@@ -299,6 +305,68 @@ class TrainingWorker(QThread):
             return self._collect_v2_samples_from_root(dataset_dir), "array"
         return self._collect_v1_samples_from_root(dataset_dir), "file"
 
+    @staticmethod
+    def _compute_dense_detection_loss(
+        pred_dense: torch.Tensor,
+        target_heatmap: torch.Tensor,
+        target_bbox: torch.Tensor,
+        target_bbox_mask: torch.Tensor,
+        heatmap_pos_weight: float,
+        bbox_loss_weight: float,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        pred_bbox = pred_dense[:, :4, :, :]
+        pred_heatmap = pred_dense[:, 4:5, :, :]
+
+        heatmap_loss_raw = torch.nn.functional.binary_cross_entropy_with_logits(
+            pred_heatmap,
+            target_heatmap,
+            reduction="none",
+        )
+        heatmap_weights = torch.ones_like(heatmap_loss_raw)
+        heatmap_weights = torch.where(
+            target_heatmap > 0.5,
+            torch.full_like(heatmap_weights, float(heatmap_pos_weight)),
+            heatmap_weights,
+        )
+        heatmap_loss = (heatmap_loss_raw * heatmap_weights).mean()
+
+        bbox_loss_raw = torch.nn.functional.smooth_l1_loss(
+            pred_bbox,
+            target_bbox,
+            reduction="none",
+        )
+        bbox_mask_expand = target_bbox_mask.expand_as(bbox_loss_raw)
+        bbox_denom = torch.clamp(bbox_mask_expand.sum(), min=1.0)
+        bbox_loss = (bbox_loss_raw * bbox_mask_expand).sum() / bbox_denom
+
+        total_loss = heatmap_loss + float(bbox_loss_weight) * bbox_loss
+        return total_loss, heatmap_loss, bbox_loss
+
+    @staticmethod
+    def _save_detection_checkpoint(
+        model: torch.nn.Module,
+        save_path: str,
+        best_epoch: int,
+        best_val_loss: float,
+        heatmap_threshold: float,
+        bbox_loss_weight: float,
+        heatmap_pos_weight: float,
+        patch_size: int,
+    ) -> None:
+        checkpoint = {
+            "state": model.state_dict(),
+            "model_format": "v2_detector",
+            "task_type": "detection",
+            "backbone": "SCANNDetector",
+            "best_epoch": int(best_epoch),
+            "best_val_loss": float(best_val_loss),
+            "heatmap_threshold": float(heatmap_threshold),
+            "bbox_loss_weight": float(bbox_loss_weight),
+            "heatmap_pos_weight": float(heatmap_pos_weight),
+            "patch_size": int(patch_size),
+        }
+        torch.save(checkpoint, save_path)
+
     def run(self) -> None:
         """执行训练流程"""
         try:
@@ -306,8 +374,8 @@ class TrainingWorker(QThread):
             import torch.nn as nn
             import torch.optim as optim
             from sklearn.metrics import average_precision_score
-            from torch.utils.data import DataLoader, WeightedRandomSampler
-            from torchvision import models, transforms
+            from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
+            from torchvision import models
 
             # 解析参数
             epochs = self._params["epochs"]
@@ -318,6 +386,8 @@ class TrainingWorker(QThread):
             val_split = self._params.get("val_split", 0.2)
             augment = self._params.get("augment", True)
             dataset_format = self._resolve_dataset_format()
+            task_type = self._resolve_task_type()
+            save_path = str(self._params.get("save_path", "best_model.pth"))
 
             # 设备
             requested_device = str(self._params.get("device", "auto")).strip().lower()
@@ -340,6 +410,169 @@ class TrainingWorker(QThread):
                     device = torch.device("cpu")
 
             logger.info(f"训练设备: {device}")
+
+            if task_type == "detection":
+                if dataset_format != "v2":
+                    raise ValueError("detection 任务仅支持 v2 FITS 配对数据集")
+
+                from scann.ai.dataset import FitsDenseDetectionDataset
+                from scann.ai.model import SCANNDetector
+
+                patch_size = int(self._params.get("dense_patch_size", 16))
+                heatmap_pos_weight = float(self._params.get("heatmap_pos_weight", 4.0))
+                bbox_loss_weight = float(self._params.get("bbox_loss_weight", 2.0))
+                heatmap_threshold = float(self._params.get("heatmap_threshold", 0.35))
+
+                dataset_dir = Path(str(self._params.get("dataset_dir", "")).strip())
+                if not str(dataset_dir):
+                    raise ValueError("未设置数据集目录")
+
+                dense_dataset = FitsDenseDetectionDataset(
+                    dataset_root=str(dataset_dir),
+                    patch_size=patch_size,
+                )
+                if len(dense_dataset) < 2:
+                    raise ValueError("dense 检测训练至少需要 2 个样本")
+
+                n = len(dense_dataset)
+                idx = np.arange(n)
+                np.random.shuffle(idx)
+                split = int((1.0 - val_split) * n)
+                split = min(max(split, 1), n - 1)
+                train_idx = idx[:split].tolist()
+                val_idx = idx[split:].tolist()
+
+                train_set = Subset(dense_dataset, train_idx)
+                val_set = Subset(dense_dataset, val_idx)
+                train_loader = DataLoader(
+                    train_set,
+                    batch_size=batch_size,
+                    shuffle=True,
+                    num_workers=0,
+                    pin_memory=False,
+                )
+                val_loader = DataLoader(
+                    val_set,
+                    batch_size=batch_size,
+                    shuffle=False,
+                    num_workers=0,
+                    pin_memory=False,
+                )
+
+                model = SCANNDetector(
+                    in_channels=3,
+                    pretrained=False,
+                    patch_size=patch_size,
+                ).to(device)
+
+                optimizer_name = self._params.get("optimizer", "Adam")
+                if optimizer_name == "AdamW":
+                    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-3)
+                elif optimizer_name == "SGD":
+                    optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=1e-3)
+                else:
+                    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=1e-3)
+
+                best_val_loss = float("inf")
+                best_epoch = -1
+
+                for epoch in range(epochs):
+                    if self._should_stop:
+                        logger.info("训练被中断")
+                        break
+
+                    model.train()
+                    train_loss_sum = 0.0
+                    train_count = 0
+
+                    for x, targets in train_loader:
+                        if self._should_stop:
+                            break
+
+                        x = x.to(device)
+                        target_heatmap = torch.as_tensor(targets["heatmap"], dtype=torch.float32, device=device)
+                        target_bbox = torch.as_tensor(targets["bbox"], dtype=torch.float32, device=device)
+                        target_bbox_mask = torch.as_tensor(targets["bbox_mask"], dtype=torch.float32, device=device)
+
+                        optimizer.zero_grad()
+                        pred_dense = model.forward_dense(x)
+                        loss, _heat_loss, _bbox_loss = self._compute_dense_detection_loss(
+                            pred_dense,
+                            target_heatmap,
+                            target_bbox,
+                            target_bbox_mask,
+                            heatmap_pos_weight=heatmap_pos_weight,
+                            bbox_loss_weight=bbox_loss_weight,
+                        )
+                        loss.backward()
+                        optimizer.step()
+
+                        cur_batch = x.size(0)
+                        train_loss_sum += float(loss.item()) * cur_batch
+                        train_count += cur_batch
+
+                    train_loss = train_loss_sum / max(train_count, 1)
+
+                    model.eval()
+                    val_loss_sum = 0.0
+                    val_count = 0
+                    with torch.no_grad():
+                        for x, targets in val_loader:
+                            if self._should_stop:
+                                break
+
+                            x = x.to(device)
+                            target_heatmap = torch.as_tensor(targets["heatmap"], dtype=torch.float32, device=device)
+                            target_bbox = torch.as_tensor(targets["bbox"], dtype=torch.float32, device=device)
+                            target_bbox_mask = torch.as_tensor(targets["bbox_mask"], dtype=torch.float32, device=device)
+
+                            pred_dense = model.forward_dense(x)
+                            loss, _heat_loss, _bbox_loss = self._compute_dense_detection_loss(
+                                pred_dense,
+                                target_heatmap,
+                                target_bbox,
+                                target_bbox_mask,
+                                heatmap_pos_weight=heatmap_pos_weight,
+                                bbox_loss_weight=bbox_loss_weight,
+                            )
+
+                            cur_batch = x.size(0)
+                            val_loss_sum += float(loss.item()) * cur_batch
+                            val_count += cur_batch
+
+                    if val_count == 0:
+                        break
+
+                    val_loss = val_loss_sum / val_count
+                    self.progress.emit(epoch + 1, epochs, train_loss, val_loss)
+
+                    if val_loss < best_val_loss:
+                        best_val_loss = val_loss
+                        best_epoch = epoch
+                        self._save_detection_checkpoint(
+                            model=model,
+                            save_path=save_path,
+                            best_epoch=best_epoch,
+                            best_val_loss=best_val_loss,
+                            heatmap_threshold=heatmap_threshold,
+                            bbox_loss_weight=bbox_loss_weight,
+                            heatmap_pos_weight=heatmap_pos_weight,
+                            patch_size=patch_size,
+                        )
+                        logger.info("保存最佳 dense 模型 (epoch=%d, val_loss=%.6f)", epoch + 1, best_val_loss)
+
+                if best_epoch < 0:
+                    raise ValueError("dense 检测训练未产生有效验证结果")
+
+                final_metrics = {
+                    "task_type": "detection",
+                    "best_epoch": best_epoch,
+                    "best_val_loss": float(best_val_loss),
+                    "best_f2": 0.0,
+                    "best_threshold": float(heatmap_threshold),
+                }
+                self.finished.emit(save_path, final_metrics)
+                return
 
             # === 1. 数据集加载 ===
             all_samples, sample_kind = self._build_sample_pool()
@@ -436,7 +669,6 @@ class TrainingWorker(QThread):
             best_f2 = -1.0
             best_threshold = 0.5
             best_epoch = 0
-            save_path = "best_model.pth"
 
             for epoch in range(epochs):
                 if self._should_stop:
@@ -519,6 +751,7 @@ class TrainingWorker(QThread):
                         threshold=best_threshold,
                         model_format=model_format,
                         backbone=backbone_name,
+                        task_type="classification",
                     )
                     logger.info(f"保存最佳模型 (epoch={epoch+1}, F2={best_f2:.4f})")
 

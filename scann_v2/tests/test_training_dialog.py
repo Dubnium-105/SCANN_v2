@@ -56,6 +56,12 @@ class TestTrainingDialogInit:
         assert "ResNet18" in items
         assert "ViT_B_16" in items
 
+    def test_task_type_options_and_default(self, dialog):
+        items = [dialog.combo_task_type.itemText(i) for i in range(dialog.combo_task_type.count())]
+        assert "classification" in items
+        assert any("detection" in x for x in items)
+        assert dialog.combo_task_type.currentData() == "classification"
+
     def test_device_options_and_default(self, dialog):
         items = [dialog.combo_device.itemText(i) for i in range(dialog.combo_device.count())]
         assert any("Auto" in x for x in items)
@@ -93,6 +99,7 @@ class TestOnStart:
         assert params["dataset_format"] == "v2"
         assert params["epochs"] == 50
         assert params["batch_size"] == 32
+        assert params["task_type"] == "classification"
         assert params["device"] == "auto"
 
     def test_start_disables_button(self, dialog):

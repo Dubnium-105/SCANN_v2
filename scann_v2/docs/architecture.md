@@ -122,18 +122,19 @@ SCANN v2 (Star/Source Classification and Analysis Neural Network) 是一个天�
 
 #### inference.py - 推理引擎
 - `InferenceEngine`: GPU 推理管理
-  - `detect(image) -> list[Detection]`: 全图检测
+  - `detect_dense_full_image(new_image, old_image, score_threshold, top_k, iou_threshold) -> list[Detection]`: ViT dense 全图检测
   - `classify_patches(patches) -> list[float]`: 裁剪图分类
   - CUDA 多线程并行计算
 
 #### trainer.py - 训练管线
 - `Trainer`: 完整训练流程
-  - `train(config) -> TrainResult`: 训练
+  - `train(config) -> TrainResult`: 支持 `classification | detection` 双任务训练
   - `evaluate(model, dataset) -> Metrics`: 评估
 
 #### dataset.py - 数据集
 - `FitsDataset`: FITS 训练数据集
 - `TargetAnnotation`: 目标标注（像素位置 + 类别）
+- dense 检测模式下输出 `input + heatmap_target + bbox_target`
 
 #### target_marker.py - 目标标记
 - `mark_target(image, position, marker_type) -> MarkedImage`: 在图上标记
@@ -162,7 +163,8 @@ SCANN v2 (Star/Source Classification and Analysis Neural Network) 是一个天�
 
 #### detection_service.py - 检测管线
 - `DetectionPipeline`: 完整检测流程
-  1. 对齐 → 2. 检测候选 → 3. AI 评分 → 4. 排除已知 → 5. 排序输出
+  1. 对齐 → 2. 按 `detection_mode` 分流 (`patch | full_image | hybrid`) → 3. 排除已知 → 4. 排序输出
+  2. `hybrid` 模式支持 `full_image` 与 `patch` 双向主从顺序，full-image 失败/低置信可自动回退
 
 #### query_service.py - 外部查询
 - `query_vsx(ra, dec)` / `query_mpc(ra, dec)` / `query_simbad(ra, dec)` / `query_tns(ra, dec)`
@@ -328,3 +330,17 @@ ImageViewer.right_click → QMenu → QueryService.query_xxx → QueryResultPopu
 - **图像优先**: 图像区域占窗口 ≥ 75%，侧边栏可折叠
 - **暗色主题**: 背景 `#1E1E1E`，图像区域 `#141414`
 - **最小窗口**: 1024×768，宽度 < 1200px 时侧边栏自动折叠
+
+## 8. ViT 全图检测运行说明（当前实现）
+
+- **模式切换**: `scann_v2_config.json` 中 `detection_mode` 支持 `patch | full_image | hybrid`，默认 `patch`
+- **hybrid 参数**:
+  - `hybrid_primary_mode`: `full_image | patch`
+  - `hybrid_low_confidence`: 低置信回退阈值（0~1）
+- **dense 解码参数**:
+  - `score_threshold`: 候选置信阈值
+  - `top_k`: heatmap 取点上限
+  - `iou_threshold`: NMS 阈值
+- **已知限制**:
+  - 超大分辨率图像在 `full_image` 模式下显存/时延波动较大，推荐优先使用 `hybrid`
+  - 当前以单类 real 候选检测为主，多类别检测头不在当前版本范围

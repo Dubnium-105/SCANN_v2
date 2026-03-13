@@ -25,6 +25,7 @@ def mock_config():
     cfg.min_area = 3
     cfg.ai_confidence = 0.5
     cfg.model_backbone = "ViT_B_16"
+    cfg.detection_mode = "full_image"
     return cfg
 
 
@@ -115,6 +116,10 @@ class TestAITab:
         assert any(x.startswith("auto") for x in items)
         assert "ViT_B_16" in items
 
+    def test_detection_mode_combo(self, dialog):
+        items = [dialog.combo_detection_mode.itemText(i) for i in range(dialog.combo_detection_mode.count())]
+        assert items == ["patch", "full_image", "hybrid"]
+
 
 class TestPathsTab:
     """测试保存/路径标签页"""
@@ -155,6 +160,9 @@ class TestLoadFromConfig:
     def test_model_backbone_loaded(self, dialog, mock_config):
         assert dialog.combo_model_backbone.currentText() == "ViT_B_16"
 
+    def test_detection_mode_loaded(self, dialog, mock_config):
+        assert dialog.combo_detection_mode.currentText() == "full_image"
+
 
 class TestSaveToConfig:
     """测试写回 Config"""
@@ -173,6 +181,11 @@ class TestSaveToConfig:
         dialog.combo_model_backbone.setCurrentText("ResNet50")
         dialog._save_to_config()
         assert mock_config.model_backbone == "ResNet50"
+
+    def test_save_updates_detection_mode(self, dialog, mock_config):
+        dialog.combo_detection_mode.setCurrentText("hybrid")
+        dialog._save_to_config()
+        assert mock_config.detection_mode == "hybrid"
 
 
 class TestSettingsChangedSignal:

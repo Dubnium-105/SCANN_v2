@@ -235,6 +235,16 @@ class SettingsDialog(QDialog):
         self.combo_device.addItems(["auto", "cpu", "cuda"])
         infer_form.addRow("计算设备:", self.combo_device)
 
+        self.combo_detection_mode = QComboBox()
+        self.combo_detection_mode.addItems(["patch", "full_image", "hybrid"])
+        self.combo_detection_mode.setToolTip(
+            "候选检测模式\n"
+            "patch: 仅使用现有 patch 管线\n"
+            "full_image: 仅使用全图 dense 检测\n"
+            "hybrid: 优先全图检测，失败时回退 patch"
+        )
+        infer_form.addRow("检测模式:", self.combo_detection_mode)
+
         layout.addWidget(grp_infer)
         layout.addStretch()
 
@@ -352,6 +362,11 @@ class SettingsDialog(QDialog):
         device_map = {"auto": 0, "cpu": 1, "cuda": 2}
         self.combo_device.setCurrentIndex(device_map.get(cfg.compute_device, 0))
 
+        detection_mode_map = {"patch": 0, "full_image": 1, "hybrid": 2}
+        self.combo_detection_mode.setCurrentIndex(
+            detection_mode_map.get(cfg.detection_mode, 0)
+        )
+
         # ── 保存/路径 ──
         self.edit_save_dir.setText(cfg.save_folder)
         self.edit_mpcorb_path.setText(cfg.mpcorb_path)
@@ -406,6 +421,9 @@ class SettingsDialog(QDialog):
         # 计算设备
         device_values = ["auto", "cpu", "cuda"]
         cfg.compute_device = device_values[self.combo_device.currentIndex()]
+
+        detection_mode_values = ["patch", "full_image", "hybrid"]
+        cfg.detection_mode = detection_mode_values[self.combo_detection_mode.currentIndex()]
 
         # ── 保存/路径 ──
         cfg.save_folder = self.edit_save_dir.text()
