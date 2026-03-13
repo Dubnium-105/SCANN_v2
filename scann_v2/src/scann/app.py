@@ -5,13 +5,18 @@ import sys
 from pathlib import Path
 
 # 添加src目录到sys.path以确保模块可以被导入
-src_path = Path(__file__).parent.parent
-if str(src_path) not in sys.path:
-    sys.path.insert(0, str(src_path))
+if not getattr(sys, "frozen", False):
+    src_path = Path(__file__).parent.parent
+    if str(src_path) not in sys.path:
+        sys.path.insert(0, str(src_path))
 
 # 设置PyTorch模型下载路径到项目内（必须在导入torch之前设置）
-# app.py 位于 scann_v2/src/scann/app.py，需要向上3级到 scann_v2/
-project_root = Path(__file__).parent.parent.parent
+# 非冻结模式：app.py 位于 scann_v2/src/scann/app.py，需要向上3级到 scann_v2/
+# 冻结模式：以可执行文件所在目录为根目录
+if getattr(sys, "frozen", False):
+    project_root = Path(sys.executable).resolve().parent
+else:
+    project_root = Path(__file__).parent.parent.parent
 model_cache_dir = project_root / "models" / "torch_cache"
 model_cache_dir.mkdir(parents=True, exist_ok=True)
 

@@ -90,6 +90,21 @@ scann_v2/
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 ```
 
+## v2 可执行文件发行版打包（免用户配置依赖）
+
+如果你需要给其他人分发无需 Python/依赖安装的 v2 发行版，可在 `scann_v2` 目录执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build_exe_release.ps1 -Clean
+```
+
+打包后会生成：
+- `release/scann_v2-<version>-exe-<yyyymmdd>/`
+
+如包体过大，PowerShell 内置压缩可能失败，此时直接分发上述目录即可。
+
+其中包含 `SCANN_v2\SCANN_v2.exe` 和 `run_scann_v2.bat`，用户可直接双击运行。
+
 ## v2 使用方法
 
 ### 1. 启动应用程序
