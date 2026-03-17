@@ -23,6 +23,7 @@ class OverlayLabel(QLabel):
     # 预定义颜色方案
     COLORS = {
         "new": "#2196F3",   # 蓝色 = 新图
+        "marked": "#4CAF50",  # 绿色 = 带标记新图
         "old": "#FF9800",   # 橙色 = 旧图
         "inv": "#9C27B0",   # 紫色 = 反色
         "blink": "#FFEB3B", # 黄色 = 闪烁中
@@ -61,7 +62,7 @@ class OverlayLabel(QLabel):
         """根据预定义状态设置颜色
 
         Args:
-            state: "new", "old", "inv", "blink"
+            state: "new", "marked", "old", "inv", "blink"
         """
         color = self.COLORS.get(state.lower(), "#2196F3")
         self.set_color(color)

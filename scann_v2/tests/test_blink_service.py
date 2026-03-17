@@ -79,3 +79,16 @@ class TestBlinkService:
         assert svc.is_inverted is True
         svc.toggle_invert()
         assert svc.is_inverted is False
+
+    def test_tick_cycles_three_states_when_sequence_configured(self):
+        from scann.services.blink_service import BlinkService, BlinkState
+
+        svc = BlinkService(
+            sequence=(BlinkState.NEW, BlinkState.MARKED, BlinkState.OLD)
+        )
+        svc.start()
+
+        assert svc.current_state == BlinkState.NEW
+        assert svc.tick() == BlinkState.MARKED
+        assert svc.tick() == BlinkState.OLD
+        assert svc.tick() == BlinkState.NEW

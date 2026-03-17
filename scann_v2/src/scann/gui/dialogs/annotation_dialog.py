@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from PyQt5.QtCore import Qt, QRectF, QPointF
+from PyQt5.QtCore import Qt, QRectF, QPointF, QTimer
 from PyQt5.QtWidgets import (
     QAction,
     QCheckBox,
@@ -56,6 +56,7 @@ from scann.gui.widgets.histogram_panel import HistogramPanel
 from scann.gui.widgets.overlay_label import OverlayLabel
 from scann.core.image_processor import histogram_stretch
 from scann.services.detection_pipeline import DetectionPipeline
+from scann.services.blink_service import BlinkService, BlinkState
 
 
 class AnnotationDialog(QDialog):
@@ -89,10 +90,16 @@ class AnnotationDialog(QDialog):
 
         # v2: 新旧图和直方图拉伸状态
         self._new_image_data: Optional[np.ndarray] = None
+        self._new_marked_image_data: Optional[np.ndarray] = None
         self._old_image_data: Optional[np.ndarray] = None
-        self._current_view: str = "new"  # "new" | "old"
+        self._current_view: str = "new"  # "new_marked" | "new" | "old"
         self._histogram_panel: Optional[HistogramPanel] = None
         self._current_sample: Optional[AnnotationSample] = None  # 当前样本用于获取文件信息
+        self._blink_service = BlinkService(
+            sequence=(BlinkState.NEW, BlinkState.MARKED, BlinkState.OLD)
+        )
+        self._blink_timer = QTimer(self)
+        self._blink_timer.timeout.connect(self._on_blink_tick)
 
         # 快捷键→标签按钮映射
         self._label_buttons: dict[str, QPushButton] = {}
@@ -384,11 +391,15 @@ class AnnotationDialog(QDialog):
         layout.setSpacing(4)
 
         # 新/旧图切换按钮
+        self._btn_show_new_marked = QPushButton("[3] 带标记新图")
         self._btn_show_new = QPushButton("[1] 新图")
         self._btn_show_old = QPushButton("[2] 旧图")
+        self._btn_show_new_marked.setCheckable(True)
         self._btn_show_new.setCheckable(True)
         self._btn_show_old.setCheckable(True)
+        self._btn_show_new_marked.setChecked(False)
         self._btn_show_new.setChecked(True)
+        layout.addWidget(self._btn_show_new_marked)
         layout.addWidget(self._btn_show_new)
         layout.addWidget(self._btn_show_old)
 
@@ -402,6 +413,11 @@ class AnnotationDialog(QDialog):
         self._btn_invert.setCheckable(True)
         layout.addWidget(self._btn_invert)
 
+        # 三图闪烁按钮
+        self._btn_blink = QPushButton("⏯ 闪烁")
+        self._btn_blink.setCheckable(True)
+        layout.addWidget(self._btn_blink)
+
         # 直方图拉伸按钮
         self._btn_histogram = QPushButton("📊 拉伸")
         layout.addWidget(self._btn_histogram)
@@ -414,9 +430,11 @@ class AnnotationDialog(QDialog):
         layout.addStretch()
 
         # 连接信号
+        self._btn_show_new_marked.clicked.connect(self._on_show_new_marked)
         self._btn_show_new.clicked.connect(self._on_show_new)
         self._btn_show_old.clicked.connect(self._on_show_old)
         self._btn_invert.clicked.connect(self._on_invert_toggle)
+        self._btn_blink.clicked.connect(self._on_toggle_blink)
         self._btn_histogram.clicked.connect(self._on_toggle_histogram)
 
         # 初始化直方图面板
@@ -451,8 +469,19 @@ class AnnotationDialog(QDialog):
         else:
             self._histogram_panel.hide()
 
+    def _on_show_new_marked(self) -> None:
+        """显示带十字线标记的新图"""
+        self._blink_service.set_state(BlinkState.MARKED)
+        self._btn_show_new_marked.setChecked(True)
+        self._btn_show_new.setChecked(False)
+        self._btn_show_old.setChecked(False)
+        self._current_view = "new_marked"
+        self._show_image("new_marked")
+
     def _on_show_new(self) -> None:
         """显示新图"""
+        self._blink_service.set_state(BlinkState.NEW)
+        self._btn_show_new_marked.setChecked(False)
         self._btn_show_new.setChecked(True)
         self._btn_show_old.setChecked(False)
         self._current_view = "new"
@@ -460,14 +489,38 @@ class AnnotationDialog(QDialog):
 
     def _on_show_old(self) -> None:
         """显示旧图"""
+        self._blink_service.set_state(BlinkState.OLD)
+        self._btn_show_new_marked.setChecked(False)
         self._btn_show_new.setChecked(False)
         self._btn_show_old.setChecked(True)
         self._current_view = "old"
         self._show_image("old")
 
+    def _on_toggle_blink(self) -> None:
+        """切换三图轮播闪烁。"""
+        running = self._blink_service.toggle()
+        self._btn_blink.setChecked(running)
+        if running:
+            self._blink_timer.setInterval(self._blink_service.speed_ms)
+            self._blink_timer.start()
+        else:
+            self._blink_timer.stop()
+
+    def _on_blink_tick(self) -> None:
+        """闪烁节拍：NEW -> MARKED -> OLD -> NEW 循环。"""
+        state = self._blink_service.tick()
+        if state == BlinkState.NEW:
+            self._show_image("new")
+        elif state == BlinkState.MARKED:
+            self._show_image("new_marked")
+        else:
+            self._show_image("old")
+
     def _show_image(self, which: str) -> None:
         """统一的图像显示逻辑"""
-        if which == "new":
+        if which == "new_marked":
+            self._current_view = "new_marked"
+        elif which == "new":
             self._current_view = "new"
         else:
             self._current_view = "old"
@@ -482,7 +535,12 @@ class AnnotationDialog(QDialog):
     def _on_stretch_changed(self, black: float, white: float) -> None:
         """直方图拉伸参数变化"""
         # 确定当前显示的图像
-        data = self._new_image_data if self._current_view == "new" else self._old_image_data
+        if self._current_view == "new_marked":
+            data = self._new_marked_image_data
+        elif self._current_view == "new":
+            data = self._new_image_data
+        else:
+            data = self._old_image_data
         if data is None:
             return
 
@@ -558,6 +616,7 @@ class AnnotationDialog(QDialog):
             "N3": lambda: self._on_label_button("N3"),
             "N4": lambda: self._on_label_button("N4"),
             "N5": lambda: self._on_label_button("N5"),
+            "3": self._on_show_new_marked,
             "1": self._on_show_new,
             "2": self._on_show_old,
             "I": self._on_invert_toggle,
@@ -685,6 +744,9 @@ class AnnotationDialog(QDialog):
         if self._backend is None:
             return
 
+        if self._current_mode == "v2":
+            self._ensure_v2_dataset_dirs(path)
+
         self._dataset_path = path
         self._samples = self._backend.load_samples(path)
         self._sample_count = len(self._samples)
@@ -693,6 +755,27 @@ class AnnotationDialog(QDialog):
         self._path_label.setText(path)
         self._update_display()
         self._update_stats()
+
+    def _ensure_v2_dataset_dirs(self, path: str) -> None:
+        """确保 v2 数据集目录结构存在，缺失时自动创建并提示。"""
+        root = Path(path)
+        if not root.exists() or not root.is_dir():
+            return
+
+        required_dirs = ["new_marked", "new", "old"]
+        created: list[str] = []
+        for name in required_dirs:
+            folder = root / name
+            if not folder.exists():
+                folder.mkdir(parents=True, exist_ok=True)
+                created.append(name)
+
+        if created:
+            self._show_status_message(
+                f"检测到缺少 v2 子目录，已自动创建: {', '.join(created)}",
+                timeout=5000,
+                level="INFO",
+            )
 
     def _on_browse(self) -> None:
         """浏览选择数据集目录"""
@@ -941,12 +1024,26 @@ class AnnotationDialog(QDialog):
             except Exception:
                 self._old_image_data = None
 
+            # 加载带真目标标记的新图（仅辅助标注，不参与训练）
+            try:
+                if self._backend is not None and hasattr(self._backend, 'get_image_data'):
+                    marked_data = self._backend.get_image_data(sample, image_type="new_marked")
+                    self._new_marked_image_data = (
+                        marked_data.copy() if marked_data is not None else None
+                    )
+                else:
+                    self._new_marked_image_data = None
+            except Exception:
+                self._new_marked_image_data = None
+
             # 填充 metadata 供 _refresh_current_image 使用
             if hasattr(self._backend, '_image_paths'):
                 paths = self._backend._image_paths.get(sample.id, {})
                 sample.metadata["new_path"] = paths.get("new", "")
                 sample.metadata["old_path"] = paths.get("old", "")
+                sample.metadata["new_marked_path"] = paths.get("new_marked", "")
                 sample.metadata["has_old"] = bool(paths.get("old", ""))
+                sample.metadata["has_new_marked"] = bool(paths.get("new_marked", ""))
 
             # 根据当前视图显示对应的图像
             self._refresh_current_image()
@@ -968,8 +1065,24 @@ class AnnotationDialog(QDialog):
             return
         sample = self._current_sample
 
-        if self._current_view == "old" and self._old_image_data is not None:
+        if self._current_view == "new_marked" and self._new_marked_image_data is not None:
+            self._annotation_viewer.set_image(
+                self._new_marked_image_data,
+                is_new=True,
+                view="new_marked",
+            )
+            self._btn_show_new_marked.setChecked(True)
+            self._btn_show_new.setChecked(False)
+            self._btn_show_old.setChecked(False)
+            self._overlay_state.setText("MARKED")
+            self._overlay_state.set_state("marked")
+            marked_path = sample.metadata.get("new_marked_path", "")
+            if marked_path:
+                filename = Path(marked_path).name
+                self._overlay_state.set_file_name(filename, match_found=True)
+        elif self._current_view == "old" and self._old_image_data is not None:
             self._annotation_viewer.set_image(self._old_image_data, is_new=False, view="old")
+            self._btn_show_new_marked.setChecked(False)
             self._btn_show_new.setChecked(False)
             self._btn_show_old.setChecked(True)
             self._overlay_state.setText("OLD")
@@ -982,6 +1095,7 @@ class AnnotationDialog(QDialog):
                 self._overlay_state.set_file_name(filename, match_found=has_old)
         elif self._new_image_data is not None:
             self._annotation_viewer.set_image(self._new_image_data, is_new=True, view="new")
+            self._btn_show_new_marked.setChecked(False)
             self._btn_show_new.setChecked(True)
             self._btn_show_old.setChecked(False)
             self._overlay_state.setText("NEW")
@@ -1287,6 +1401,7 @@ class AnnotationDialog(QDialog):
             <li>目录内需包含以下子目录:</li>
             <li><code>new/</code> - 新图像</li>
             <li><code>old/</code> - 参考图像</li>
+            <li><code>new_marked/</code> - 带真目标十字线标记的新图（可选，仅辅助标注，不参与训练）</li>
         </ul>
         <p>支持格式: <code>*.fits</code></p>
         """

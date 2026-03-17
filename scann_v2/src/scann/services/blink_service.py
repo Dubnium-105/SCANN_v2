@@ -14,6 +14,7 @@ from enum import Enum, auto
 class BlinkState(Enum):
     """当前显示的图像"""
     NEW = auto()
+    MARKED = auto()
     OLD = auto()
 
 
@@ -23,9 +24,16 @@ class BlinkService:
     与 GUI 定时器解耦，仅管理状态。
     """
 
-    def __init__(self, speed_ms: int = 500):
+    def __init__(
+        self,
+        speed_ms: int = 500,
+        sequence: tuple[BlinkState, ...] | None = None,
+    ):
         self._speed_ms = speed_ms
-        self._state = BlinkState.NEW
+        self._sequence = sequence or (BlinkState.NEW, BlinkState.OLD)
+        if not self._sequence:
+            self._sequence = (BlinkState.NEW, BlinkState.OLD)
+        self._state = self._sequence[0]
         self._running = False
         self._inverted = False  # 反色状态：切换图片不重置
 
@@ -78,10 +86,12 @@ class BlinkService:
         if not self._running:
             return self._state
 
-        if self._state == BlinkState.NEW:
-            self._state = BlinkState.OLD
-        else:
-            self._state = BlinkState.NEW
+        try:
+            idx = self._sequence.index(self._state)
+        except ValueError:
+            idx = 0
+
+        self._state = self._sequence[(idx + 1) % len(self._sequence)]
 
         return self._state
 
@@ -96,7 +106,7 @@ class BlinkService:
 
     def reset(self) -> None:
         """重置到初始状态 (不重置反色)"""
-        self._state = BlinkState.NEW
+        self._state = self._sequence[0]
         self._running = False
 
     def set_state(self, state: BlinkState) -> None:

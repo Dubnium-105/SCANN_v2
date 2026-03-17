@@ -47,8 +47,10 @@ def fits_dataset(tmp_dir: Path) -> Path:
     ds = tmp_dir / "fits_data"
     new_dir = ds / "new"
     old_dir = ds / "old"
+    marked_dir = ds / "new_marked"
     new_dir.mkdir(parents=True)
     old_dir.mkdir(parents=True)
+    marked_dir.mkdir(parents=True)
 
     rng = np.random.default_rng(42)
     hdr = astro_fits.Header()
@@ -57,8 +59,15 @@ def fits_dataset(tmp_dir: Path) -> Path:
 
     for i in range(3):
         data = rng.normal(loc=1000, scale=50, size=(256, 256)).astype(np.uint16)
+        marked = data.copy()
+        center = marked.shape[0] // 2
+        marked[center - 1:center + 1, :] = np.uint16(4095)
+        marked[:, center - 1:center + 1] = np.uint16(4095)
         astro_fits.writeto(
             str(new_dir / f"field_{i + 1:03d}.fits"), data, header=hdr, overwrite=True
+        )
+        astro_fits.writeto(
+            str(marked_dir / f"field_{i + 1:03d}.fits"), marked, header=hdr, overwrite=True
         )
         # 旧图 — 微偏移
         old_data = np.roll(data, shift=(2, -1), axis=(0, 1))
@@ -352,6 +361,7 @@ class TestFitsImageData:
         assert "file_name" in info
         assert info["has_new_image"] is True
         assert info["has_old_image"] is True
+        assert info["has_new_marked_image"] is True
 
     def test_get_new_and_old_image(self, fits_backend):
         """v2 后端应能分别获取新图和旧图"""
@@ -362,6 +372,15 @@ class TestFitsImageData:
         assert isinstance(old_img, np.ndarray)
         # 新旧图应不完全相同 (有偏移)
         assert not np.array_equal(new_img, old_img)
+
+    def test_get_new_marked_image(self, fits_backend):
+        """v2 后端应支持读取带十字线标记的新图"""
+        sample = fits_backend.samples[0]
+        marked = fits_backend.get_image_data(sample, image_type="new_marked")
+        new_img = fits_backend.get_image_data(sample, image_type="new")
+        assert isinstance(marked, np.ndarray)
+        assert marked.shape == new_img.shape
+        assert not np.array_equal(marked, new_img)
 
 
 # ─── 撤销/重做测试 ───

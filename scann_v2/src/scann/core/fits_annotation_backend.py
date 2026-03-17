@@ -46,7 +46,7 @@ class FitsAnnotationBackend(AnnotationBackend):
         super().__init__()
         self._dataset_root: Optional[Path] = None
         self._annotations_path: Optional[Path] = None
-        # 内部映射: sample_id → {new_path, old_path}
+        # 内部映射: sample_id → {new_path, old_path, new_marked_path}
         self._image_paths: dict[str, dict[str, str]] = {}
         self._pair_service = PairService()
 
@@ -64,6 +64,7 @@ class FitsAnnotationBackend(AnnotationBackend):
 
         self._ensure_aligned_crop_files(root)
         aligned_pairs = self._collect_aligned_pairs(root)
+        marked_files = self._collect_marked_files(root / "new_marked")
 
         # 加载已有 JSON 标注
         existing_annotations = self._load_annotations_json(root)
@@ -96,6 +97,7 @@ class FitsAnnotationBackend(AnnotationBackend):
             self._image_paths[sample_id] = {
                 "new": str(new_path) if new_path else "",
                 "old": str(old_path) if old_path else "",
+                "new_marked": str(marked_files.get(sample_id, "")),
             }
 
             self._samples.append(sample)
@@ -236,6 +238,7 @@ class FitsAnnotationBackend(AnnotationBackend):
             "label_display": sample.label_display,
             "has_new_image": bool(paths.get("new")),
             "has_old_image": bool(paths.get("old")),
+            "has_new_marked_image": bool(paths.get("new_marked")),
         }
 
     def export_dataset(
@@ -355,6 +358,7 @@ class FitsAnnotationBackend(AnnotationBackend):
                     marker_text = "aligned=1\n"
                     new_marker_path.write_text(marker_text, encoding="utf-8")
                     old_marker_path.write_text(marker_text, encoding="utf-8")
+                self._ensure_marked_aligned_crop_file(root, pair, new_aligned_path, new_marker_path)
                 continue
 
             self._align_pair_to_crop(
@@ -364,6 +368,7 @@ class FitsAnnotationBackend(AnnotationBackend):
                 new_marker_path,
                 old_marker_path,
             )
+            self._ensure_marked_aligned_crop_file(root, pair, new_aligned_path, new_marker_path)
 
     def _align_pair_to_crop(
         self,
@@ -466,6 +471,101 @@ class FitsAnnotationBackend(AnnotationBackend):
                 continue
             files[self._strip_aligned_crop_suffix(file_path.stem)] = file_path
         return files
+
+    def _collect_marked_files(self, folder: Path) -> dict[str, Path]:
+        """扫描带十字线标记新图目录，优先使用 __aligned_crop.fts。"""
+        if not folder.is_dir():
+            return {}
+
+        aligned: dict[str, Path] = {}
+        normal: dict[str, Path] = {}
+        for file_path in sorted(folder.iterdir()):
+            if not file_path.is_file():
+                continue
+            if file_path.suffix.lower() not in _FITS_EXTS:
+                continue
+            stem = file_path.stem
+            if stem.lower().endswith("__aligned_crop"):
+                sample_id = self._strip_aligned_crop_suffix(stem)
+                aligned[sample_id] = file_path
+                continue
+            normal[stem] = file_path
+
+        merged = dict(normal)
+        merged.update(aligned)
+        return merged
+
+    def _ensure_marked_aligned_crop_file(
+        self,
+        root: Path,
+        pair,
+        new_aligned_path: Path,
+        new_marker_path: Path,
+    ) -> None:
+        """为带标记新图生成 __aligned_crop.fts，确保与标注视图坐标一致。"""
+        marked_dir = root / "new_marked"
+        if not marked_dir.is_dir():
+            return
+
+        marked_source = marked_dir / f"{Path(pair.new_path).stem}.fits"
+        if not marked_source.exists():
+            for ext in (".fts", ".fit"):
+                candidate = marked_dir / f"{Path(pair.new_path).stem}{ext}"
+                if candidate.exists():
+                    marked_source = candidate
+                    break
+        if not marked_source.exists():
+            return
+
+        marked_aligned = marked_source.with_name(f"{marked_source.stem}__aligned_crop.fts")
+        if marked_aligned.exists():
+            return
+
+        crop_bounds = self._parse_crop_bounds_from_marker(new_marker_path)
+        try:
+            marked_fits = read_fits(marked_source)
+            marked_data = np.nan_to_num(
+                marked_fits.data.astype(np.float32),
+                nan=0.0,
+                posinf=0.0,
+                neginf=0.0,
+            )
+            if crop_bounds is not None:
+                x0, x1, y0, y1 = crop_bounds
+                if 0 <= x0 < x1 <= marked_data.shape[1] and 0 <= y0 < y1 <= marked_data.shape[0]:
+                    cropped = marked_data[y0:y1, x0:x1]
+                else:
+                    cropped = marked_data
+            else:
+                cropped = marked_data
+
+            if new_aligned_path.exists() and (cropped.shape != read_fits(new_aligned_path).data.shape):
+                aligned_shape = read_fits(new_aligned_path).data.shape
+                ah, aw = aligned_shape[:2]
+                h, w = cropped.shape[:2]
+                y0 = max(0, (h - ah) // 2)
+                x0 = max(0, (w - aw) // 2)
+                cropped = cropped[y0:y0 + ah, x0:x0 + aw]
+
+            write_fits(marked_aligned, cropped, marked_fits.header)
+        except Exception as exc:
+            logger.warning("带标记新图裁剪生成失败: %s (%s)", pair.name, exc)
+
+    @staticmethod
+    def _parse_crop_bounds_from_marker(marker_path: Path) -> tuple[int, int, int, int] | None:
+        """从 .marker 文件解析裁剪区域。"""
+        if not marker_path.exists():
+            return None
+        try:
+            for line in marker_path.read_text(encoding="utf-8").splitlines():
+                if not line.startswith("crop="):
+                    continue
+                values = line.split("=", 1)[1]
+                x0, x1, y0, y1 = [int(v.strip()) for v in values.split(",")]
+                return x0, x1, y0, y1
+        except Exception:
+            return None
+        return None
 
     def _pair_aligned_files(
         self,
