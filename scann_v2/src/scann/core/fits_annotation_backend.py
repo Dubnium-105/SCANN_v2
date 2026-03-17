@@ -1,7 +1,7 @@
-"""v2 FITS 全图检测标注后端
+"""v2 FITS 全图检测标注后端。
 
-加载 FITS 图像目录 (新图/旧图配对)，支持边界框标注 + 类别标签，
-标注结果持久化为 JSON 文件 (兼容 FitsDetectionDataset 格式)。
+加载 FITS 图像目录 (新图/旧图配对)，支持边界框标注 + 类别标签。
+标注结果默认持久化到 SQLite（按样本增量写入），并兼容 legacy annotations.json 迁移。
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from scann.core.annotation_models import (
     BBox,
     ExportResult,
 )
+from scann.core.fits_annotation_storage import FitsAnnotationStorage
 from scann.core.fits_io import read_fits, write_fits
 from scann.core.image_aligner import align
 from scann.data.file_manager import match_new_old_pairs
@@ -38,9 +39,9 @@ _FITS_EXTS = {".fits", ".fit", ".fts"}
 class FitsAnnotationBackend(AnnotationBackend):
     """v2 FITS 全图检测标注后端
 
-    - 输入: FITS 图像目录 (new/old 配对) + JSON 标注文件
+    - 输入: FITS 图像目录 (new/old 配对) + SQLite/JSON 标注
     - 标注方式: 边界框 + 详细类别标签
-    - 持久化: annotations.json
+    - 持久化: annotations.db (manifest: annotations.json)
     - supports_bbox: True
     """
 
@@ -48,6 +49,7 @@ class FitsAnnotationBackend(AnnotationBackend):
         super().__init__()
         self._dataset_root: Optional[Path] = None
         self._annotations_path: Optional[Path] = None
+        self._annotation_storage: Optional[FitsAnnotationStorage] = None
         # 内部映射: sample_id → {new_path, old_path, new_marked_path}
         self._image_paths: dict[str, dict[str, str]] = {}
         self._pair_service = PairService()
@@ -68,8 +70,10 @@ class FitsAnnotationBackend(AnnotationBackend):
         aligned_pairs = self._collect_aligned_pairs(root)
         marked_files = self._collect_marked_files(root / "new_marked")
 
-        # 加载已有 JSON 标注
-        existing_annotations = self._load_annotations_json(root)
+        # 加载已有标注（优先 SQLite，兼容 legacy JSON）
+        self._annotation_storage = FitsAnnotationStorage(root)
+        loaded = self._annotation_storage.load_annotations()
+        existing_annotations = loaded.by_id
 
         for sample_id, new_path, old_path in aligned_pairs:
             ref_file = new_path or old_path
@@ -109,6 +113,10 @@ class FitsAnnotationBackend(AnnotationBackend):
 
         # 设置标注文件路径
         self._annotations_path = root / "annotations.json"
+
+        # legacy JSON 首次加载后自动迁移到 SQLite
+        if loaded.loaded_from_legacy_json and self._annotation_storage is not None:
+            self._annotation_storage.bulk_replace(self._samples)
 
         if filter != "all":
             return self.get_filtered_samples(filter)
@@ -161,8 +169,8 @@ class FitsAnnotationBackend(AnnotationBackend):
             new_value=new_value,
         ))
 
-        # 持久化到 JSON
-        self._save_annotations_json()
+        # 增量持久化到 SQLite
+        self._save_sample_annotation(sample)
 
     def apply_ai_preannotations(
         self,
@@ -199,7 +207,7 @@ class FitsAnnotationBackend(AnnotationBackend):
             old_value=old_value,
             new_value=new_value,
         ))
-        self._save_annotations_json()
+        self._save_sample_annotation(sample)
 
     def get_image_data(
         self, sample: AnnotationSample, image_type: str = "new"
@@ -325,23 +333,13 @@ class FitsAnnotationBackend(AnnotationBackend):
     def supports_bbox(self) -> bool:
         return True
 
-    # ─── JSON 持久化 ───
+    # ─── 标注持久化 ───
 
     def _load_annotations_json(self, root: Path) -> dict[str, dict]:
-        """加载已有的 annotations.json"""
-        ann_path = root / "annotations.json"
-        if not ann_path.exists():
-            return {}
-
-        try:
-            data = json.loads(ann_path.read_text(encoding="utf-8"))
-            result = {}
-            for img in data.get("images", []):
-                result[img["id"]] = img
-            return result
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.warning(f"无法解析标注文件: {e}")
-            return {}
+        """兼容旧接口：加载已有标注（SQLite/JSON）。"""
+        storage = FitsAnnotationStorage(root)
+        loaded = storage.load_annotations()
+        return loaded.by_id
 
     def _resolve_annotation_entry(
         self,
@@ -747,39 +745,11 @@ class FitsAnnotationBackend(AnnotationBackend):
                 return stem[len(prefix):]
         return stem
 
-    def _save_annotations_json(self) -> None:
-        """将所有标注保存到 annotations.json"""
-        if self._annotations_path is None:
+    def _save_sample_annotation(self, sample: AnnotationSample) -> None:
+        """按样本增量持久化，避免全量重写大 JSON。"""
+        if self._annotation_storage is None:
             return
-
-        images = []
-        for s in self._samples:
-            if not s.is_labeled and not s.bboxes:
-                continue
-            img_data: dict = {
-                "id": s.id,
-                "file_name": s.display_name,
-            }
-            if s.label:
-                img_data["label"] = s.label
-            if s.detail_type:
-                img_data["detail_type"] = s.detail_type
-            if s.bboxes:
-                img_data["annotations"] = [b.to_dict() for b in s.bboxes]
-            if s.ai_suggestion is not None:
-                img_data["ai_suggestion"] = s.ai_suggestion
-            if s.ai_confidence is not None:
-                img_data["ai_confidence"] = s.ai_confidence
-            images.append(img_data)
-
-        doc = {
-            "version": "2.0",
-            "images": images,
-        }
-
-        self._annotations_path.write_text(
-            json.dumps(doc, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        self._annotation_storage.upsert_sample(sample)
 
     # ─── 工具方法 ───
 

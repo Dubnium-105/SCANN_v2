@@ -67,7 +67,7 @@ class TrainingDialog(QDialog):
         self.combo_dataset_format.setToolTip(
             "选择训练数据集格式\n"
             "v1: 数据集目录下应包含 positive/negative\n"
-            "v2: 数据集目录下应包含 new/old 与 annotations.json"
+            "v2: 数据集目录下应包含 new/old 与 annotations.db(或 legacy annotations.json)"
         )
         self.combo_dataset_format.currentIndexChanged.connect(self._update_dataset_dir_hint)
         data_form.addRow("数据集类型:", self.combo_dataset_format)
@@ -291,8 +291,8 @@ class TrainingDialog(QDialog):
     def _update_dataset_dir_hint(self) -> None:
         dataset_format = self.combo_dataset_format.currentData() or "v1"
         if dataset_format == "v2":
-            self.edit_dataset_dir.setPlaceholderText("数据集目录下包含 new、old 和 annotations.json")
-            self.lbl_dataset_hint.setText("v2: 自动读取 new/old 子目录，并结合 annotations.json 提取训练样本")
+            self.edit_dataset_dir.setPlaceholderText("数据集目录下包含 new、old 和 annotations.db（或 annotations.json）")
+            self.lbl_dataset_hint.setText("v2: 自动读取 new/old 子目录，并结合 SQLite/JSON 标注提取训练样本")
             return
 
         self.edit_dataset_dir.setPlaceholderText("数据集目录下包含 positive 和 negative")

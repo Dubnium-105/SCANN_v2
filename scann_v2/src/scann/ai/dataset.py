@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from torchvision import transforms
 
+from scann.core.fits_annotation_storage import load_v2_annotation_document
+
 
 logger = logging.getLogger(__name__)
 
@@ -505,8 +507,8 @@ class FitsDenseDetectionDataset:
 
         if not self.new_dir.is_dir() or not self.old_dir.is_dir():
             raise ValueError("v2 dense 数据集目录下必须包含 new 和 old 子目录")
-        if not self.annotation_file.is_file():
-            raise ValueError("v2 dense 数据集缺少 annotations.json")
+        if not self.annotation_file.is_file() and not (self.dataset_root / "annotations.db").is_file():
+            raise ValueError("v2 dense 数据集缺少标注文件（annotations.json 或 annotations.db）")
 
         self.samples = self._load_samples()
 
@@ -598,13 +600,16 @@ class FitsDenseDetectionDataset:
         return center_x, center_y, w, h
 
     def _load_samples(self) -> List[Dict[str, Any]]:
-        import json
+        if self.annotation_file.name == "annotations.json":
+            annotations_doc = load_v2_annotation_document(self.dataset_root)
+        else:
+            import json
 
-        try:
-            with open(self.annotation_file, "r", encoding="utf-8") as file_obj:
-                annotations_doc = json.load(file_obj)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"annotations.json 无法解析: {exc}") from exc
+            try:
+                with open(self.annotation_file, "r", encoding="utf-8") as file_obj:
+                    annotations_doc = json.load(file_obj)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"annotations.json 无法解析: {exc}") from exc
 
         images = annotations_doc.get("images", [])
         if not isinstance(images, list):

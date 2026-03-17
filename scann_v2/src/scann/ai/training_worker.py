@@ -37,6 +37,7 @@ import torch  # 现在导入torch
 from scann.ai.model import ModelFormat, SCANNClassifier
 from scann.ai.trainer import TrainConfig, compute_metrics, find_threshold_for_recall
 from scann.core.annotation_models import DETAIL_TYPE_TO_LABEL, DetailType
+from scann.core.fits_annotation_storage import load_v2_annotation_document
 from scann.core.fits_io import read_fits
 from scann.data.file_manager import FitsImagePair, match_new_old_pairs
 from scann.services.detection_image_adapter import robust_to_uint8
@@ -228,23 +229,21 @@ class TrainingWorker(QThread):
         new_dir = dataset_root / "new"
         old_dir = dataset_root / "old"
         ann_path = dataset_root / "annotations.json"
+        ann_db_path = dataset_root / "annotations.db"
         if not new_dir.is_dir() or not old_dir.is_dir():
             raise ValueError("v2 数据集目录下必须包含 new 和 old 子目录")
-        if not ann_path.is_file():
-            raise ValueError("v2 数据集目录下缺少 annotations.json")
+        if not ann_path.is_file() and not ann_db_path.is_file():
+            raise ValueError("v2 数据集目录下缺少标注文件（annotations.json 或 annotations.db）")
 
         pairs, _only_new, _only_old = match_new_old_pairs(str(new_dir), str(old_dir))
         if not pairs:
             raise ValueError("v2 数据集未找到可配对的 new/old 图像")
 
-        try:
-            annotations_doc = json.loads(ann_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"annotations.json 无法解析: {exc}") from exc
+        annotations_doc = load_v2_annotation_document(dataset_root)
 
         images = annotations_doc.get("images", [])
         if not images:
-            raise ValueError("annotations.json 中没有 images 条目")
+            raise ValueError("标注文档中没有 images 条目")
 
         pair_lookup = self._build_pair_lookup(pairs)
         pair_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}

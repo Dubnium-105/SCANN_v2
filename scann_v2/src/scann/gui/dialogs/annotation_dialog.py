@@ -1247,7 +1247,7 @@ class AnnotationDialog(QDialog):
 
     def _save_annotations(self) -> None:
         """保存标注 (v2 FITS 模式自动持久化，此处为显式保存)"""
-        pass  # FitsAnnotationBackend 自动持久化到 JSON
+        pass  # FitsAnnotationBackend 自动持久化到 SQLite（兼容 legacy JSON）
 
     def _on_ai_prelabel(self) -> None:
         """批量运行 v2 AI 预标注。"""

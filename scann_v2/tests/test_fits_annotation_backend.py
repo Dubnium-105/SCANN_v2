@@ -287,7 +287,7 @@ class TestFitsAnnotation:
 
 class TestFitsPersistence:
     def test_save_creates_json(self, fits_backend, fits_dataset: Path):
-        """标注后应自动保存 annotations.json"""
+        """标注后应自动写入 SQLite，并生成 manifest。"""
         sample = fits_backend.samples[0]
         fits_backend.save_annotation(
             sample.id, "real",
@@ -295,12 +295,14 @@ class TestFitsPersistence:
             detail_type="asteroid",
         )
 
-        ann_file = fits_dataset / "annotations.json"
-        assert ann_file.exists()
+        db_file = fits_dataset / "annotations.db"
+        manifest_file = fits_dataset / "annotations.json"
+        assert db_file.exists()
+        assert manifest_file.exists()
 
-        data = json.loads(ann_file.read_text(encoding="utf-8"))
-        assert "images" in data
-        assert len(data["images"]) >= 1
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+        assert manifest.get("storage") == "sqlite"
+        assert manifest.get("db_file") == "annotations.db"
 
     def test_reload_preserves_annotations(self, fits_backend, fits_dataset: Path):
         """保存后重新加载，标注信息不丢失"""
@@ -322,7 +324,7 @@ class TestFitsPersistence:
         assert s.bboxes[0].detail_type == "asteroid"
 
     def test_json_format_compatible(self, fits_backend, fits_dataset: Path):
-        """JSON 格式应包含 version 字段"""
+        """manifest JSON 应包含版本与存储后端字段"""
         sample = fits_backend.samples[0]
         fits_backend.save_annotation(sample.id, "real", detail_type="asteroid")
 
@@ -330,7 +332,8 @@ class TestFitsPersistence:
             (fits_dataset / "annotations.json").read_text(encoding="utf-8")
         )
         assert "version" in data
-        assert data["version"] == "2.0"
+        assert data["version"] == "2.1"
+        assert data["storage"] == "sqlite"
 
     def test_apply_ai_preannotations_persists_ai_metadata(
         self,
