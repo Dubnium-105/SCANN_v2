@@ -20,3 +20,4 @@ class AnnotationController:
         dialog = AnnotationDialog(self._window, config=self._window._config)
         self._window._annotation_dialog = dialog
         dialog.show()
+        dialog.showMaximized()

@@ -75,13 +75,14 @@ def _make_mock_window():
         read_fits_fn=main_window.read_fits,
     )
     window.pair_controller = PairController(window, window.pair_service)
+    window.set_image_data = Mock()
     return window
 
 
 class TestMainWindowPairFlow:
     @patch("scann.gui.main_window.read_fits")
     @patch("scann.gui.main_window.scan_fits_folder")
-    @patch("scann.gui.main_window.QFileDialog.getExistingDirectory")
+    @patch("scann.gui.controllers.pair_controller.QFileDialog.getExistingDirectory")
     def test_open_new_folder_resets_state_and_loads_first_image(
         self,
         mock_dialog,
@@ -125,11 +126,11 @@ class TestMainWindowPairFlow:
         window.file_list.clear.assert_called_once()
         assert window.file_list.addItem.call_count == 2
         mock_read.assert_called_once_with(Path("/data/new/img_001.fits"))
-        window.image_viewer.set_image_data.assert_called_once()
+        window.set_image_data.assert_called_once()
 
     @patch("scann.gui.main_window.match_new_old_pairs")
     @patch("scann.gui.main_window.scan_fits_folder")
-    @patch("scann.gui.main_window.QFileDialog.getExistingDirectory")
+    @patch("scann.gui.controllers.pair_controller.QFileDialog.getExistingDirectory")
     def test_open_old_folder_matches_pairs_and_auto_loads_first_pair(
         self,
         mock_dialog,
@@ -219,12 +220,8 @@ class TestMainWindowPairFlow:
         assert window._current_pair_using_aligned is True
         read_paths = [Path(call.args[0]) for call in mock_read.call_args_list]
         assert read_paths == [new_aligned_path, old_aligned_path]
+        window.set_image_data.assert_called_once()
         window.set_candidates.assert_called_once_with(window._candidates_cache[0])
-        assert window.histogram_panel.set_image_data.call_count >= 1
-        np.testing.assert_array_equal(
-            window.histogram_panel.set_image_data.call_args_list[-1].args[0],
-            window._new_image_data,
-        )
 
     def test_pair_navigation_updates_file_list_selection(self):
         window = _make_mock_window()

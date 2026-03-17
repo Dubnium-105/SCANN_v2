@@ -1,188 +1,66 @@
-"""测试训练流程"""
-import os
-import sys
+"""训练流程冒烟测试（历史脚本重构版）。"""
+
+from __future__ import annotations
+
 import numpy as np
-from pathlib import Path
-
-# 设置PyTorch模型下载路径到项目内（必须在导入torch之前设置）
-# 获取脚本所在目录的父目录（即scann_v2根目录）
-script_path = Path(__file__).resolve()
-project_root = script_path.parent / "scann_v2"
-model_cache_dir = project_root / "models" / "torch_cache"
-model_cache_dir.mkdir(parents=True, exist_ok=True)
-
-# 设置环境变量
-os.environ['TORCH_HOME'] = str(model_cache_dir)
-os.environ['TORCH_HUB_DIR'] = str(model_cache_dir)
-
+import pytest
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from PIL import Image
 from torch.utils.data import DataLoader, WeightedRandomSampler
-
-# 确认缓存目录
-torch.hub.set_dir(str(model_cache_dir))
-print(f"PyTorch模型缓存目录: {model_cache_dir}")
-print(f"实际TORCH_HOME: {torch.hub.get_dir()}")
-
-# 添加路径
-sys.path.insert(0, 'g:/wksp/aikt/scann_v2/src')
+from torchvision import models
 
 from scann.ai.dataset import TripletPNGDataset
-from torchvision import models, transforms
 
-# 测试路径
-pos_dir = "g:/wksp/aikt/dataset/positive"
-neg_dir = "g:/wksp/aikt/dataset/negative"
 
-# 训练参数
-epochs = 2  # 只测试2个epoch
-batch_size = 16
-lr = 0.001
+def _write_triplet_png(path, seed: int) -> None:
+    rng = np.random.default_rng(seed)
+    img = np.zeros((80, 240), dtype=np.uint8)
+    img[:, :80] = rng.integers(20, 100, size=(80, 80), dtype=np.uint8)
+    img[:, 80:160] = rng.integers(80, 160, size=(80, 80), dtype=np.uint8)
+    img[:, 160:] = rng.integers(120, 220, size=(80, 80), dtype=np.uint8)
+    Image.fromarray(img).save(path)
 
-print("=== 1. 数据集加载 ===")
 
-# 收集样本
-all_samples = []
-for dir_path, label in [(pos_dir, 1), (neg_dir, 0)]:
-    if not os.path.isdir(dir_path):
-        raise ValueError(f"目录不存在: {dir_path}")
-    for fn in os.listdir(dir_path):
-        if fn.lower().endswith((".png", ".fts", ".fit")):
-            all_samples.append((os.path.join(dir_path, fn), label))
+def test_training_smoke_with_weighted_sampler(tmp_path):
+    _ = pytest.importorskip("torch")
 
-print(f"总计样本数: {len(all_samples)}")
+    pos_dir = tmp_path / "positive"
+    neg_dir = tmp_path / "negative"
+    pos_dir.mkdir()
+    neg_dir.mkdir()
 
-# 划分训练集/验证集
-n = len(all_samples)
-idx = np.arange(n)
-np.random.shuffle(idx)
-split = int(0.8 * n)
-train_idx = idx[:split].tolist()
-val_idx = idx[split:].tolist()
+    for i in range(4):
+        _write_triplet_png(pos_dir / f"pos_{i}.png", seed=100 + i)
+    for i in range(4):
+        _write_triplet_png(neg_dir / f"neg_{i}.png", seed=200 + i)
 
-train_samples = [all_samples[i] for i in train_idx]
-val_samples = [all_samples[i] for i in val_idx]
+    samples = [(str(p), 1) for p in sorted(pos_dir.glob("*.png"))] + [
+        (str(p), 0) for p in sorted(neg_dir.glob("*.png"))
+    ]
 
-print(f"训练集: {len(train_samples)}, 验证集: {len(val_samples)}")
+    train_set = TripletPNGDataset(samples=samples, split="train", resize=64, augment=True)
+    labels = [y for _, y in samples]
+    count_neg = labels.count(0)
+    count_pos = labels.count(1)
+    weights = [1.0 / max(count_neg, 1), 1.0 / max(count_pos, 1)]
+    sample_weights = torch.tensor([weights[y] for y in labels], dtype=torch.double)
+    sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_set), replacement=True)
+    train_loader = DataLoader(train_set, batch_size=4, sampler=sampler, num_workers=0)
 
-# 创建数据集
-train_set = TripletPNGDataset(
-    samples=train_samples,
-    split="train",
-    resize=224,
-    augment=True,
-)
-val_set = TripletPNGDataset(
-    samples=val_samples,
-    split="val",
-    resize=224,
-    augment=False,
-)
+    model = models.resnet18(weights=None)
+    model.fc = nn.Linear(model.fc.in_features, 1)
+    criterion = nn.BCEWithLogitsLoss()
+    optimizer = optim.AdamW(model.parameters(), lr=1e-3)
 
-print(f"训练数据集大小: {len(train_set)}")
-print(f"验证数据集大小: {len(val_set)}")
-
-# 类别平衡采样
-train_labels = [all_samples[i][1] for i in train_idx]
-count_neg = train_labels.count(0)
-count_pos = train_labels.count(1)
-print(f"训练集分布: 负样本={count_neg}, 正样本={count_pos}")
-
-weight_class = [1.0 / max(count_neg, 1), 1.0 / max(count_pos, 1)]
-samples_weight = [weight_class[y] for y in train_labels]
-samples_weight = torch.tensor(samples_weight, dtype=torch.double)
-
-sampler = WeightedRandomSampler(
-    samples_weight, num_samples=len(train_set), replacement=True
-)
-
-train_loader = DataLoader(
-    train_set, batch_size=batch_size, sampler=sampler, num_workers=0, pin_memory=False
-)
-val_loader = DataLoader(
-    val_set, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=False
-)
-
-print(f"训练批次数: {len(train_loader)}")
-print(f"验证批次数: {len(val_loader)}")
-
-print("\n=== 2. 模型创建 ===")
-
-# 创建模型
-backbone = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
-backbone.fc = nn.Linear(backbone.fc.in_features, 1)
-
-device = "cuda:0" if torch.cuda.is_available() else "cpu"
-print(f"使用设备: {device}")
-
-model = backbone.to(device)
-
-criterion = nn.BCEWithLogitsLoss()
-optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
-
-print("\n=== 3. 训练循环 ===")
-
-for epoch in range(epochs):
-    # 训练
     model.train()
-    train_loss = 0.0
-    train_correct = 0
-    train_total = 0
+    x, y = next(iter(train_loader))
+    y = y.float().unsqueeze(1)
+    logits = model(x)
+    loss = criterion(logits, y)
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
 
-    print(f"\nEpoch {epoch + 1}/{epochs} - 训练中...")
-
-    for batch_idx, (inputs, targets) in enumerate(train_loader):
-        inputs = inputs.to(device)
-        targets = targets.float().unsqueeze(1).to(device)
-
-        # 前向传播
-        outputs = model(inputs)
-        loss = criterion(outputs, targets)
-
-        # 反向传播
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        # 统计
-        train_loss += loss.item()
-        predicted = (torch.sigmoid(outputs) > 0.5).float()
-        train_total += targets.size(0)
-        train_correct += (predicted == targets).sum().item()
-
-        if batch_idx % 20 == 0:
-            print(f"  Batch {batch_idx}/{len(train_loader)}, Loss: {loss.item():.4f}")
-
-    train_loss /= len(train_loader)
-    train_acc = 100.0 * train_correct / train_total
-
-    # 验证
-    model.eval()
-    val_loss = 0.0
-    val_correct = 0
-    val_total = 0
-
-    print(f"验证中...")
-
-    with torch.no_grad():
-        for inputs, targets in val_loader:
-            inputs = inputs.to(device)
-            targets = targets.float().unsqueeze(1).to(device)
-
-            outputs = model(inputs)
-            loss = criterion(outputs, targets)
-
-            val_loss += loss.item()
-            predicted = (torch.sigmoid(outputs) > 0.5).float()
-            val_total += targets.size(0)
-            val_correct += (predicted == targets).sum().item()
-
-    val_loss /= len(val_loader)
-    val_acc = 100.0 * val_correct / val_total
-
-    print(f"\nEpoch {epoch + 1} 结果:")
-    print(f"  训练集 - Loss: {train_loss:.4f}, Acc: {train_acc:.2f}%")
-    print(f"  验证集 - Loss: {val_loss:.4f}, Acc: {val_acc:.2f}%")
-
-print("\n=== 测试完成 ===")
+    assert torch.isfinite(loss).item()

@@ -45,7 +45,7 @@ def main():
         app.setApplicationVersion("2.0.0")
 
         window = MainWindow()
-        window.show()
+        window.showMaximized()
         logger.info("主窗口已显示")
 
         exit_code = app.exec_()

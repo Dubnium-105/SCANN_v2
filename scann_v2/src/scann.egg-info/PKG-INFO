@@ -9,6 +9,7 @@ Requires-Dist: numpy>=1.24
 Requires-Dist: opencv-python>=4.8
 Requires-Dist: PyQt5>=5.15
 Requires-Dist: astropy>=5.3
+Requires-Dist: astroquery>=0.4.7
 Requires-Dist: requests>=2.31
 Requires-Dist: beautifulsoup4>=4.12
 Requires-Dist: scikit-learn>=1.3
