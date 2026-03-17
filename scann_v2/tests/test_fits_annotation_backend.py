@@ -197,8 +197,36 @@ class TestFitsLoad:
         assert len(samples) == 3
         assert all(sample.display_name.endswith("__aligned_crop.fts") for sample in samples)
         assert all(sample.source_path.endswith("__aligned_crop.fts") for sample in samples)
-        assert (fits_dataset / "new" / "field_001__aligned_crop.fts").exists()
-        assert (fits_dataset / "old" / "field_001__aligned_crop.fts").exists()
+        assert len(list((fits_dataset / "new").glob("*__aligned_crop.fts"))) == 3
+        assert len(list((fits_dataset / "old").glob("*__aligned_crop.fts"))) == 3
+
+    def test_load_samples_standardizes_dataset_with_date_obs_and_keeps_raw_backup(
+        self,
+        fits_dataset: Path,
+    ):
+        """加载前应标准化数据集：原始文件进入 dataset_raw，工作目录按 DATE-OBS 重命名。"""
+        from scann.core.fits_annotation_backend import FitsAnnotationBackend
+
+        backend = FitsAnnotationBackend()
+        samples = backend.load_samples(str(fits_dataset))
+
+        token = "20260115T203000"
+        dataset_raw = fits_dataset / "dataset_raw"
+
+        # 原始文件应被保存在 dataset_raw
+        assert (dataset_raw / "new" / "field_001.fits").exists()
+        assert (dataset_raw / "old" / "field_001.fits").exists()
+        assert (dataset_raw / "new_marked" / "field_001.fits").exists()
+
+        # 工作目录文件应按 DATE-OBS 标准化重命名
+        assert any((fits_dataset / "new").glob(f"{token}__field_001.fits"))
+        assert any((fits_dataset / "old").glob(f"{token}__field_001.fits"))
+        assert any((fits_dataset / "new_marked").glob(f"{token}__field_001.fits"))
+
+        # 对齐裁剪产物也应基于标准化命名
+        assert any((fits_dataset / "new").glob(f"{token}__field_001__aligned_crop.fts"))
+        assert any((fits_dataset / "old").glob(f"{token}__field_001__aligned_crop.fts"))
+        assert all(token in sample.id for sample in samples)
 
 
 # ─── supports_bbox ───

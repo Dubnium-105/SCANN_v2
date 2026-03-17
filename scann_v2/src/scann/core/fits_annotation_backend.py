@@ -10,6 +10,8 @@ import csv
 import json
 import logging
 import math
+import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -62,7 +64,7 @@ class FitsAnnotationBackend(AnnotationBackend):
         self._samples.clear()
         self._image_paths.clear()
 
-        self._ensure_aligned_crop_files(root)
+        self._standardize_dataset_by_date_obs(root)
         aligned_pairs = self._collect_aligned_pairs(root)
         marked_files = self._collect_marked_files(root / "new_marked")
 
@@ -74,12 +76,12 @@ class FitsAnnotationBackend(AnnotationBackend):
             sample = AnnotationSample(
                 id=sample_id,
                 source_path=str(new_path or old_path or ""),
-                display_name=ref_file.name,
+                display_name=ref_file.name if ref_file is not None else sample_id,
             )
 
             # 合并已有标注
-            if sample_id in existing_annotations:
-                ann = existing_annotations[sample_id]
+            ann = self._resolve_annotation_entry(existing_annotations, sample_id)
+            if ann is not None:
                 if ann.get("annotations"):
                     sample.bboxes = [BBox.from_dict(b) for b in ann["annotations"]]
                     # 如果有 bbox 则样本已标注
@@ -340,6 +342,135 @@ class FitsAnnotationBackend(AnnotationBackend):
         except (json.JSONDecodeError, KeyError) as e:
             logger.warning(f"无法解析标注文件: {e}")
             return {}
+
+    def _resolve_annotation_entry(
+        self,
+        existing_annotations: dict[str, dict],
+        sample_id: str,
+    ) -> Optional[dict]:
+        """兼容标准化前后的样本 ID。"""
+        if sample_id in existing_annotations:
+            return existing_annotations[sample_id]
+
+        legacy_id = self._strip_datetime_prefix(sample_id)
+        if legacy_id in existing_annotations:
+            return existing_annotations[legacy_id]
+        return None
+
+    def _standardize_dataset_by_date_obs(self, root: Path) -> None:
+        """标准化数据集命名并完成新旧图对齐准备。"""
+        raw_root = root / "dataset_raw"
+        folder_names = ("new", "old", "new_marked")
+
+        for folder_name in folder_names:
+            work_dir = root / folder_name
+            if not work_dir.is_dir():
+                continue
+
+            raw_dir = raw_root / folder_name
+            raw_dir.mkdir(parents=True, exist_ok=True)
+
+            for file_path in sorted(work_dir.iterdir()):
+                if not self._should_standardize_file(file_path):
+                    continue
+
+                backup_path = self._move_to_raw_folder(file_path, raw_dir)
+                date_token = self._extract_date_obs_token(backup_path)
+                normalized_name = self._build_standardized_filename(
+                    src_path=backup_path,
+                    date_token=date_token,
+                    dst_dir=work_dir,
+                )
+                normalized_path = work_dir / normalized_name
+                shutil.copy2(backup_path, normalized_path)
+
+            # 标准化完成后统一执行对齐，确保对齐产物与标准化命名一致
+            self._ensure_aligned_crop_files(root)
+
+    @staticmethod
+    def _should_standardize_file(file_path: Path) -> bool:
+        if not file_path.is_file():
+            return False
+        if file_path.suffix.lower() not in _FITS_EXTS:
+            return False
+        if file_path.stem.lower().endswith("__aligned_crop"):
+            return False
+        if FitsAnnotationBackend._extract_datetime_prefix(file_path.stem) is not None:
+            return False
+        return True
+
+    @staticmethod
+    def _move_to_raw_folder(file_path: Path, raw_dir: Path) -> Path:
+        dst_path = raw_dir / file_path.name
+        if dst_path.exists():
+            index = 1
+            while True:
+                candidate = raw_dir / f"{file_path.stem}__dup{index:02d}{file_path.suffix}"
+                if not candidate.exists():
+                    dst_path = candidate
+                    break
+                index += 1
+        file_path.replace(dst_path)
+        return dst_path
+
+    @staticmethod
+    def _extract_date_obs_token(path: Path) -> Optional[str]:
+        date_obs = None
+        try:
+            fits_image = read_fits(path)
+            date_obs = fits_image.header.raw.get("DATE-OBS")
+        except Exception as exc:
+            logger.warning("读取 DATE-OBS 失败: %s (%s)", path.name, exc)
+
+        if isinstance(date_obs, str):
+            for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"):
+                try:
+                    dt = datetime.strptime(date_obs, fmt)
+                    return dt.strftime("%Y%m%dT%H%M%S")
+                except ValueError:
+                    continue
+
+        return None
+
+    @staticmethod
+    def _build_standardized_filename(src_path: Path, date_token: Optional[str], dst_dir: Path) -> str:
+        if not date_token:
+            return src_path.name
+
+        base = f"{date_token}__{src_path.stem}"
+        candidate = dst_dir / f"{base}{src_path.suffix.lower()}"
+        if not candidate.exists():
+            return candidate.name
+
+        index = 1
+        while True:
+            dedup_name = f"{base}__{index:02d}{src_path.suffix.lower()}"
+            dedup_path = dst_dir / dedup_name
+            if not dedup_path.exists():
+                return dedup_name
+            index += 1
+
+    @staticmethod
+    def _extract_datetime_prefix(stem: str) -> Optional[str]:
+        if len(stem) < 16:
+            return None
+        prefix = stem[:15]
+        if (
+            prefix[0:8].isdigit()
+            and prefix[8] == "T"
+            and prefix[9:15].isdigit()
+            and len(stem) > 16
+            and stem[15:17] == "__"
+        ):
+            return prefix
+        return None
+
+    @staticmethod
+    def _strip_datetime_prefix(sample_id: str) -> str:
+        prefix = FitsAnnotationBackend._extract_datetime_prefix(sample_id)
+        if prefix is None:
+            return sample_id
+        return sample_id[17:]
 
     def _ensure_aligned_crop_files(self, root: Path) -> None:
         """为可匹配的新旧图生成对齐裁剪产物。"""
@@ -610,6 +741,7 @@ class FitsAnnotationBackend(AnnotationBackend):
 
     @staticmethod
     def _normalize_pair_stem(stem: str) -> str:
+        stem = FitsAnnotationBackend._strip_datetime_prefix(stem)
         for prefix in ("FW_", "fw_", "Fw_"):
             if stem.startswith(prefix):
                 return stem[len(prefix):]
