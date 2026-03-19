@@ -155,6 +155,7 @@
 ## 阶段四：进阶工具与基础防冲突
 
 ### Commit 11: 协作防冲突与锁定机制
+* **状态:** `done`（2026-03-19）
 * **Test (Red):** 
   * 后端：模拟用户 A 请求获取下一组图像。断言返回的图像被加上 'Lock'（占用锁定标记）。
   * 后端：模拟用户 B 获取图像队伍，断言其无法拿到用户 A 已锁定的图像。
@@ -163,6 +164,8 @@
   * 标注完成后释放该任务的 Lock。
 * **Refactor:** 
   * 加入超时释放机制（Client 掉线长时间未提交，自动释放图像让别人标注）。
+* **验证结果:**
+  * `pytest tests/test_task_locking.py tests/test_annotation.py tests/test_dataset.py tests/test_health.py -q` ✅ 5 passed
 
 ### Commit 12: 进阶标注工具 (点与多边形)与属性切换
 * **Test (Red):** 
