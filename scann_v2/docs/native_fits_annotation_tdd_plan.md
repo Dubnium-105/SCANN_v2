@@ -79,6 +79,7 @@
   * `cd frontend && npm run test` ✅ 1 passed
 
 ### Commit 6: Konva 画布与多图加载机制
+* **状态:** `done`（2026-03-19）
 * **Test (Red):** 
   * 编写画布测试：模拟 API 返回的由 `old`, `new`, `new_marked` 组成的任务对象。
   * 断言组件 Store 内部成功创建 3 个图像状态节点，并且画布上默认呈现 `new` 图层。
@@ -88,6 +89,8 @@
   * 将图像置入 Konva 的底层。
 * **Refactor:** 
   * 将图像加载逻辑封装为 `useImageLoader` Composables，管理加载进度和状态。
+* **验证结果:**
+  * `cd frontend && npm run test` ✅ 2 passed
 
 ### Commit 7: 毫秒级闪视 (Blinking) 与画布控制
 * **Test (Red):** 
