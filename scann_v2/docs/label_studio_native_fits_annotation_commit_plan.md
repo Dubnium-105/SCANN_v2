@@ -125,13 +125,17 @@
 
 ## C07 - 端到端回归（pull -> 标注 -> webhook）
 
-- 状态：planned
+- 状态：done
 - 目标：新增最小 E2E 回归，覆盖 region 主链路。
 - 主要文件：
   - `tests/bridge/test_pull_webhook_region_e2e.py`（新增）
 - 验证：
-  - `pytest tests/bridge -q`
+  - `pytest tests/bridge/test_pull_webhook_region_e2e.py -q` ✅ 1 passed
+  - `pytest tests/bridge -q` ✅ 93 passed
 - 备注：
+  - 新增最小 E2E 用例，覆盖链路：`/tasks/pull` 任务下发 -> `js9_regions_json` 提交 -> `/webhook/labelstudio` 入库。
+  - 断言 SQLite `images`/`bboxes` 回写、region 审计日志写入与 `annotations.json` manifest 生成。
+  - 验证 region 主链路使用 `annotation_result.js9_regions_json` 作为优先来源，且与既有 bridge 用例无回归。
 
 ## C08 - 手工验收与文档封版
 
