@@ -93,6 +93,7 @@
   * `cd frontend && npm run test` ✅ 2 passed
 
 ### Commit 7: 毫秒级闪视 (Blinking) 与画布控制
+* **状态:** `done`（2026-03-19）
 * **Test (Red):** 
   * 触发键盘 `Space` 或 `Tab` 按键事件。
   * 断言当前活跃视图状态 (Current View) 按序从 `new` -> `new_marked` -> `old` 轮转。
@@ -101,6 +102,8 @@
   * 根据当前 View 状态，控制 Konva 中特定目标图像图层的 `visible` 属性。
 * **Refactor:** 
   * 封装 `useBlinkControl`。添加基础平移 (Pan) 和鼠标滚轮缩放 (Zoom) 支持，确保三图在缩放平移时位置绝对绑定。
+* **验证结果:**
+  * `cd frontend && npm run test` ✅ 3 passed
 
 ### Commit 8: 画布标注工具 (BBox) 与提交流程
 * **Test (Red):** 

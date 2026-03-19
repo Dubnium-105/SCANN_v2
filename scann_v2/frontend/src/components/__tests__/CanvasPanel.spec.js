@@ -57,4 +57,34 @@ describe('CanvasPanel', () => {
 
     expect(visibleViews).toEqual(['new'])
   })
+
+  it('cycles current view with Tab/Space keydown in new -> new_marked -> old order', async () => {
+    const wrapper = mount(CanvasPanel, {
+      global: {
+        stubs: {
+          'v-stage': { template: '<div><slot /></div>' },
+          'v-layer': { template: '<div><slot /></div>' },
+          'v-image': { template: '<div />' },
+        },
+      },
+    })
+
+    await flushPromises()
+
+    const currentVisible = () =>
+      wrapper
+        .findAll('[data-testid="image-state-item"]')
+        .filter((item) => item.attributes('data-visible') === 'true')
+        .map((item) => item.attributes('data-view'))
+
+    expect(currentVisible()).toEqual(['new'])
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab' }))
+    await flushPromises()
+    expect(currentVisible()).toEqual(['new_marked'])
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ' }))
+    await flushPromises()
+    expect(currentVisible()).toEqual(['old'])
+  })
 })
