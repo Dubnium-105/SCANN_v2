@@ -2,7 +2,7 @@
 
 C04 提交验证：
 1. annotation_mode 字段正确下发，值为 js9_region_primary
-2. js9_regions_json 字段预留，初始为 None
+2. js9_regions_json 字段预留，初始为 "[]"
 3. 其他现有字段仍然正常工作
 """
 
@@ -133,9 +133,9 @@ def test_pull_tasks_contains_js9_regions_json_field(tmp_path: Path, monkeypatch,
     payload = posted["json"]
     task_data = payload[0]["data"]
 
-    # 验证 js9_regions_json 字段存在且为 None（预留）
+    # 验证 js9_regions_json 字段存在且为 "[]"（TextArea 需要字符串）
     assert "js9_regions_json" in task_data
-    assert task_data["js9_regions_json"] is None
+    assert task_data["js9_regions_json"] == "[]"
 
 
 def test_pull_tasks_region_fields_backward_compat(tmp_path: Path, monkeypatch, bridge_module):
@@ -207,7 +207,7 @@ def test_pull_tasks_region_fields_backward_compat(tmp_path: Path, monkeypatch, b
 
     # 验证新增字段
     assert task_data["annotation_mode"] == "js9_region_primary"
-    assert task_data["js9_regions_json"] is None
+    assert task_data["js9_regions_json"] == "[]"
 
 
 def test_pull_tasks_multiple_tasks_all_have_region_fields(tmp_path: Path, monkeypatch, bridge_module):
@@ -274,7 +274,7 @@ def test_pull_tasks_multiple_tasks_all_have_region_fields(tmp_path: Path, monkey
         assert "annotation_mode" in task_data
         assert task_data["annotation_mode"] == "js9_region_primary"
         assert "js9_regions_json" in task_data
-        assert task_data["js9_regions_json"] is None
+        assert task_data["js9_regions_json"] == "[]"
 
 
 def test_pull_tasks_no_import_still_has_region_fields(tmp_path: Path, monkeypatch, bridge_module):
@@ -342,7 +342,7 @@ def test_taskrecord_default_annotation_mode(bridge_module):
     )
 
     assert record.annotation_mode == "js9_region_primary"
-    assert record.js9_regions_json is None
+    assert record.js9_regions_json == "[]"
 
 
 def test_taskrecord_explicit_annotation_mode(bridge_module):

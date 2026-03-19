@@ -165,7 +165,7 @@ class TaskRecord(BaseModel):
     js9_embed_url: str
     js9_iframe: str
     annotation_mode: str = "js9_region_primary"
-    js9_regions_json: Optional[str] = None
+    js9_regions_json: str = "[]"
 
 
 def get_label_studio_phaseb_label_config() -> str:

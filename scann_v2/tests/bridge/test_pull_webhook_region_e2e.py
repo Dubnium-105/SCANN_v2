@@ -73,7 +73,7 @@ def test_pull_webhook_region_primary_e2e(tmp_path: Path, monkeypatch, bridge_mod
 
     task_data = imported_tasks[0]["data"]
     assert task_data["annotation_mode"] == "js9_region_primary"
-    assert task_data["js9_regions_json"] is None
+    assert task_data["js9_regions_json"] == "[]"
 
     # Step 2: 模拟标注员提交 js9_regions_json 结果
     js9_regions_json = json.dumps(
