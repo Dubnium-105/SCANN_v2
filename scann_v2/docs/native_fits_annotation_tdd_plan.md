@@ -168,6 +168,7 @@
   * `pytest tests/test_task_locking.py tests/test_annotation.py tests/test_dataset.py tests/test_health.py -q` ✅ 5 passed
 
 ### Commit 12: 进阶标注工具 (点与多边形)与属性切换
+* **状态:** `done`（2026-03-19）
 * **Test (Red):** 
   * 前端模拟切换工具到 Point/Polygon，断言在画布渲染相应的图形。
   * 点击列表中的标注，赋予 "True Positive" / "Artifact" 的标签修改。
@@ -176,6 +177,8 @@
   * 右侧 Inspector 提供对选中 Annotation 的下拉选单更改。
 * **Refactor:** 
   * 将通用标注事件进行基类化，减少画框、画点与画多边形之间的冗余代码。
+* **验证结果:**
+  * `cd frontend && npm run test` ✅ 13 passed
 
 ---
 

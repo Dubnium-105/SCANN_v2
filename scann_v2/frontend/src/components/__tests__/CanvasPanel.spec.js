@@ -83,6 +83,15 @@ const StageStub = {
 describe('CanvasPanel', () => {
   let fetchCalls = []
 
+  const globalStubs = {
+    'v-stage': StageStub,
+    'v-layer': { template: '<div><slot /></div>' },
+    'v-image': { template: '<div />' },
+    'v-rect': { template: '<div data-testid="bbox-rect" />' },
+    'v-circle': { template: '<div data-testid="point-shape" />' },
+    'v-line': { template: '<div data-testid="polygon-shape" />' },
+  }
+
   beforeEach(() => {
     URL.createObjectURL = vi.fn((blob) => `blob:${blob.type}`)
     URL.revokeObjectURL = vi.fn()
@@ -97,12 +106,7 @@ describe('CanvasPanel', () => {
   it('creates 3 image state nodes and defaults to new layer visible', async () => {
     const wrapper = mount(CanvasPanel, {
       global: {
-        stubs: {
-          'v-stage': StageStub,
-          'v-layer': { template: '<div><slot /></div>' },
-          'v-image': { template: '<div />' },
-          'v-rect': { template: '<div data-testid="bbox-rect" />' },
-        },
+        stubs: globalStubs,
       },
     })
 
@@ -121,12 +125,7 @@ describe('CanvasPanel', () => {
   it('cycles current view with Tab/Space keydown in new -> new_marked -> old order', async () => {
     const wrapper = mount(CanvasPanel, {
       global: {
-        stubs: {
-          'v-stage': StageStub,
-          'v-layer': { template: '<div><slot /></div>' },
-          'v-image': { template: '<div />' },
-          'v-rect': { template: '<div data-testid="bbox-rect" />' },
-        },
+        stubs: globalStubs,
       },
     })
 
@@ -152,12 +151,7 @@ describe('CanvasPanel', () => {
   it('creates a bbox annotation via mousedown/mousemove/mouseup in bbox mode', async () => {
     const wrapper = mount(CanvasPanel, {
       global: {
-        stubs: {
-          'v-stage': StageStub,
-          'v-layer': { template: '<div><slot /></div>' },
-          'v-image': { template: '<div />' },
-          'v-rect': { template: '<div data-testid="bbox-rect" />' },
-        },
+        stubs: globalStubs,
       },
     })
 
@@ -178,12 +172,7 @@ describe('CanvasPanel', () => {
   it('submits drawn bbox annotations to backend endpoint', async () => {
     const wrapper = mount(CanvasPanel, {
       global: {
-        stubs: {
-          'v-stage': StageStub,
-          'v-layer': { template: '<div><slot /></div>' },
-          'v-image': { template: '<div />' },
-          'v-rect': { template: '<div data-testid="bbox-rect" />' },
-        },
+        stubs: globalStubs,
       },
     })
 
@@ -212,12 +201,7 @@ describe('CanvasPanel', () => {
   it('updates rendered rgba with stretch sliders and invert toggle', async () => {
     const wrapper = mount(CanvasPanel, {
       global: {
-        stubs: {
-          'v-stage': StageStub,
-          'v-layer': { template: '<div><slot /></div>' },
-          'v-image': { template: '<div />' },
-          'v-rect': { template: '<div data-testid="bbox-rect" />' },
-        },
+        stubs: globalStubs,
       },
     })
 
@@ -238,5 +222,59 @@ describe('CanvasPanel', () => {
     await flushPromises()
     const afterInvert = debug()
     expect(afterInvert.startsWith('255,255,255,255')).toBe(true)
+  })
+
+  it('renders point and polygon annotations after switching tools', async () => {
+    const wrapper = mount(CanvasPanel, {
+      global: {
+        stubs: globalStubs,
+      },
+    })
+
+    await flushPromises()
+
+    const stage = wrapper.get('[data-testid="stage"]')
+
+    await wrapper.get('[data-testid="tool-point"]').trigger('click')
+    await stage.trigger('mouseup', { clientX: 30, clientY: 40 })
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="point-shape"]').length).toBeGreaterThanOrEqual(1)
+
+    await wrapper.get('[data-testid="tool-polygon"]').trigger('click')
+    await stage.trigger('mouseup', { clientX: 10, clientY: 10 })
+    await stage.trigger('mouseup', { clientX: 20, clientY: 10 })
+    await stage.trigger('mouseup', { clientX: 20, clientY: 20 })
+    await wrapper.get('[data-testid="finish-polygon"]').trigger('click')
+    await flushPromises()
+
+    const polygonItems = wrapper
+      .findAll('[data-testid="annotation-item"]')
+      .filter((item) => item.attributes('data-ann-type') === 'polygon')
+    expect(polygonItems.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('updates selected annotation label to Artifact from annotation list', async () => {
+    const wrapper = mount(CanvasPanel, {
+      global: {
+        stubs: globalStubs,
+      },
+    })
+
+    await flushPromises()
+
+    const stage = wrapper.get('[data-testid="stage"]')
+    await wrapper.get('[data-testid="tool-point"]').trigger('click')
+    await stage.trigger('mouseup', { clientX: 44, clientY: 52 })
+    await flushPromises()
+
+    const item = wrapper.findAll('[data-testid="annotation-item"]')[0]
+    expect(item).toBeTruthy()
+    await item.trigger('click')
+
+    const select = wrapper.get('[data-testid="annotation-label-select"]')
+    await select.setValue('Artifact')
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="annotation-item"]')[0].attributes('data-ann-label')).toBe('Artifact')
   })
 })

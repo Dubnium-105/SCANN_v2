@@ -20,7 +20,7 @@
 
         <v-layer>
           <v-rect
-            v-for="ann in annotations"
+            v-for="ann in annotations.filter((item) => item.type === 'bbox')"
             :key="ann.id"
             :config="{
               x: ann.x,
@@ -29,6 +29,38 @@
               height: ann.height,
               stroke: '#22c55e',
               strokeWidth: 2,
+            }"
+          />
+          <v-circle
+            v-for="ann in annotations.filter((item) => item.type === 'point')"
+            :key="ann.id"
+            :config="{
+              x: ann.x,
+              y: ann.y,
+              radius: 4,
+              fill: '#f59e0b',
+              stroke: '#fde68a',
+              strokeWidth: 1,
+            }"
+          />
+          <v-line
+            v-for="ann in annotations.filter((item) => item.type === 'polygon')"
+            :key="ann.id"
+            :config="{
+              points: toFlatPoints(ann.points),
+              closed: true,
+              stroke: '#a78bfa',
+              strokeWidth: 2,
+            }"
+          />
+          <v-line
+            v-if="toolMode === 'polygon' && currentPolygonPoints.length > 0"
+            :config="{
+              points: toFlatPoints(currentPolygonPoints),
+              closed: false,
+              stroke: '#60a5fa',
+              strokeWidth: 2,
+              dash: [4, 4],
             }"
           />
           <v-rect
@@ -68,6 +100,30 @@
           @click="setToolMode('bbox')"
         >
           BBox
+        </button>
+        <button
+          data-testid="tool-point"
+          class="text-xs px-2 py-1 rounded border"
+          :class="toolMode === 'point' ? 'border-amber-400 text-amber-300' : 'border-slate-700 text-slate-300'"
+          @click="setToolMode('point')"
+        >
+          Point
+        </button>
+        <button
+          data-testid="tool-polygon"
+          class="text-xs px-2 py-1 rounded border"
+          :class="toolMode === 'polygon' ? 'border-violet-400 text-violet-300' : 'border-slate-700 text-slate-300'"
+          @click="setToolMode('polygon')"
+        >
+          Polygon
+        </button>
+        <button
+          v-if="toolMode === 'polygon'"
+          data-testid="finish-polygon"
+          class="text-xs px-2 py-1 rounded border border-violet-700 text-violet-200"
+          @click="finishPolygon"
+        >
+          Finish
         </button>
       </div>
 
@@ -180,6 +236,40 @@
         data-testid="stretch-debug"
         :data-rgba="stretchDebug"
       />
+
+      <div class="absolute bottom-20 left-2 bg-slate-950/70 rounded px-2 py-2 w-72 space-y-2">
+        <p class="text-[11px] text-slate-200">Annotations</p>
+        <ul data-testid="annotation-list" class="max-h-28 overflow-auto space-y-1">
+          <li v-for="ann in annotations" :key="`list-${ann.id}`">
+            <button
+              data-testid="annotation-item"
+              class="w-full text-left text-[11px] px-2 py-1 rounded border"
+              :class="selectedAnnotationId === ann.id ? 'border-sky-500 text-sky-200' : 'border-slate-700 text-slate-300'"
+              :data-ann-id="ann.id"
+              :data-ann-type="ann.type"
+              :data-ann-label="ann.label"
+              @click="selectAnnotation(ann.id)"
+            >
+              {{ ann.type }} · {{ ann.label }}
+            </button>
+          </li>
+        </ul>
+
+        <label class="text-[11px] text-slate-300 block">
+          Label
+          <select
+            data-testid="annotation-label-select"
+            class="mt-1 w-full text-xs bg-slate-800 text-slate-200 border border-slate-700 rounded px-2 py-1"
+            :disabled="!selectedAnnotationId"
+            :value="selectedLabel"
+            @change="onSelectedLabelChange"
+          >
+            <option value="Unlabeled">Unlabeled</option>
+            <option value="True Positive">True Positive</option>
+            <option value="Artifact">Artifact</option>
+          </select>
+        </label>
+      </div>
     </div>
   </section>
 </template>
@@ -203,9 +293,12 @@ const toolMode = ref('move')
 const annotations = ref([])
 const draftRect = ref(null)
 const drawStart = ref(null)
+const currentPolygonPoints = ref([])
 const selectedBucket = ref('positive')
 const isSubmitting = ref(false)
 const saveMessage = ref('')
+const selectedAnnotationId = ref('')
+const selectedLabel = ref('Unlabeled')
 const fitsCanvasRef = ref(null)
 const stretchRangeMin = ref(0)
 const stretchRangeMax = ref(1)
@@ -331,6 +424,66 @@ function setToolMode(mode) {
     draftRect.value = null
     drawStart.value = null
   }
+  if (mode !== 'polygon') {
+    currentPolygonPoints.value = []
+  }
+}
+
+function toFlatPoints(points) {
+  const flat = []
+  for (const point of points || []) {
+    flat.push(point.x, point.y)
+  }
+  return flat
+}
+
+function createAnnotation(base) {
+  return {
+    id: `ann-${Date.now()}-${annotations.value.length}`,
+    label: 'Unlabeled',
+    ...base,
+  }
+}
+
+function addAnnotation(annotation) {
+  annotations.value.push(annotation)
+}
+
+function selectAnnotation(annotationId) {
+  selectedAnnotationId.value = annotationId
+  const selected = annotations.value.find((item) => item.id === annotationId)
+  selectedLabel.value = selected?.label ?? 'Unlabeled'
+}
+
+function onSelectedLabelChange(event) {
+  const value = String(event?.target?.value ?? 'Unlabeled')
+  selectedLabel.value = value
+  if (!selectedAnnotationId.value) {
+    return
+  }
+
+  annotations.value = annotations.value.map((item) =>
+    item.id === selectedAnnotationId.value
+      ? {
+          ...item,
+          label: value,
+        }
+      : item,
+  )
+}
+
+function finishPolygon() {
+  if (currentPolygonPoints.value.length < 3) {
+    return
+  }
+
+  addAnnotation(
+    createAnnotation({
+      type: 'polygon',
+      points: [...currentPolygonPoints.value],
+    }),
+  )
+  currentPolygonPoints.value = []
 }
 
 function getPointer(event) {
@@ -392,33 +545,53 @@ function onStageMouseMove(event) {
 }
 
 function onStageMouseUp(event) {
-  if (toolMode.value !== 'bbox' || !drawStart.value) {
-    return
-  }
-
   const pointer = getPointer(event)
   if (!pointer) {
-    draftRect.value = null
-    drawStart.value = null
+    if (toolMode.value === 'bbox') {
+      draftRect.value = null
+      drawStart.value = null
+    }
     return
   }
 
-  const rect = normalizeRect(drawStart.value, pointer)
-  if (rect.width > 0 && rect.height > 0) {
-    annotations.value.push({
-      id: `ann-${Date.now()}-${annotations.value.length}`,
-      ...rect,
-    })
+  if (toolMode.value === 'point') {
+    addAnnotation(
+      createAnnotation({
+        type: 'point',
+        x: pointer.x,
+        y: pointer.y,
+      }),
+    )
+    return
   }
 
-  draftRect.value = null
-  drawStart.value = null
+  if (toolMode.value === 'polygon') {
+    currentPolygonPoints.value = [...currentPolygonPoints.value, { x: pointer.x, y: pointer.y }]
+    return
+  }
+
+  if (toolMode.value === 'bbox' && drawStart.value) {
+    const rect = normalizeRect(drawStart.value, pointer)
+    if (rect.width > 0 && rect.height > 0) {
+      addAnnotation(
+        createAnnotation({
+          type: 'bbox',
+          ...rect,
+        }),
+      )
+    }
+
+    draftRect.value = null
+    drawStart.value = null
+  }
 }
 
 async function submitCurrentAnnotations() {
   saveMessage.value = ''
-  if (!activeTask.value || annotations.value.length === 0) {
-    saveMessage.value = 'No annotations to submit'
+  const bboxAnnotations = annotations.value.filter((ann) => ann.type === 'bbox')
+
+  if (!activeTask.value || bboxAnnotations.length === 0) {
+    saveMessage.value = 'No bbox annotations to submit'
     return
   }
 
@@ -430,12 +603,12 @@ async function submitCurrentAnnotations() {
       metadata: {
         tool: 'bbox',
       },
-      annotations: annotations.value.map((ann) => ({
+      annotations: bboxAnnotations.map((ann) => ({
         x: ann.x,
         y: ann.y,
         width: ann.width,
         height: ann.height,
-        label: 'BBox',
+        label: ann.label,
       })),
     }
     const response = await submitAnnotations(activeTask.value.task_id, payload)
