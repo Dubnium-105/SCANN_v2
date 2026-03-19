@@ -93,14 +93,19 @@
 
 ## C05 - Label Studio 配置/模板联动
 
-- 状态：planned
+- 状态：done
 - 目标：将 `js9_regions_json` 纳入 LS 可提交结果字段（保留旧框工具作为降级）。
 - 主要文件：
-  - `docs/` 下 LS 配置文档（新增或更新）
+  - `bridge/app.py`
+  - `docs/label_studio_phaseb_config.md`（新增）
   - `tests/bridge/test_ls_payload_contract.py`（新增）
 - 验证：
-  - 合约测试 + 手工提交一次
+  - `pytest tests/bridge -q` ✅ 90 passed
 - 备注：
+  - 新增 `get_label_studio_phaseb_label_config()`，统一输出 Phase B 推荐 LS 模板（`js9_iframe` + `preview_png` + `RectangleLabels` + `js9_regions_json`）。
+  - webhook 新增 annotation result 解析能力：优先读取 `from_name=js9_regions_json` 的 TextArea 结果，回退到 task data，再回退 `rectanglelabels`。
+  - 修复尺寸解析边界：当首个 result 为 TextArea 时，改为遍历 result 列表解析 `original_width/original_height`，避免误判“缺少图像尺寸”。
+  - 合约覆盖：模板字段存在性、result 优先级、`[]` 清空语义（不回退旧框）。
 
 ## C06 - 数据库入库增强与审计字段
 

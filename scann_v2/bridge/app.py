@@ -164,6 +164,47 @@ class TaskRecord(BaseModel):
     js9_regions_json: Optional[str] = None
 
 
+def get_label_studio_phaseb_label_config() -> str:
+    """返回 Phase B（原生 FITS 标注）推荐的 Label Studio 标注模板。
+
+    设计要点：
+    1) `js9_iframe` 提供主判读视图。
+    2) `preview_png` 作为 RectangleLabels 的降级画板。
+    3) `js9_regions_json` 作为可提交字段承载 JS9 Region 序列化结果。
+    """
+    return """<View>
+    <Header value="SCANN 原生 FITS 标注（Phase B）"/>
+
+    <!-- 主判读视图：内嵌 JS9/FITS -->
+    <HyperText name="js9_iframe" value="$js9_iframe"/>
+
+    <!-- 降级画板：保留旧 rectanglelabels 工具 -->
+    <Image name="preview_png" value="$preview_png"/>
+    <RectangleLabels name="bbox" toName="preview_png" choice="multiple">
+        <Label value="asteroid" background="#3B82F6"/>
+        <Label value="supernova" background="#10B981"/>
+        <Label value="variable_star" background="#F59E0B"/>
+        <Label value="satellite_trail" background="#8B5CF6"/>
+        <Label value="noise" background="#EF4444"/>
+        <Label value="diffraction_spike" background="#EC4899"/>
+        <Label value="cmos_condensation" background="#06B6D4"/>
+        <Label value="corresponding" background="#A855F7"/>
+    </RectangleLabels>
+
+    <!-- 主链路结果字段：由宿主脚本在提交前写入 JSON 字符串 -->
+    <TextArea
+        name="js9_regions_json"
+        toName="preview_png"
+        rows="8"
+        editable="true"
+        maxSubmissions="1"
+        value="$js9_regions_json"
+        placeholder='[{"shape":"box","x":100,"y":120,"width":40,"height":50,"label":"real","detail_type":"asteroid"}]'
+    />
+</View>
+"""
+
+
 class JS9RegionRecord(BaseModel):
     """JS9 Region 数据模型，支持 box、circle、polygon 等形状"""
     shape: str = Field(..., description="区域形状: box, circle, polygon")
@@ -944,26 +985,84 @@ def _extract_js9_regions_from_task_data(data: dict[str, Any]) -> Optional[list[d
     js9_regions_json = data.get("js9_regions_json")
     if js9_regions_json is None:
         return None
-    
-    # 如果是字符串，尝试解析为 JSON
-    if isinstance(js9_regions_json, str):
+
+    regions = _parse_js9_regions_payload(js9_regions_json, source="task_data")
+    # 兼容历史行为：task data 中空列表视为“未提供”，允许回退 rectanglelabels
+    if regions is not None and len(regions) == 0:
+        return None
+    return regions
+
+
+def _parse_js9_regions_payload(payload: Any, source: str) -> Optional[list[dict[str, Any]]]:
+    """解析 js9_regions_json 负载并标准化为 region 列表。
+
+    Args:
+        payload: 可能是 JSON 字符串、列表或其他结构
+        source: 日志来源标记（如 task_data/result）
+
+    Returns:
+        region 字典列表；若不可解析则返回 None。
+        注意：空列表是合法值（调用方可按业务选择是否接受）。
+    """
+    regions = payload
+    if isinstance(regions, str):
+        if not regions.strip():
+            return []
         try:
-            js9_regions_json = json.loads(js9_regions_json)
+            regions = json.loads(regions)
         except (json.JSONDecodeError, TypeError):
-            logger.warning("js9_regions_json 不是有效的 JSON 字符串")
+            logger.warning("%s: js9_regions_json 不是有效 JSON", source)
             return None
-    
-    # 确保是列表
-    if not isinstance(js9_regions_json, list):
-        logger.warning("js9_regions_json 不是列表类型")
+
+    if not isinstance(regions, list):
+        logger.warning("%s: js9_regions_json 不是列表类型", source)
         return None
-    
-    # 过滤掉无效的 region 对象
-    valid_regions = [r for r in js9_regions_json if isinstance(r, dict)]
-    if not valid_regions:
-        return None
-    
+
+    valid_regions = [r for r in regions if isinstance(r, dict)]
+    if len(valid_regions) != len(regions):
+        logger.warning("%s: js9_regions_json 包含非对象元素，已自动忽略", source)
     return valid_regions
+
+
+def _extract_js9_regions_from_annotation_results(results: list[dict[str, Any]]) -> Optional[list[dict[str, Any]]]:
+    """从 Label Studio annotation result 中提取 `js9_regions_json` 字段。
+
+    支持 TextArea 常见格式：
+    - value.text = ["<json-string>"]
+    - value.text = "<json-string>"
+    - value.json = <list|str>
+
+    返回语义：
+    - `None`：未检测到该字段或无法解析
+    - `[]`：字段存在且明确为空（代表用户清空了 region）
+    - 非空列表：有效 region 集
+    """
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        if result.get("from_name") != "js9_regions_json":
+            continue
+
+        value = result.get("value")
+        if not isinstance(value, dict):
+            return None
+
+        candidate: Any = None
+        if "text" in value:
+            text_value = value.get("text")
+            if isinstance(text_value, list):
+                candidate = text_value[0] if text_value else "[]"
+            else:
+                candidate = text_value
+        elif "json" in value:
+            candidate = value.get("json")
+
+        if candidate is None:
+            return None
+
+        return _parse_js9_regions_payload(candidate, source="result")
+
+    return None
 
 
 def _convert_js9_regions_to_bboxes(
@@ -1028,6 +1127,24 @@ def _task_data_from_annotation(annotation: dict[str, Any], payload: dict[str, An
     if isinstance(data, dict):
         return data
     return {}
+
+
+def _resolve_image_size(results: list[dict[str, Any]], data: dict[str, Any]) -> tuple[int, int]:
+    """从 annotation result 列表或 task data 中解析图像尺寸。"""
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        w = _safe_float(result.get("original_width") or result.get("image_width"))
+        h = _safe_float(result.get("original_height") or result.get("image_height"))
+        if w and h and w > 0 and h > 0:
+            return int(w), int(h)
+
+    fallback_w = _safe_float(data.get("image_width"))
+    fallback_h = _safe_float(data.get("image_height"))
+    if fallback_w and fallback_h and fallback_w > 0 and fallback_h > 0:
+        return int(fallback_w), int(fallback_h)
+
+    return 0, 0
 
 
 @app.get("/viewer/js9", response_class=HTMLResponse)
@@ -1145,9 +1262,7 @@ async def labelstudio_webhook(request: Request) -> WebhookResponse:
         if not isinstance(results, list):
             continue
 
-        first_result = results[0] if results else {}
-        image_width = int((first_result or {}).get("original_width") or (first_result or {}).get("image_width") or data.get("image_width") or 0)
-        image_height = int((first_result or {}).get("original_height") or (first_result or {}).get("image_height") or data.get("image_height") or 0)
+        image_width, image_height = _resolve_image_size(results, data)
 
         if image_width <= 0 or image_height <= 0:
             logger.warning("缺少图像尺寸信息，跳过 sample=%s", sample_id)
@@ -1155,8 +1270,11 @@ async def labelstudio_webhook(request: Request) -> WebhookResponse:
 
         bboxes: list[dict[str, Any]] = []
         
-        # 优先尝试从 task data 中解析 js9_regions_json
-        js9_regions = _extract_js9_regions_from_task_data(data)
+        # 优先解析 annotation result 中提交的 js9_regions_json，再回退 task data
+        js9_regions = _extract_js9_regions_from_annotation_results(results)
+        if js9_regions is None:
+            js9_regions = _extract_js9_regions_from_task_data(data)
+
         if js9_regions is not None:
             logger.info("检测到 js9_regions_json，优先解析 JS9 regions (sample=%s)", sample_id)
             bboxes = _convert_js9_regions_to_bboxes(js9_regions, image_width, image_height)
