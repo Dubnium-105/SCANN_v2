@@ -21,6 +21,7 @@
   * `pytest tests/test_health.py -q` ✅ 1 passed
 
 ### Commit 2: 数据集目录遍历 API
+* **状态:** `done`（2026-03-19）
 * **Test (Red):** 
   * 编写 `tests/test_dataset.py`。
   * Mock 测试目录（包含 `old/`, `new/`, `new_marked/` 以及符合规则的 `.fts` 文件）。
@@ -30,6 +31,8 @@
   * 根据同名文件聚合生成 Task Session 数据结构。
 * **Refactor:** 
   * 将目录扫描逻辑提取为独立的 `DatasetService`，配置化存储基准路径。
+* **验证结果:**
+  * `pytest tests/test_dataset.py tests/test_health.py -q` ✅ 2 passed
 
 ### Commit 3: 临时渲染方案 - FITS 转 PNG (MVP用)
 * **Test (Red):** 
