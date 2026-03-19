@@ -460,9 +460,77 @@ def _build_viewer_html(
         let active = "new";
         let blinkTimer = null;
         let invertOn = false;
+        let regionsState = [];
 
         function hasJS9() {{
             return typeof window.JS9 !== "undefined" && typeof window.JS9.Load === "function";
+        }}
+
+        function collectRegions() {{
+            regionsState = [];
+            if (hasJS9() && !js9Wrapper.classList.contains("hidden")) {{
+                try {{
+                    const regions = window.JS9.GetRegions("scannJS9");
+                    if (Array.isArray(regions)) {{
+                        regionsState = regions.map(r => ({{
+                            shape: r.shape || "box",
+                            x: r.x || 0,
+                            y: r.y || 0,
+                            width: r.width || 0,
+                            height: r.height || 0,
+                            radius: r.radius || 0,
+                            vertices: r.vertices || [],
+                            label: r.label || null,
+                            detail_type: r.detail_type || null,
+                            confidence: r.confidence || 1.0
+                        }}));
+                    }}
+                }} catch (_err) {{
+                    console.error("Failed to collect JS9 regions:", _err);
+                }}
+            }}
+            return regionsState;
+        }}
+
+        function applyRegions(regions) {{
+            if (!Array.isArray(regions)) return false;
+            if (hasJS9() && !js9Wrapper.classList.contains("hidden")) {{
+                try {{
+                    window.JS9.ClearRegions("scannJS9");
+                    regions.forEach(region => {{
+                        const opts = {{
+                            display: "scannJS9"
+                        }};
+                        if (region.label) opts.label = region.label;
+                        if (region.detail_type) opts.detail_type = region.detail_type;
+                        if (region.confidence !== undefined) opts.confidence = region.confidence;
+
+                        switch (region.shape?.toLowerCase()) {{
+                            case "box":
+                                window.JS9.AddRegions("box", [region.x, region.y, region.width, region.height], opts);
+                                break;
+                            case "circle":
+                                window.JS9.AddRegions("circle", [region.x, region.y, region.radius], opts);
+                                break;
+                            case "polygon":
+                                if (region.vertices && Array.isArray(region.vertices)) {{
+                                    const flat = region.vertices.flat();
+                                    window.JS9.AddRegions("polygon", flat, opts);
+                                }}
+                                break;
+                            default:
+                                break;
+                        }}
+                    }});
+                    regionsState = regions;
+                    return true;
+                }} catch (_err) {{
+                    console.error("Failed to apply JS9 regions:", _err);
+                    return false;
+                }}
+            }}
+            regionsState = regions;
+            return false;
         }}
 
         function useFallbackViewer() {{
@@ -522,6 +590,39 @@ def _build_viewer_html(
             }} catch (_err) {{
             }}
         }}
+
+        function postViewerMessage(type, payload) {{
+            try {{
+                window.parent.postMessage({{
+                    source: "scann-viewer",
+                    type,
+                    payload
+                }}, "*");
+            }} catch (_err) {{
+                console.error("Failed to post message to parent:", _err);
+            }}
+        }}
+
+        window.addEventListener("message", (event) => {{
+            const data = event.data;
+            if (data?.source !== "scann-host") return;
+
+            switch (data.action) {{
+                case "collectRegions":
+                    const regions = collectRegions();
+                    postViewerMessage("regionsCollected", regions);
+                    break;
+                case "applyRegions":
+                    const success = applyRegions(data.regions);
+                    postViewerMessage("regionsApplied", {{ success, regions: regionsState }});
+                    break;
+                case "getRegions":
+                    postViewerMessage("regionsData", regionsState);
+                    break;
+                default:
+                    break;
+            }}
+        }});
 
         document.getElementById("btn-new").addEventListener("click", () => setFrame("new"));
         document.getElementById("btn-old").addEventListener("click", () => setFrame("old"));

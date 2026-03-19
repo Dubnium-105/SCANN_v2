@@ -51,14 +51,23 @@
 
 ## C03 - viewer 增加 Region 同步协议
 
-- 状态：planned
+- 状态：done
 - 目标：viewer 增加 `collectRegions()/applyRegions()`，通过 `postMessage` 与宿主页面通信。
 - 主要文件：
   - `bridge/app.py`（viewer HTML 生成逻辑）
   - `tests/bridge/test_viewer_region_protocol.py`（新增）
 - 验证：
-  - `pytest tests/bridge -q`
+  - `pytest tests/bridge -q` ✅ 78 passed
 - 备注：
+  - 在 viewer HTML 中添加 `regionsState` 变量存储当前 regions
+  - 实现 `collectRegions()` 函数，从 JS9 获取当前 regions 并规范化格式
+  - 实现 `applyRegions(regions)` 函数，将 regions 应用到 JS9，支持 box/circle/polygon 三种形状
+  - 添加 `postViewerMessage(type, payload)` 函数，向宿主页面发送消息
+  - 添加 `window.addEventListener('message', ...)` 监听器，处理来自宿主页面的消息
+  - 支持三种消息动作：`collectRegions`、`applyRegions`、`getRegions`
+  - 保留 region 的 label、detail_type、confidence 属性
+  - 添加完善的错误处理（try-catch、条件检查、错误日志）
+  - 创建 15 个测试，覆盖 region 同步协议的所有功能
 
 ## C04 - tasks/pull 下发 annotation_mode 与 region 字段骨架
 
