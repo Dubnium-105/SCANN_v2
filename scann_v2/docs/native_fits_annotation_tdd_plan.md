@@ -67,13 +67,16 @@
 ## 阶段二：前端 MVP 构建与核心交互 (Vue 3 + Vite)
 
 ### Commit 5: 初始化前端项目与 Vitest
+* **状态:** `done`（2026-03-19）
 * **Test (Red):** 
-  * 编写 `src/components/__tests__/App.spec.js`，断言页面能正确渲染标题（例如：包含 "SCANN Native Annotation"）。
+  * 编写 `frontend/src/components/__tests__/App.spec.js`，断言页面能正确渲染标题（例如：包含 "SCANN Native Annotation"）。
 * **Impl (Green):** 
   * 使用 Vite 初始化 Vue 3 模板，集成 Vitest。
   * 引入 TailwindCSS，构建基础暗黑 (Dark) 框架布局（Header, Canvas, Sidebar）。
 * **Refactor:** 
   * 组件化拆分（拆出 Header、Inspector、Canvas 预留位）。
+* **验证结果:**
+  * `cd frontend && npm run test` ✅ 1 passed
 
 ### Commit 6: Konva 画布与多图加载机制
 * **Test (Red):** 
