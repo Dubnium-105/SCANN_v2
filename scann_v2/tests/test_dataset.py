@@ -12,6 +12,16 @@ def _touch(path: Path) -> None:
     path.write_bytes(b"SIMPLE FITS PLACEHOLDER")
 
 
+def _auth_headers(client: TestClient) -> dict[str, str]:
+    response = client.post(
+        "/api/login",
+        json={"username": "annotator", "password": "scann123"},
+    )
+    assert response.status_code == 200
+    token = response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
 def test_api_tasks_aggregates_triplet_paths(tmp_path, monkeypatch) -> None:
     dataset_root = tmp_path / "dataset"
 
@@ -28,8 +38,9 @@ def test_api_tasks_aggregates_triplet_paths(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setenv("SCANN_NATIVE_DATASET_ROOT", str(dataset_root))
     client = TestClient(app)
+    headers = _auth_headers(client)
 
-    response = client.get("/api/tasks")
+    response = client.get("/api/tasks", headers=headers)
 
     assert response.status_code == 200
     assert response.json() == [

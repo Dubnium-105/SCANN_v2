@@ -1,4 +1,6 @@
-export async function submitAnnotations(taskId, payload, fetchImpl = fetch) {
+import { authFetch } from './authStore'
+
+export async function submitAnnotations(taskId, payload, fetchImpl = authFetch) {
   const encodedTaskId = encodeURIComponent(taskId)
   const response = await fetchImpl(`/api/annotations/${encodedTaskId}`, {
     method: 'POST',

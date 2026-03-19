@@ -2,6 +2,7 @@ import { ref } from 'vue'
 
 import { parseFitsArrayBuffer } from '../fits/fitsParser'
 import { fetchFitsArrayBuffer } from '../services/fitsApi'
+import { authFetch } from '../services/authStore'
 
 const VIEW_PATH_MAP = {
   old: 'old_path',
@@ -22,7 +23,7 @@ function createEmptyFitsNode(view) {
   }
 }
 
-export function useFitsImagePool(fetchImpl = fetch) {
+export function useFitsImagePool(fetchImpl = authFetch) {
   const fitsNodes = ref(VIEW_ORDER.map((view) => createEmptyFitsNode(view)))
   const isFitsLoading = ref(false)
   const fitsError = ref('')

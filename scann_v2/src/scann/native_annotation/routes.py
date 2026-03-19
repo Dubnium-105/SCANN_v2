@@ -4,11 +4,19 @@ import os
 from pathlib import Path
 from typing import Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
 
 from .annotation_service import AnnotationSaveRequest, AnnotationSaveResponse, AnnotationService
+from .auth_service import (
+    AuthUser,
+    LoginRequest,
+    TokenResponse,
+    authenticate_user,
+    create_access_token,
+    get_current_user,
+)
 from .dataset_service import DatasetService, TaskSession
 from .fits_engine import FITSEngine
 from .task_lock_service import TaskLockService
@@ -61,14 +69,33 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@api_router.post("/login", response_model=TokenResponse)
+def login(payload: LoginRequest) -> TokenResponse:
+    user = authenticate_user(payload.username, payload.password)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    token = create_access_token(user)
+    return TokenResponse(
+        access_token=token,
+        username=user.username,
+        role=user.role,
+    )
+
+
 @api_router.get("/tasks", response_model=list[TaskSession])
-def list_tasks() -> list[TaskSession]:
+def list_tasks(current_user: AuthUser = Depends(get_current_user)) -> list[TaskSession]:
+    _ = current_user
     service = get_dataset_service()
     return service.list_tasks()
 
 
 @api_router.get("/tasks/next", response_model=TaskClaimResponse)
-def claim_next_task(client_id: str = Query(..., min_length=1)) -> TaskClaimResponse:
+def claim_next_task(
+    client_id: str = Query(..., min_length=1),
+    current_user: AuthUser = Depends(get_current_user),
+) -> TaskClaimResponse:
+    _ = current_user
     dataset_service = get_dataset_service()
     lock_service = get_task_lock_service()
     task = lock_service.claim_next_task(client_id=client_id, tasks=dataset_service.list_tasks())
@@ -87,7 +114,11 @@ def claim_next_task(client_id: str = Query(..., min_length=1)) -> TaskClaimRespo
 
 
 @api_router.get("/render/{file_path:path}")
-def render_fits_png(file_path: str) -> Response:
+def render_fits_png(
+    file_path: str,
+    current_user: AuthUser = Depends(get_current_user),
+) -> Response:
+    _ = current_user
     engine = get_fits_engine()
     try:
         png_data = engine.render_png(file_path)
@@ -106,7 +137,9 @@ def save_annotations(
     task_id: str,
     payload: AnnotationSaveRequest,
     client_id: Optional[str] = Query(None),
+    current_user: AuthUser = Depends(get_current_user),
 ) -> AnnotationSaveResponse:
+    _ = current_user
     service = get_annotation_service()
     lock_service = get_task_lock_service()
     try:

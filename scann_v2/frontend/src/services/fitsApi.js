@@ -1,4 +1,6 @@
-export async function fetchFitsArrayBuffer(relativePath, fetchImpl = fetch) {
+import { authFetch } from './authStore'
+
+export async function fetchFitsArrayBuffer(relativePath, fetchImpl = authFetch) {
   const encodedPath = relativePath
     .split('/')
     .map((segment) => encodeURIComponent(segment))

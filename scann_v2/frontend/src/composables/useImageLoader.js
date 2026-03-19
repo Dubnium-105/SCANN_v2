@@ -1,5 +1,7 @@
 import { computed, ref } from 'vue'
 
+import { authFetch } from '../services/authStore'
+
 const VIEW_TO_PATH_KEY = {
   old: 'old_path',
   new: 'new_path',
@@ -26,7 +28,7 @@ function createEmptyNode(view) {
   }
 }
 
-export function useImageLoader(fetchImpl = fetch) {
+export function useImageLoader(fetchImpl = authFetch) {
   const currentView = ref('new')
   const imageNodes = ref(VIEW_ORDER.map((view) => createEmptyNode(view)))
   const isLoading = ref(false)

@@ -23,6 +23,16 @@ def _annotation_payload() -> dict:
     }
 
 
+def _auth_headers(client: TestClient, username: str = "annotator", password: str = "scann123") -> dict[str, str]:
+    response = client.post(
+        "/api/login",
+        json={"username": username, "password": password},
+    )
+    assert response.status_code == 200
+    token = response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
 def test_claim_next_task_locks_task_between_clients(tmp_path, monkeypatch) -> None:
     dataset_root = tmp_path / "dataset"
 
@@ -32,9 +42,10 @@ def test_claim_next_task_locks_task_between_clients(tmp_path, monkeypatch) -> No
 
     monkeypatch.setenv("SCANN_NATIVE_DATASET_ROOT", str(dataset_root))
     client = TestClient(app)
+    headers = _auth_headers(client)
 
-    response_a = client.get("/api/tasks/next", params={"client_id": "client-a"})
-    response_b = client.get("/api/tasks/next", params={"client_id": "client-b"})
+    response_a = client.get("/api/tasks/next", params={"client_id": "client-a"}, headers=headers)
+    response_b = client.get("/api/tasks/next", params={"client_id": "client-b"}, headers=headers)
 
     assert response_a.status_code == 200
     assert response_a.json()["task_id"] == "PGC 17069"
@@ -52,17 +63,19 @@ def test_annotation_submit_releases_lock_for_next_client(tmp_path, monkeypatch) 
 
     monkeypatch.setenv("SCANN_NATIVE_DATASET_ROOT", str(dataset_root))
     client = TestClient(app)
+    headers = _auth_headers(client)
 
-    claim_a = client.get("/api/tasks/next", params={"client_id": "client-a"})
+    claim_a = client.get("/api/tasks/next", params={"client_id": "client-a"}, headers=headers)
     assert claim_a.status_code == 200
 
     save_resp = client.post(
         "/api/annotations/PGC 17069",
         params={"client_id": "client-a"},
         json=_annotation_payload(),
+        headers=headers,
     )
     assert save_resp.status_code == 200
 
-    claim_b = client.get("/api/tasks/next", params={"client_id": "client-b"})
+    claim_b = client.get("/api/tasks/next", params={"client_id": "client-b"}, headers=headers)
     assert claim_b.status_code == 200
     assert claim_b.json()["task_id"] == "PGC 17069"

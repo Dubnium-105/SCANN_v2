@@ -185,6 +185,7 @@
 ## 阶段五：用户管理与标注版本控制
 
 ### Commit 13: 基础用户与鉴权系统 (JWT)
+* **状态:** `done`（2026-03-19）
 * **Test (Red):** 
   * 后端: 编写 `tests/test_auth.py`，未带 Token 访问受保护接口应返回 `401 Unauthorized`。登录测试需返回有效 JWT。
   * 前端: 模拟登录表单，断言获取 Token 并无缝存入 Vuex/Pinia Store，应用头栏能正确显示解析到的用户名。
@@ -194,6 +195,9 @@
   * 前端新增 Login 视图，通过 Router 路由守卫自动拦截未登录访问跳回登录页。
 * **Refactor:** 
   * 提取并模块化用户的权限校验逻辑（如判断角色是 `admin` 还是 `annotator`），简化后端鉴权样板代码。
+* **验证结果:**
+  * `pytest tests/test_auth.py tests/test_task_locking.py tests/test_annotation.py tests/test_dataset.py tests/test_health.py -q` ✅ 7 passed
+  * `cd frontend && npm run test` ✅ 15 passed
 
 ### Commit 14: 标注版本控制与历史回溯
 * **Test (Red):** 

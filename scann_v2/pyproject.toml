@@ -9,6 +9,8 @@ description = "Star/Source Classification and Analysis Neural Network"
 requires-python = ">=3.9"
 dependencies = [
     "fastapi>=0.110",
+    "PyJWT>=2.8",
+    "passlib>=1.7",
     "torch>=2.0",
     "torchvision>=0.15",
     "numpy>=1.24,<2",

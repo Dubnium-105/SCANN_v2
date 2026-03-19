@@ -11,3 +11,5 @@ urllib3
 tqdm
 Pillow
 scikit-learn
+PyJWT
+passlib
