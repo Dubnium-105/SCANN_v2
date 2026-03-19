@@ -109,14 +109,19 @@
 
 ## C06 - 数据库入库增强与审计字段
 
-- 状态：planned
+- 状态：done
 - 目标：在不破坏现有表结构前提下，记录 region 来源与版本（可放扩展字段或日志）。
 - 主要文件：
   - `bridge/app.py`
   - `tests/bridge/test_region_storage_metadata.py`（新增）
 - 验证：
-  - `pytest tests/bridge -q`
+  - `pytest tests/bridge/test_region_storage_metadata.py -q` ✅ 2 passed
+  - `pytest tests/bridge -q` ✅ 92 passed
 - 备注：
+  - 新增 region 入库审计常量：`REGION_STORAGE_AUDIT_SCHEMA_VERSION`、`JS9_REGION_SCHEMA_VERSION`、`RECTANGLELABELS_SCHEMA_VERSION`。
+  - 新增 `_record_region_storage_metadata()`：将入库审计信息写入 `dataset/.audit/region_storage_audit.jsonl`（JSONL 追加模式）。
+  - webhook 写入路径增强：按优先级标记 `region_source`（`annotation_result.js9_regions_json` / `task_data.js9_regions_json` / `rectanglelabels_fallback`）并记录 schema version、annotation_mode、region/bbox 数量。
+  - 保持 `images`/`bboxes` 表结构不变，通过外部审计日志实现可追踪性。
 
 ## C07 - 端到端回归（pull -> 标注 -> webhook）
 

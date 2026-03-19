@@ -20,6 +20,10 @@ logger = logging.getLogger("scann_bridge")
 logging.basicConfig(level=os.getenv("BRIDGE_LOG_LEVEL", "INFO").upper())
 
 MANIFEST_VERSION = "2.1"
+REGION_STORAGE_AUDIT_SCHEMA_VERSION = "region-storage-audit/v1"
+JS9_REGION_SCHEMA_VERSION = "js9-regions/v1"
+RECTANGLELABELS_SCHEMA_VERSION = "rectanglelabels/v1"
+REGION_STORAGE_AUDIT_LOG_NAME = "region_storage_audit.jsonl"
 REAL_DETAIL_TYPES = {"asteroid", "supernova", "variable_star"}
 BOGUS_DETAIL_TYPES = {
     "satellite_trail",
@@ -880,6 +884,43 @@ def _write_manifest() -> None:
     CONFIG.manifest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _record_region_storage_metadata(
+    sample_id: str,
+    file_name: str,
+    region_source: str,
+    region_schema_version: str,
+    annotation_mode: str,
+    js9_region_count: int,
+    bbox_count: int,
+) -> None:
+    """记录 region 入库审计信息（JSONL）。
+
+    说明：
+    - 不修改现有 `images` / `bboxes` 表结构。
+    - 通过追加日志记录来源与版本，便于追踪与回放。
+    """
+    audit_payload = {
+        "event": "region_storage_upsert",
+        "audit_schema_version": REGION_STORAGE_AUDIT_SCHEMA_VERSION,
+        "sample_id": sample_id,
+        "file_name": file_name,
+        "region_source": region_source,
+        "region_schema_version": region_schema_version,
+        "annotation_mode": annotation_mode,
+        "js9_region_count": int(js9_region_count),
+        "bbox_count": int(bbox_count),
+        "updated_at": _utc_now(),
+    }
+
+    audit_path = CONFIG.dataset_root / ".audit" / REGION_STORAGE_AUDIT_LOG_NAME
+    try:
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        with audit_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(audit_payload, ensure_ascii=False) + "\n")
+    except Exception as exc:
+        logger.warning("region 审计日志写入失败(sample=%s): %s", sample_id, exc)
+
+
 def _upsert_sample(sample_id: str, file_name: str, bboxes: list[dict[str, Any]]) -> None:
     detail_type = bboxes[0].get("detail_type") if bboxes else None
     label = _label_from_detail_type(detail_type)
@@ -1269,14 +1310,25 @@ async def labelstudio_webhook(request: Request) -> WebhookResponse:
             continue
 
         bboxes: list[dict[str, Any]] = []
+        region_source = "rectanglelabels_fallback"
+        region_schema_version = RECTANGLELABELS_SCHEMA_VERSION
+        js9_region_count = 0
+        annotation_mode = str(data.get("annotation_mode") or "unknown")
         
         # 优先解析 annotation result 中提交的 js9_regions_json，再回退 task data
         js9_regions = _extract_js9_regions_from_annotation_results(results)
-        if js9_regions is None:
+        if js9_regions is not None:
+            region_source = "annotation_result.js9_regions_json"
+            region_schema_version = JS9_REGION_SCHEMA_VERSION
+        else:
             js9_regions = _extract_js9_regions_from_task_data(data)
+            if js9_regions is not None:
+                region_source = "task_data.js9_regions_json"
+                region_schema_version = JS9_REGION_SCHEMA_VERSION
 
         if js9_regions is not None:
             logger.info("检测到 js9_regions_json，优先解析 JS9 regions (sample=%s)", sample_id)
+            js9_region_count = len(js9_regions)
             bboxes = _convert_js9_regions_to_bboxes(js9_regions, image_width, image_height)
         else:
             # 回退到解析 rectanglelabels 格式
@@ -1289,6 +1341,15 @@ async def labelstudio_webhook(request: Request) -> WebhookResponse:
                     bboxes.append(box)
 
         _upsert_sample(sample_id=sample_id, file_name=file_name or sample_id, bboxes=bboxes)
+        _record_region_storage_metadata(
+            sample_id=sample_id,
+            file_name=file_name or sample_id,
+            region_source=region_source,
+            region_schema_version=region_schema_version,
+            annotation_mode=annotation_mode,
+            js9_region_count=js9_region_count,
+            bbox_count=len(bboxes),
+        )
         updated += 1
 
     return WebhookResponse(updated_samples=updated)
