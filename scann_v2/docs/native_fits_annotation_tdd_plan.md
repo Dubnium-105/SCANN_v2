@@ -35,6 +35,7 @@
   * `pytest tests/test_dataset.py tests/test_health.py -q` ✅ 2 passed
 
 ### Commit 3: 临时渲染方案 - FITS 转 PNG (MVP用)
+* **状态:** `done`（2026-03-19）
 * **Test (Red):** 
   * 提供一个最小的 FITS 测试文件。
   * 编写 `tests/test_fits_render.py`，断言 `GET /api/render/{filepath}` 成功返回 `image/png` 格式数据。
@@ -44,6 +45,8 @@
   * 利用 `PIL` 或 `matplotlib` 生成基础 PNG 并在内存中返回。
 * **Refactor:** 
   * 将 FITS 提取及转换引擎抽取为独立的 `FITSEngine` 工具类，缓存结果。
+* **验证结果:**
+  * `pytest tests/test_fits_render.py tests/test_dataset.py tests/test_health.py -q` ✅ 3 passed
 
 ### Commit 4: 标注数据保存 API
 * **Test (Red):** 
