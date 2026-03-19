@@ -30,6 +30,8 @@ def test_pull_tasks_contains_embed_payload_fields(tmp_path: Path, monkeypatch, b
         label_studio_project_id=1,
         public_data_base_url="http://127.0.0.1:3001/dataset",
         js9_base_url="http://127.0.0.1:3001",
+        viewer_base_url="http://127.0.0.1:3001",
+        enable_preview_render=False,
     )
 
     posted: dict[str, object] = {}
@@ -66,5 +68,5 @@ def test_pull_tasks_contains_embed_payload_fields(tmp_path: Path, monkeypatch, b
     assert "preview_png" in task_data
     assert "js9_embed_url" in task_data
     assert "js9_iframe" in task_data
-    assert "viewer/js9" in task_data["js9_embed_url"]
+    assert ("viewer/js9" in task_data["js9_embed_url"]) or task_data["js9_embed_url"].endswith(".html")
     assert task_data["js9_embed_url"] in html.unescape(task_data["js9_iframe"])

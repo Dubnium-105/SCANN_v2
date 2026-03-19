@@ -17,7 +17,8 @@ def test_viewer_route_returns_toolbar_dom(bridge_module):
     assert resp.status_code == 200
     body = resp.text
     assert 'id="scann-js9-toolbar"' in body
-    assert 'id="scann-js9-viewer"' in body
+    assert 'id="scannJS9"' in body
+    assert 'id="scann-fallback-viewer"' in body
     assert 'id="btn-blink"' in body
     assert 'id="btn-invert"' in body
 

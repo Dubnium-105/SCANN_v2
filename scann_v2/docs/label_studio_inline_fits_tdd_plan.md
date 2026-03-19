@@ -59,6 +59,11 @@
 
 - [x] 本文档已创建并回写执行进度
 - [x] 自动化测试通过（`pytest tests/bridge -q`：6 passed）
+- [x] 修复 `preview_png` 指向 FITS 导致 LS 预览加载失败：改为优先渲染 PNG，失败时回退 `data:image/png;base64,...`
+- [x] 修复内嵌 Viewer 404：`js9_embed_url` 改为使用 `viewer_base_url`（默认取 `public_data_base_url` 同源）
+- [x] 修复静态文件服务器场景 `/viewer/js9` 不存在：任务生成时写入 `.preview_cache/viewer_<sample>.html` 并直接引用
+- [x] 修复内嵌 Viewer 点击下载 FTS：viewer 内改为加载 `new/old/marked` 对应缓存 PNG（保留外部原始 FTS 链接）
+- [x] 接入 JS9 API 实现 FITS 主渲染（`JS9.Load/SetScale/SetColormap`），并保留 PNG iframe 降级通道
 - [ ] 手工验收（浏览器）
 - [ ] 真实样本试跑（>=20）
 
@@ -95,3 +100,19 @@
 1. 执行 `tests/bridge` 自动化测试并固化到 CI。
 2. 在真实数据集上进行 MANUAL-01~MANUAL-05 验收。
 3. 评估 Phase B（region 同步到 LS 结果结构）技术方案。
+
+---
+
+## 7. Phase B 启动决议（原生 FITS 标注）
+
+根据当前实现状态，正式进入 **Phase B：JS9 Region 主标注**。
+
+- 目标：标注输入从 LS PNG 画板切换为 JS9/FITS Region，LS 仅作为任务编排与结果承载。
+- 计划文档（总览）：[docs/label_studio_native_fits_annotation_master_plan.md](docs/label_studio_native_fits_annotation_master_plan.md)
+- 逐提交计划： [docs/label_studio_native_fits_annotation_commit_plan.md](docs/label_studio_native_fits_annotation_commit_plan.md)
+
+执行要求：
+
+1. 必须按逐提交计划推进，每个提交对应可验证测试。
+2. 每完成一个提交，回写状态（`planned`/`in_progress`/`done`）与测试结果。
+3. 任一提交失败时，先修复再进入下一个提交，禁止跨提交跳跃合并。
