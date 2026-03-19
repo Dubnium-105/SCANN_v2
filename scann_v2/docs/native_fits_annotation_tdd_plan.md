@@ -106,6 +106,7 @@
   * `cd frontend && npm run test` ✅ 3 passed
 
 ### Commit 8: 画布标注工具 (BBox) 与提交流程
+* **状态:** `done`（2026-03-19）
 * **Test (Red):** 
   * 模拟鼠标在画布按下(mousedown)、移动(mousemove)、抬起(mouseup)。
   * 断言生成了一个 BBox 标注对象（包含相对图片的正确 x, y, width, height）。
@@ -115,6 +116,8 @@
   * 实现『提交』按钮，将当前 Layer 的标注信息 POST 到后端。
 * **Refactor:** 
   * 解耦绘制工具状态，支持快速在“移动模式”和“框选标注模式”间切换。
+* **验证结果:**
+  * `cd frontend && npm run test` ✅ 5 passed
 
 ---
 

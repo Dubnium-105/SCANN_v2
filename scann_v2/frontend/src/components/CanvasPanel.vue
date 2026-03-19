@@ -6,6 +6,9 @@
         class="h-full w-full bg-black"
         @dragend="onDragEnd"
         @wheel="onWheel"
+        @mousedown="onStageMouseDown"
+        @mousemove="onStageMouseMove"
+        @mouseup="onStageMouseUp"
       >
         <v-layer
           v-for="node in imageNodes"
@@ -14,7 +17,80 @@
         >
           <v-image :config="{ image: node.image, width: stageConfig.width, height: stageConfig.height }" />
         </v-layer>
+
+        <v-layer>
+          <v-rect
+            v-for="ann in annotations"
+            :key="ann.id"
+            :config="{
+              x: ann.x,
+              y: ann.y,
+              width: ann.width,
+              height: ann.height,
+              stroke: '#22c55e',
+              strokeWidth: 2,
+            }"
+          />
+          <v-rect
+            v-if="draftRect"
+            :config="{
+              x: draftRect.x,
+              y: draftRect.y,
+              width: draftRect.width,
+              height: draftRect.height,
+              stroke: '#38bdf8',
+              strokeWidth: 2,
+              dash: [6, 4],
+            }"
+          />
+        </v-layer>
       </v-stage>
+
+      <div class="absolute top-2 left-2 flex items-center gap-2 bg-slate-950/70 rounded px-2 py-1">
+        <button
+          data-testid="tool-move"
+          class="text-xs px-2 py-1 rounded border"
+          :class="toolMode === 'move' ? 'border-sky-400 text-sky-300' : 'border-slate-700 text-slate-300'"
+          @click="setToolMode('move')"
+        >
+          Move
+        </button>
+        <button
+          data-testid="tool-bbox"
+          class="text-xs px-2 py-1 rounded border"
+          :class="toolMode === 'bbox' ? 'border-emerald-400 text-emerald-300' : 'border-slate-700 text-slate-300'"
+          @click="setToolMode('bbox')"
+        >
+          BBox
+        </button>
+      </div>
+
+      <div class="absolute top-2 right-2 flex items-center gap-2 bg-slate-950/70 rounded px-2 py-1">
+        <select
+          v-model="selectedBucket"
+          data-testid="bucket-select"
+          class="text-xs bg-slate-800 text-slate-200 border border-slate-700 rounded px-2 py-1"
+        >
+          <option value="positive">positive</option>
+          <option value="negative">negative</option>
+        </select>
+        <button
+          data-testid="submit-annotations"
+          class="text-xs px-2 py-1 rounded border border-emerald-600 text-emerald-300 disabled:opacity-50"
+          :disabled="isSubmitting || !activeTask"
+          @click="submitCurrentAnnotations"
+        >
+          {{ isSubmitting ? 'Submitting...' : 'Submit' }}
+        </button>
+      </div>
+
+      <p
+        v-if="saveMessage"
+        data-testid="save-message"
+        class="absolute bottom-2 left-2 text-xs px-2 py-1 rounded bg-slate-950/70 text-emerald-300"
+      >
+        {{ saveMessage }}
+      </p>
 
       <div
         v-if="isLoading"
@@ -55,6 +131,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import { useBlinkControl } from '../composables/useBlinkControl'
 import { useImageLoader } from '../composables/useImageLoader'
+import { submitAnnotations } from '../services/annotationApi'
 import { fetchTasks } from '../services/taskApi'
 
 const stageWidth = 1024
@@ -62,11 +139,18 @@ const stageHeight = 768
 const stageX = ref(0)
 const stageY = ref(0)
 const stageScale = ref(1)
+const toolMode = ref('move')
+const annotations = ref([])
+const draftRect = ref(null)
+const drawStart = ref(null)
+const selectedBucket = ref('positive')
+const isSubmitting = ref(false)
+const saveMessage = ref('')
 
 const stageConfig = computed(() => ({
   width: stageWidth,
   height: stageHeight,
-  draggable: true,
+  draggable: toolMode.value === 'move',
   x: stageX.value,
   y: stageY.value,
   scaleX: stageScale.value,
@@ -110,6 +194,129 @@ function onWheel(event) {
   const direction = deltaY > 0 ? -1 : 1
   const nextScale = stageScale.value * (direction > 0 ? 1.05 : 0.95)
   stageScale.value = Math.max(0.1, Math.min(10, nextScale))
+}
+
+function setToolMode(mode) {
+  toolMode.value = mode
+  if (mode !== 'bbox') {
+    draftRect.value = null
+    drawStart.value = null
+  }
+}
+
+function getPointer(event) {
+  const stage = event?.target?.getStage?.()
+  const stagePoint = stage?.getPointerPosition?.()
+  if (stagePoint && typeof stagePoint.x === 'number' && typeof stagePoint.y === 'number') {
+    return { x: stagePoint.x, y: stagePoint.y }
+  }
+
+  const raw = event?.evt ?? event
+  if (typeof raw?.offsetX === 'number' && typeof raw?.offsetY === 'number') {
+    return { x: raw.offsetX, y: raw.offsetY }
+  }
+  if (typeof raw?.clientX === 'number' && typeof raw?.clientY === 'number') {
+    return { x: raw.clientX, y: raw.clientY }
+  }
+  return null
+}
+
+function normalizeRect(start, current) {
+  return {
+    x: Math.min(start.x, current.x),
+    y: Math.min(start.y, current.y),
+    width: Math.abs(current.x - start.x),
+    height: Math.abs(current.y - start.y),
+  }
+}
+
+function onStageMouseDown(event) {
+  if (toolMode.value !== 'bbox') {
+    return
+  }
+
+  const pointer = getPointer(event)
+  if (!pointer) {
+    return
+  }
+
+  drawStart.value = pointer
+  draftRect.value = {
+    x: pointer.x,
+    y: pointer.y,
+    width: 0,
+    height: 0,
+  }
+}
+
+function onStageMouseMove(event) {
+  if (toolMode.value !== 'bbox' || !drawStart.value) {
+    return
+  }
+
+  const pointer = getPointer(event)
+  if (!pointer) {
+    return
+  }
+
+  draftRect.value = normalizeRect(drawStart.value, pointer)
+}
+
+function onStageMouseUp(event) {
+  if (toolMode.value !== 'bbox' || !drawStart.value) {
+    return
+  }
+
+  const pointer = getPointer(event)
+  if (!pointer) {
+    draftRect.value = null
+    drawStart.value = null
+    return
+  }
+
+  const rect = normalizeRect(drawStart.value, pointer)
+  if (rect.width > 0 && rect.height > 0) {
+    annotations.value.push({
+      id: `ann-${Date.now()}-${annotations.value.length}`,
+      ...rect,
+    })
+  }
+
+  draftRect.value = null
+  drawStart.value = null
+}
+
+async function submitCurrentAnnotations() {
+  saveMessage.value = ''
+  if (!activeTask.value || annotations.value.length === 0) {
+    saveMessage.value = 'No annotations to submit'
+    return
+  }
+
+  isSubmitting.value = true
+  try {
+    const payload = {
+      bucket: selectedBucket.value,
+      source_view: currentView.value,
+      metadata: {
+        tool: 'bbox',
+      },
+      annotations: annotations.value.map((ann) => ({
+        x: ann.x,
+        y: ann.y,
+        width: ann.width,
+        height: ann.height,
+        label: 'BBox',
+      })),
+    }
+    const response = await submitAnnotations(activeTask.value.task_id, payload)
+    saveMessage.value = `Saved ${response.saved_count} annotations`
+    annotations.value = []
+  } catch (err) {
+    saveMessage.value = err instanceof Error ? err.message : 'Failed to submit annotations'
+  } finally {
+    isSubmitting.value = false
+  }
 }
 
 async function loadInitialTask() {
