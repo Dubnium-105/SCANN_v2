@@ -49,6 +49,7 @@
   * `pytest tests/test_fits_render.py tests/test_dataset.py tests/test_health.py -q` ✅ 3 passed
 
 ### Commit 4: 标注数据保存 API
+* **状态:** `done`（2026-03-19）
 * **Test (Red):** 
   * 编写 `tests/test_annotation.py`。
   * 发送一串模拟的标注 JSON 数据到 `POST /api/annotations/{task_id}`。
@@ -58,6 +59,8 @@
   * 将传入数据写入到对应的归档文件夹中。
 * **Refactor:** 
   * 合并数据校验逻辑，使用 Pydantic Model 校验前台传送坐标及属性格式的合法性。
+* **验证结果:**
+  * `pytest tests/test_annotation.py tests/test_fits_render.py tests/test_dataset.py tests/test_health.py -q` ✅ 4 passed
 
 ---
 
