@@ -124,6 +124,7 @@
 ## 阶段三：前端原生 FITS 高阶功能 (阶段二的进化)
 
 ### Commit 9: 原生 FITS 前端解析与数据池
+* **状态:** `done`（2026-03-19）
 * **Test (Red):** 
   * 前端单元测试模拟加载原生 `.fts` 二进制流（不再加载 PNG）。
   * 断言能正确解析出 Headers 字典以及 Float32 像素数据数组。
@@ -132,6 +133,8 @@
   * 请求 FITS 文件并解析其 Data Unit 回传给组件。
 * **Refactor:** 
   * 使用 Web Worker 移出 FITS 文件解压或解析逻辑，防止解析期间导致主线程卡顿（UI假死）。
+* **验证结果:**
+  * `cd frontend && npm run test` ✅ 7 passed
 
 ### Commit 10: 实时直方图拉伸与反色
 * **Test (Red):** 
