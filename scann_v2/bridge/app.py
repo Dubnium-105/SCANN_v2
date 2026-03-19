@@ -160,6 +160,8 @@ class TaskRecord(BaseModel):
     preview_png: str
     js9_embed_url: str
     js9_iframe: str
+    annotation_mode: str = "js9_region_primary"
+    js9_regions_json: Optional[str] = None
 
 
 class JS9RegionRecord(BaseModel):

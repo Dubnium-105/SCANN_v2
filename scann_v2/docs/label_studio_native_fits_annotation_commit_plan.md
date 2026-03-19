@@ -71,14 +71,25 @@
 
 ## C04 - tasks/pull 下发 annotation_mode 与 region 字段骨架
 
-- 状态：planned
+- 状态：done
 - 目标：在任务数据中显式声明 `annotation_mode=js9_region_primary`，预留 `js9_regions_json`。
 - 主要文件：
   - `bridge/app.py`
   - `tests/bridge/test_pull_tasks_region_payload.py`（新增）
 - 验证：
-  - `pytest tests/bridge -q`
+  - `pytest tests/bridge -q` ✅ 85 passed
 - 备注：
+  - 修改 `TaskRecord` 模型，新增 `annotation_mode` 和 `js9_regions_json` 字段
+  - `annotation_mode` 默认值设为 `js9_region_primary`
+  - `js9_regions_json` 预留为 Optional[str]，初始值为 None
+  - 创建 7 个新测试，覆盖：
+    - annotation_mode 字段正确下发
+    - js9_regions_json 字段存在且为 None
+    - 新增字段与现有字段向后兼容
+    - 多个任务都包含 region 字段
+    - 不导入 LS 时任务构建仍包含字段
+    - TaskRecord 默认值和显式设置验证
+  - 完整测试套件通过（85 passed），无回归
 
 ## C05 - Label Studio 配置/模板联动
 
