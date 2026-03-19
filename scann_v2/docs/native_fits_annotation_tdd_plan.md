@@ -137,6 +137,7 @@
   * `cd frontend && npm run test` ✅ 7 passed
 
 ### Commit 10: 实时直方图拉伸与反色
+* **状态:** `done`（2026-03-19）
 * **Test (Red):** 
   * 触发右侧拉伸滑块改变 `min`、`max` 状态。
   * 触发反色 Toggle 开关。
@@ -146,6 +147,8 @@
   * 实现基于 JS 循环的 Float32 到 Uint8ClampedArray 的渲染转换器，重新绘制至画布。
 * **Refactor:** 
   * 若 JS 性能出现瓶颈（如 2048x2048 超大图），切换至 WebGL Fragment Shader 进行显卡渲染优化。
+* **验证结果:**
+  * `cd frontend && npm run test` ✅ 11 passed
 
 ---
 

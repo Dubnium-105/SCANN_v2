@@ -46,6 +46,12 @@
         </v-layer>
       </v-stage>
 
+      <canvas
+        ref="fitsCanvasRef"
+        class="absolute inset-0 w-full h-full pointer-events-none"
+        data-testid="fits-render-canvas"
+      />
+
       <div class="absolute top-2 left-2 flex items-center gap-2 bg-slate-950/70 rounded px-2 py-1">
         <button
           data-testid="tool-move"
@@ -92,6 +98,45 @@
         {{ saveMessage }}
       </p>
 
+      <div class="absolute bottom-2 right-2 bg-slate-950/70 rounded px-2 py-2 w-72 space-y-2">
+        <p class="text-[11px] text-slate-200">Stretch</p>
+        <div class="space-y-1">
+          <label class="text-[10px] text-slate-400">Min: {{ stretchMin.toFixed(2) }}</label>
+          <input
+            data-testid="stretch-min-slider"
+            type="range"
+            class="w-full"
+            :min="stretchRangeMin"
+            :max="stretchRangeMax"
+            step="0.01"
+            :value="stretchMin"
+            @input="onStretchMinInput"
+          >
+        </div>
+        <div class="space-y-1">
+          <label class="text-[10px] text-slate-400">Max: {{ stretchMax.toFixed(2) }}</label>
+          <input
+            data-testid="stretch-max-slider"
+            type="range"
+            class="w-full"
+            :min="stretchRangeMin"
+            :max="stretchRangeMax"
+            step="0.01"
+            :value="stretchMax"
+            @input="onStretchMaxInput"
+          >
+        </div>
+        <label class="text-[11px] text-slate-300 inline-flex items-center gap-2">
+          <input
+            data-testid="invert-toggle"
+            type="checkbox"
+            :checked="invertDisplay"
+            @change="onInvertChange"
+          >
+          Invert
+        </label>
+      </div>
+
       <div
         v-if="isLoading"
         class="absolute inset-0 flex items-center justify-center text-sm text-slate-300 bg-slate-950/65"
@@ -104,6 +149,13 @@
         class="absolute inset-0 flex items-center justify-center text-sm text-rose-300 bg-slate-950/65"
       >
         {{ error }}
+      </div>
+
+      <div
+        v-else-if="fitsError"
+        class="absolute inset-0 flex items-center justify-center text-sm text-rose-300 bg-slate-950/65"
+      >
+        {{ fitsError }}
       </div>
 
       <div
@@ -122,15 +174,23 @@
           :data-visible="String(node.visible)"
         />
       </ul>
+
+      <span
+        class="hidden"
+        data-testid="stretch-debug"
+        :data-rgba="stretchDebug"
+      />
     </div>
   </section>
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { useBlinkControl } from '../composables/useBlinkControl'
+import { useFitsImagePool } from '../composables/useFitsImagePool'
 import { useImageLoader } from '../composables/useImageLoader'
+import { calculatePixelRange, renderStretchToRgba } from '../fits/stretchRenderer'
 import { submitAnnotations } from '../services/annotationApi'
 import { fetchTasks } from '../services/taskApi'
 
@@ -146,6 +206,12 @@ const drawStart = ref(null)
 const selectedBucket = ref('positive')
 const isSubmitting = ref(false)
 const saveMessage = ref('')
+const fitsCanvasRef = ref(null)
+const stretchRangeMin = ref(0)
+const stretchRangeMax = ref(1)
+const stretchMin = ref(0)
+const stretchMax = ref(1)
+const invertDisplay = ref(false)
 
 const stageConfig = computed(() => ({
   width: stageWidth,
@@ -168,6 +234,23 @@ const {
   setError,
   setCurrentView,
 } = useImageLoader()
+
+const {
+  fitsError,
+  fitsNodes,
+  preloadTaskFits,
+} = useFitsImagePool()
+
+const activeFitsNode = computed(
+  () => fitsNodes.value.find((node) => node.view === currentView.value) ?? null,
+)
+
+const stretchedRgba = computed(() => {
+  const pixels = activeFitsNode.value?.pixels
+  return renderStretchToRgba(pixels, stretchMin.value, stretchMax.value, invertDisplay.value)
+})
+
+const stretchDebug = computed(() => Array.from(stretchedRgba.value.slice(0, 16)).join(','))
 
 useBlinkControl({
   currentView,
@@ -194,6 +277,52 @@ function onWheel(event) {
   const direction = deltaY > 0 ? -1 : 1
   const nextScale = stageScale.value * (direction > 0 ? 1.05 : 0.95)
   stageScale.value = Math.max(0.1, Math.min(10, nextScale))
+}
+
+function onStretchMinInput(event) {
+  const value = Number(event?.target?.value)
+  if (!Number.isFinite(value)) {
+    return
+  }
+  stretchMin.value = Math.min(value, stretchMax.value)
+}
+
+function onStretchMaxInput(event) {
+  const value = Number(event?.target?.value)
+  if (!Number.isFinite(value)) {
+    return
+  }
+  stretchMax.value = Math.max(value, stretchMin.value)
+}
+
+function onInvertChange(event) {
+  invertDisplay.value = Boolean(event?.target?.checked)
+}
+
+function redrawFitsCanvas() {
+  const canvas = fitsCanvasRef.value
+  const node = activeFitsNode.value
+  if (!canvas || !node || !node.width || !node.height) {
+    return
+  }
+
+  canvas.width = node.width
+  canvas.height = node.height
+
+  let context = null
+  try {
+    context = canvas.getContext('2d')
+  } catch {
+    context = null
+  }
+  if (!context) {
+    return
+  }
+
+  if (typeof ImageData !== 'undefined') {
+    const imageData = new ImageData(stretchedRgba.value, node.width, node.height)
+    context.putImageData(imageData, 0, 0)
+  }
 }
 
 function setToolMode(mode) {
@@ -326,12 +455,35 @@ async function loadInitialTask() {
     if (!firstTask) {
       return
     }
-    await preloadTaskImages(firstTask)
+    await Promise.all([
+      preloadTaskImages(firstTask),
+      preloadTaskFits(firstTask),
+    ])
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to load initial task'
     setError(message)
   }
 }
+
+watch(activeFitsNode, (node) => {
+  if (!node?.pixels || node.pixels.length === 0) {
+    return
+  }
+
+  const range = calculatePixelRange(node.pixels)
+  stretchRangeMin.value = range.min
+  stretchRangeMax.value = range.max
+  stretchMin.value = range.min
+  stretchMax.value = range.max
+})
+
+watch(
+  [stretchedRgba, activeFitsNode],
+  () => {
+    redrawFitsCanvas()
+  },
+  { immediate: true },
+)
 
 onMounted(async () => {
   await loadInitialTask()
