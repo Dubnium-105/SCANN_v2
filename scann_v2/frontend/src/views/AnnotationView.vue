@@ -6,13 +6,14 @@
         <p class="text-sm text-slate-300">Tools</p>
       </aside>
 
-      <CanvasPanel />
-      <InspectorPanel />
+      <CanvasPanel @task-changed="onTaskChanged" @annotations-saved="onAnnotationsSaved" />
+      <InspectorPanel :task-id="activeTaskId" :refresh-key="historyRefreshKey" />
     </main>
   </div>
 </template>
 
 <script setup>
+import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import CanvasPanel from '../components/CanvasPanel.vue'
@@ -22,6 +23,17 @@ import { logout } from '../services/authApi'
 import { authState } from '../services/authStore'
 
 const router = useRouter()
+const activeTaskId = ref('')
+const historyRefreshKey = ref(0)
+
+function onTaskChanged(taskId) {
+  activeTaskId.value = taskId || ''
+}
+
+function onAnnotationsSaved(taskId) {
+  activeTaskId.value = taskId || activeTaskId.value
+  historyRefreshKey.value += 1
+}
 
 function onLogout() {
   logout()

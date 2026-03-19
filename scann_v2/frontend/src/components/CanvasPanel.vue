@@ -284,6 +284,8 @@ import { calculatePixelRange, renderStretchToRgba } from '../fits/stretchRendere
 import { submitAnnotations } from '../services/annotationApi'
 import { fetchTasks } from '../services/taskApi'
 
+const emit = defineEmits(['task-changed', 'annotations-saved'])
+
 const stageWidth = 1024
 const stageHeight = 768
 const stageX = ref(0)
@@ -614,6 +616,7 @@ async function submitCurrentAnnotations() {
     const response = await submitAnnotations(activeTask.value.task_id, payload)
     saveMessage.value = `Saved ${response.saved_count} annotations`
     annotations.value = []
+    emit('annotations-saved', activeTask.value.task_id)
   } catch (err) {
     saveMessage.value = err instanceof Error ? err.message : 'Failed to submit annotations'
   } finally {
@@ -632,6 +635,7 @@ async function loadInitialTask() {
       preloadTaskImages(firstTask),
       preloadTaskFits(firstTask),
     ])
+    emit('task-changed', firstTask.task_id)
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to load initial task'
     setError(message)

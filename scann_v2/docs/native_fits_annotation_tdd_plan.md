@@ -200,6 +200,7 @@
   * `cd frontend && npm run test` ✅ 15 passed
 
 ### Commit 14: 标注版本控制与历史回溯
+* **状态:** `done`（2026-03-19）
 * **Test (Red):** 
   * 编写 `tests/test_versions.py`。针对同一 `task_id`，模拟不同用户 (User A 和 User B) 或同用户的多次调用标注保存 API。
   * 断言：`GET /api/annotations/{task_id}/history` 能返回包含正确时间线、UserID 的版本列表，且请求特定历史版本 `Revision ID` 能精确调出保存时的标注坐标。
@@ -208,3 +209,6 @@
   * 前端右侧控制台拉取对应图像的合并历史记录，并在 UI 上渲染带有时间戳的层级版本列表（Timeline）。
 * **Refactor:** 
   * 在数据库写入后挂载一个异步触发器 (Background Task)，将最后一次写入的（Top Revision）标注结果自动清洗并静默同步至物理系统 `positive/` 或 `negative/` JSON，剥离算法运行和持久化查询。
+* **验证结果:**
+  * `pytest tests/test_versions.py tests/test_auth.py tests/test_task_locking.py tests/test_annotation.py tests/test_dataset.py tests/test_health.py -q` ✅ 8 passed
+  * `cd frontend && npm run test` ✅ 16 passed

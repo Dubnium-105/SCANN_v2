@@ -8,7 +8,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from .annotation_service import AnnotationSaveRequest, AnnotationSaveResponse, AnnotationService
+from .annotation_service import (
+    AnnotationHistoryResponse,
+    AnnotationRevision,
+    AnnotationSaveRequest,
+    AnnotationSaveResponse,
+    AnnotationService,
+)
 from .auth_service import (
     AuthUser,
     LoginRequest,
@@ -139,13 +145,36 @@ def save_annotations(
     client_id: Optional[str] = Query(None),
     current_user: AuthUser = Depends(get_current_user),
 ) -> AnnotationSaveResponse:
-    _ = current_user
     service = get_annotation_service()
     lock_service = get_task_lock_service()
     try:
-        result = service.save(task_id=task_id, payload=payload)
+        result = service.save(task_id=task_id, payload=payload, submitted_by=current_user.username)
         if client_id:
             lock_service.release_task(task_id=task_id, client_id=client_id)
         return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@api_router.get("/annotations/{task_id}/history", response_model=AnnotationHistoryResponse)
+def get_annotation_history(
+    task_id: str,
+    current_user: AuthUser = Depends(get_current_user),
+) -> AnnotationHistoryResponse:
+    _ = current_user
+    service = get_annotation_service()
+    return service.list_history(task_id)
+
+
+@api_router.get("/annotations/{task_id}/history/{revision_id}", response_model=AnnotationRevision)
+def get_annotation_revision(
+    task_id: str,
+    revision_id: str,
+    current_user: AuthUser = Depends(get_current_user),
+) -> AnnotationRevision:
+    _ = current_user
+    service = get_annotation_service()
+    try:
+        return service.get_revision(task_id=task_id, revision_id=revision_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
