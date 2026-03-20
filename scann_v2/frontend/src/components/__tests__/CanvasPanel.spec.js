@@ -199,9 +199,16 @@ describe('CanvasPanel', () => {
     expect(submitCall.options?.method).toBe('POST')
 
     const payload = JSON.parse(submitCall.options?.body)
-    expect(payload.bucket).toBe('positive')
+    expect(payload.source_view).toBe('new')
     expect(payload.annotations).toHaveLength(1)
-    expect(payload.annotations[0]).toMatchObject({ x: 12, y: 18, width: 30, height: 40 })
+    expect(payload.annotations[0]).toMatchObject({
+      x: 12,
+      y: 18,
+      width: 30,
+      height: 40,
+      label: 'real',
+      detail_type: 'asteroid',
+    })
   })
 
   it('updates rendered rgba with stretch sliders and invert toggle', async () => {

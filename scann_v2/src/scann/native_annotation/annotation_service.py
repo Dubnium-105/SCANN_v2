@@ -19,7 +19,6 @@ class AnnotationBox(BaseModel):
 
 
 class AnnotationSaveRequest(BaseModel):
-    bucket: Literal["positive", "negative"]
     annotations: List[AnnotationBox]
     source_view: Optional[Literal["old", "new", "new_marked"]] = "new"
     metadata: Dict[str, Any] = Field(default_factory=dict)
@@ -27,7 +26,7 @@ class AnnotationSaveRequest(BaseModel):
 
 class AnnotationSaveResponse(BaseModel):
     task_id: str
-    bucket: str
+    format_version: str
     saved_path: str
     saved_count: int
 
@@ -35,7 +34,6 @@ class AnnotationSaveResponse(BaseModel):
 class AnnotationRevision(BaseModel):
     revision_id: str
     task_id: str
-    bucket: Literal["positive", "negative"]
     source_view: Optional[Literal["old", "new", "new_marked"]] = "new"
     submitted_by: str
     saved_at: str
@@ -48,7 +46,7 @@ class AnnotationHistoryItem(BaseModel):
     task_id: str
     submitted_by: str
     saved_at: str
-    bucket: Literal["positive", "negative"]
+    format_version: str = "v2"
     annotation_count: int
 
 
@@ -105,12 +103,66 @@ class AnnotationService:
                 task_id=rev.task_id,
                 submitted_by=rev.submitted_by,
                 saved_at=rev.saved_at,
-                bucket=rev.bucket,
                 annotation_count=len(rev.annotations),
             )
             for rev in reversed(revisions)
         ]
         return AnnotationHistoryResponse(task_id=task_id, revisions=items)
+
+    def _dataset_v2_path(self) -> Path:
+        return self.dataset_root / "annotations.json"
+
+    def _upsert_dataset_v2(
+        self,
+        task_id: str,
+        source_view: str,
+        annotations: list[AnnotationBox],
+        saved_at: str,
+    ) -> str:
+        dataset_path = self._dataset_v2_path()
+        default_doc: dict[str, Any] = {
+            "version": "2.2",
+            "images": [],
+            "updated_at": saved_at,
+        }
+
+        if dataset_path.exists():
+            try:
+                doc = json.loads(dataset_path.read_text(encoding="utf-8"))
+                if not isinstance(doc, dict):
+                    doc = default_doc
+            except Exception:
+                doc = default_doc
+        else:
+            doc = default_doc
+
+        images = doc.get("images")
+        if not isinstance(images, list):
+            images = []
+
+        new_image_entry = {
+            "id": task_id,
+            "file": f"{source_view}/{task_id}.fts",
+            "source_view": source_view,
+            "updated_at": saved_at,
+            "annotations": [ann.model_dump(exclude_none=True) for ann in annotations],
+        }
+
+        updated = False
+        for index, image_item in enumerate(images):
+            if isinstance(image_item, dict) and str(image_item.get("id") or "") == task_id:
+                images[index] = new_image_entry
+                updated = True
+                break
+
+        if not updated:
+            images.append(new_image_entry)
+
+        doc["images"] = images
+        doc["version"] = "2.2"
+        doc["updated_at"] = saved_at
+        dataset_path.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+        return dataset_path.relative_to(self.dataset_root).as_posix()
 
     def get_revision(self, task_id: str, revision_id: str) -> AnnotationRevision:
         task_id = self._validate_task_id(task_id)
@@ -126,33 +178,29 @@ class AnnotationService:
         submitted_by: str = "system",
     ) -> AnnotationSaveResponse:
         task_id = self._validate_task_id(task_id)
-        output_dir = self.dataset_root / payload.bucket
-        output_dir.mkdir(parents=True, exist_ok=True)
+        saved_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
         revision = AnnotationRevision(
             revision_id=uuid.uuid4().hex,
             task_id=task_id,
-            bucket=payload.bucket,
             source_view=payload.source_view,
             submitted_by=submitted_by,
-            saved_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            saved_at=saved_at,
             metadata=payload.metadata,
             annotations=payload.annotations,
         )
         self._append_revision(revision)
 
-        output_file = output_dir / f"{task_id}.json"
-        document = {
-            **revision.model_dump(),
-        }
-        output_file.write_text(
-            json.dumps(document, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        saved_path = self._upsert_dataset_v2(
+            task_id=task_id,
+            source_view=payload.source_view or "new",
+            annotations=payload.annotations,
+            saved_at=saved_at,
         )
 
         return AnnotationSaveResponse(
             task_id=task_id,
-            bucket=payload.bucket,
-            saved_path=output_file.relative_to(self.dataset_root).as_posix(),
+            format_version="v2",
+            saved_path=saved_path,
             saved_count=len(payload.annotations),
         )

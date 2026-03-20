@@ -1,8 +1,8 @@
 <template>
   <div class="h-full grid grid-rows-[56px_1fr]">
     <HeaderBar :username="authState.username" @logout="onLogout" />
-    <main class="grid grid-cols-1 md:grid-cols-[1fr_250px] lg:grid-cols-[200px_1fr_300px] gap-3 p-3 min-h-0">
-      <aside class="hidden lg:block rounded-lg border border-slate-800 bg-slate-900 p-3 overflow-y-auto">
+    <main class="flex flex-col lg:flex-row gap-3 p-3 min-h-0">
+      <aside class="hidden lg:block rounded-lg border border-slate-800 bg-slate-900 p-3 overflow-y-auto lg:w-[220px] lg:min-w-[180px] lg:max-w-[420px] lg:resize-x">
         <p class="text-sm font-semibold text-slate-200 mb-2">快捷键 (Hotkeys)</p>
         <div class="text-xs text-slate-400 space-y-3">
           <div>
@@ -24,10 +24,15 @@
             </ul>
           </div>
         </div>
+        <div class="mt-4 pt-3 border-t border-slate-800" id="left-sidebar-controls-mount" />
       </aside>
 
-      <CanvasPanel @task-changed="onTaskChanged" @annotations-saved="onAnnotationsSaved" />
-      <InspectorPanel :task-id="activeTaskId" :refresh-key="historyRefreshKey" />
+      <div class="flex-1 min-w-0 min-h-0">
+        <CanvasPanel @task-changed="onTaskChanged" @annotations-saved="onAnnotationsSaved" />
+      </div>
+      <div class="lg:w-[320px] lg:min-w-[240px] lg:max-w-[560px] lg:resize-x overflow-auto">
+        <InspectorPanel :task-id="activeTaskId" :refresh-key="historyRefreshKey" />
+      </div>
     </main>
   </div>
 </template>

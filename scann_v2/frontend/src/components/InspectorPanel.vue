@@ -2,6 +2,8 @@
   <aside class="rounded-lg border border-slate-800 bg-slate-900 p-3 space-y-3">
     <p class="text-sm text-slate-300">Inspector</p>
 
+    <div id="inspector-annotations-mount" class="rounded border border-slate-800 bg-slate-950/30 p-2" />
+
     <div class="rounded border border-slate-800 bg-slate-950/30 p-2">
       <p class="text-xs text-slate-300">Version History</p>
       <p v-if="!taskId" class="text-xs text-slate-500 mt-2" data-testid="history-empty-task">No task selected</p>
@@ -15,7 +17,7 @@
         >
           <p data-testid="history-item-user">{{ revision.submitted_by }}</p>
           <p class="text-slate-500">{{ revision.saved_at }}</p>
-          <p class="text-slate-400">{{ revision.bucket }} · {{ revision.annotation_count }} items</p>
+          <p class="text-slate-400">{{ revision.format_version || 'v2' }} · {{ revision.annotation_count }} items</p>
         </li>
       </ul>
     </div>
