@@ -1,45 +1,106 @@
 <template>
   <div class="h-full grid grid-rows-[56px_1fr]">
     <HeaderBar :username="authState.username" @logout="onLogout" />
-    <main class="flex flex-col lg:flex-row gap-3 p-3 min-h-0">
-      <aside class="hidden lg:block rounded-lg border border-slate-800 bg-slate-900 p-3 overflow-y-auto lg:w-[220px] lg:min-w-[180px] lg:max-w-[420px] lg:resize-x">
-        <p class="text-sm font-semibold text-slate-200 mb-2">快捷键 (Hotkeys)</p>
-        <div class="text-xs text-slate-400 space-y-3">
-          <div>
-            <p class="text-emerald-400 font-medium mb-1">真实目标 (Real)</p>
-            <ul class="space-y-1">
-              <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">1</kbd> - 小行星</li>
-              <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">2</kbd> - 超新星</li>
-              <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">3</kbd> - 变星</li>
-            </ul>
-          </div>
-          <div>
-            <p class="text-rose-400 font-medium mb-1">伪目标 (Bogus)</p>
-            <ul class="space-y-1">
-              <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">4</kbd> - 卫星轨迹</li>
-              <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">5</kbd> - 噪声</li>
-              <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">6</kbd> - 衍射芒</li>
-              <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">7</kbd> - CMOS结露</li>
-              <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">8</kbd> - 对应体</li>
-            </ul>
-          </div>
+    <main
+      ref="mainRef"
+      class="flex flex-col lg:flex-row gap-3 p-3 min-h-0"
+      :class="isResizing ? 'select-none' : ''"
+    >
+      <aside
+        class="hidden lg:flex rounded-lg border border-slate-800 bg-slate-900 p-3 overflow-y-auto flex-col min-h-0"
+        :style="leftPaneStyle"
+      >
+        <div class="flex items-center justify-between mb-2">
+          <p v-if="!leftCollapsed" class="text-sm font-semibold text-slate-200">快捷键 (Hotkeys)</p>
+          <button
+            class="text-xs px-2 py-1 rounded border border-slate-700 text-slate-300"
+            :title="leftCollapsed ? '展开左侧面板' : '折叠左侧面板'"
+            @click="toggleLeftCollapsed"
+          >
+            {{ leftCollapsed ? '»' : '«' }}
+          </button>
         </div>
-        <div id="hotkeys-extra" class="mt-3" />
+
+        <div v-show="!leftCollapsed" class="min-h-0 flex flex-col">
+          <div class="mb-2 flex justify-end">
+            <button
+              class="text-[11px] px-2 py-1 rounded border border-slate-700 text-slate-300"
+              :title="hotkeysCollapsed ? '展开快捷键' : '折叠快捷键'"
+              @click="hotkeysCollapsed = !hotkeysCollapsed"
+            >
+              {{ hotkeysCollapsed ? '展开快捷键' : '折叠快捷键' }}
+            </button>
+          </div>
+
+          <div
+            class="text-xs text-slate-400 overflow-hidden transition-all duration-200"
+            :style="hotkeysBodyStyle"
+          >
+            <div class="flex gap-3 min-w-0">
+              <div class="flex-1 min-w-0">
+              <p class="text-emerald-400 font-medium mb-1">真实目标 (Real)</p>
+              <ul class="space-y-1">
+                <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">1</kbd> - 小行星</li>
+                <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">2</kbd> - 超新星</li>
+                <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">3</kbd> - 变星</li>
+              </ul>
+              </div>
+              <div class="flex-1 min-w-0">
+              <p class="text-rose-400 font-medium mb-1">伪目标 (Bogus)</p>
+              <ul class="space-y-1">
+                <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">4</kbd> - 卫星轨迹</li>
+                <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">5</kbd> - 噪声</li>
+                <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">6</kbd> - 衍射芒</li>
+                <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">7</kbd> - CMOS结露</li>
+                <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">8</kbd> - 对应体</li>
+              </ul>
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <div id="hotkeys-extra" class="mt-3" :class="leftCollapsed ? 'hidden' : ''" />
       </aside>
 
-      <div class="flex-1 min-w-0 min-h-0">
+      <div
+        class="hidden lg:block w-1 rounded bg-slate-800/70 hover:bg-sky-700/80 cursor-col-resize"
+        title="拖拽调整左侧宽度"
+        @mousedown.prevent="startResize('left', $event)"
+      />
+
+      <div class="flex-1 min-w-0 min-h-0 flex">
         <CanvasPanel @task-changed="onTaskChanged" @annotations-saved="onAnnotationsSaved" />
       </div>
-      <div class="lg:w-[320px] lg:min-w-[240px] lg:max-w-[560px] lg:resize-x overflow-auto">
-        <InspectorPanel :task-id="activeTaskId" :refresh-key="historyRefreshKey" />
-        <div id="inspector-extra" class="mt-3" />
+
+      <div
+        class="hidden lg:block w-1 rounded bg-slate-800/70 hover:bg-sky-700/80 cursor-col-resize"
+        title="拖拽调整右侧宽度"
+        @mousedown.prevent="startResize('right', $event)"
+      />
+
+      <div class="overflow-auto min-h-0" :style="rightPaneStyle">
+        <aside class="rounded-lg border border-slate-800 bg-slate-900 p-3 space-y-3 min-h-0">
+          <div class="flex items-center justify-end">
+            <button
+              class="text-xs px-2 py-1 rounded border border-slate-700 text-slate-300"
+              :title="rightCollapsed ? '展开右侧面板' : '折叠右侧面板'"
+              @click="toggleRightCollapsed"
+            >
+              {{ rightCollapsed ? '«' : '»' }}
+            </button>
+          </div>
+          <div v-show="!rightCollapsed">
+            <InspectorPanel :task-id="activeTaskId" :refresh-key="historyRefreshKey" />
+          </div>
+          <div id="inspector-extra" class="mt-3" :class="rightCollapsed ? 'hidden' : ''" />
+        </aside>
       </div>
     </main>
   </div>
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import CanvasPanel from '../components/CanvasPanel.vue'
@@ -51,6 +112,80 @@ import { authState } from '../services/authStore'
 const router = useRouter()
 const activeTaskId = ref('')
 const historyRefreshKey = ref(0)
+const mainRef = ref(null)
+
+const LEFT_MIN_WIDTH = 180
+const LEFT_MAX_WIDTH = 560
+const LEFT_COLLAPSED_WIDTH = 52
+const RIGHT_MIN_WIDTH = 240
+const RIGHT_MAX_WIDTH = 560
+const RIGHT_COLLAPSED_WIDTH = 52
+
+const leftPaneWidth = ref(220)
+const rightPaneWidth = ref(320)
+const leftCollapsed = ref(false)
+const rightCollapsed = ref(false)
+const hotkeysCollapsed = ref(false)
+const resizeMode = ref('')
+const isResizing = computed(() => resizeMode.value === 'left' || resizeMode.value === 'right')
+
+const leftPaneStyle = computed(() => ({
+  width: `${leftCollapsed.value ? LEFT_COLLAPSED_WIDTH : leftPaneWidth.value}px`,
+  minWidth: `${leftCollapsed.value ? LEFT_COLLAPSED_WIDTH : LEFT_MIN_WIDTH}px`,
+  maxWidth: `${leftCollapsed.value ? LEFT_COLLAPSED_WIDTH : LEFT_MAX_WIDTH}px`,
+}))
+
+const rightPaneStyle = computed(() => ({
+  width: `${rightCollapsed.value ? RIGHT_COLLAPSED_WIDTH : rightPaneWidth.value}px`,
+  minWidth: `${rightCollapsed.value ? RIGHT_COLLAPSED_WIDTH : RIGHT_MIN_WIDTH}px`,
+  maxWidth: `${rightCollapsed.value ? RIGHT_COLLAPSED_WIDTH : RIGHT_MAX_WIDTH}px`,
+}))
+
+const hotkeysBodyStyle = computed(() => ({
+  maxHeight: hotkeysCollapsed.value ? '0px' : '2000px',
+  opacity: hotkeysCollapsed.value ? '0' : '1',
+}))
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value))
+}
+
+function startResize(mode) {
+  resizeMode.value = mode
+  window.addEventListener('mousemove', onResizeMove)
+  window.addEventListener('mouseup', stopResize)
+}
+
+function onResizeMove(event) {
+  const root = mainRef.value
+  if (!root) {
+    return
+  }
+  const rect = root.getBoundingClientRect()
+  if (resizeMode.value === 'left' && !leftCollapsed.value) {
+    const next = clamp(event.clientX - rect.left, LEFT_MIN_WIDTH, LEFT_MAX_WIDTH)
+    leftPaneWidth.value = Math.round(next)
+  }
+
+  if (resizeMode.value === 'right' && !rightCollapsed.value) {
+    const next = clamp(rect.right - event.clientX, RIGHT_MIN_WIDTH, RIGHT_MAX_WIDTH)
+    rightPaneWidth.value = Math.round(next)
+  }
+}
+
+function stopResize() {
+  resizeMode.value = ''
+  window.removeEventListener('mousemove', onResizeMove)
+  window.removeEventListener('mouseup', stopResize)
+}
+
+function toggleLeftCollapsed() {
+  leftCollapsed.value = !leftCollapsed.value
+}
+
+function toggleRightCollapsed() {
+  rightCollapsed.value = !rightCollapsed.value
+}
 
 function onTaskChanged(taskId) {
   activeTaskId.value = taskId || ''
@@ -65,4 +200,8 @@ function onLogout() {
   logout()
   router.push({ name: 'login' })
 }
+
+onBeforeUnmount(() => {
+  stopResize()
+})
 </script>

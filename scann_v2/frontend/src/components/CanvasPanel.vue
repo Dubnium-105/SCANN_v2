@@ -1,8 +1,8 @@
 <template>
-  <section class="rounded-lg border border-slate-800 bg-slate-900 p-3 min-h-0">
+  <section class="rounded-lg border border-slate-800 bg-slate-900 p-3 h-full w-full min-h-0">
     <div class="h-full flex flex-col xl:flex-row gap-3 min-h-0">
-      <Teleport to="#hotkeys-extra">
-        <aside class="rounded border border-slate-700 bg-slate-950/70 p-3 space-y-3 overflow-y-auto xl:w-[320px] xl:min-w-[260px] xl:max-w-[560px] xl:resize-x">
+      <Teleport v-if="hotkeysTeleportTarget" :to="hotkeysTeleportTarget">
+        <aside class="w-full rounded border border-slate-700 bg-slate-950/70 p-3 space-y-3">
           <div class="space-y-3">
             <div class="space-y-2">
               <p class="text-xs text-slate-200">任务切换</p>
@@ -144,6 +144,23 @@
                 Invert
               </label>
             </div>
+
+            <div class="space-y-2">
+              <p class="text-[11px] text-slate-200">BBox 线宽</p>
+              <div class="space-y-1">
+                <label class="text-[10px] text-slate-400">线宽: {{ bboxStrokeWidth.toFixed(1) }}</label>
+                <input
+                  data-testid="bbox-stroke-width-slider"
+                  type="range"
+                  class="w-full"
+                  min="1"
+                  max="8"
+                  step="0.5"
+                  :value="bboxStrokeWidth"
+                  @input="onBboxStrokeWidthInput"
+                >
+              </div>
+            </div>
           </div>
         </aside>
       </Teleport>
@@ -151,13 +168,17 @@
       <div
         ref="canvasHostRef"
         class="rounded border border-slate-700 overflow-hidden relative min-h-[480px]"
-        :class="['flex-1 min-w-0', toolMode === 'move' ? 'cursor-grab' : 'cursor-crosshair']"
+        :class="[
+          'flex-1 min-w-0',
+          middlePanActive ? 'cursor-grabbing' : (toolMode === 'move' ? 'cursor-grab' : 'cursor-crosshair'),
+        ]"
         data-testid="canvas-host"
         @wheel.prevent="onContainerWheel"
       >
         <canvas
           ref="fitsCanvasRef"
-          class="absolute inset-0 w-full h-full pointer-events-none z-0"
+          class="absolute inset-0 pointer-events-none z-0"
+          :style="fitsCanvasStyle"
           data-testid="fits-render-canvas"
         />
 
@@ -165,6 +186,7 @@
           ref="stageRef"
           :config="stageConfig"
           class="absolute inset-0 z-10"
+          @dragmove="onDragMove"
           @dragend="onDragEnd"
           @wheel="onWheel"
           @mousedown="onStageMouseDown"
@@ -181,7 +203,7 @@
                 width: ann.width,
                 height: ann.height,
                 stroke: '#22c55e',
-                strokeWidth: 2,
+                strokeWidth: bboxStrokeWidth,
               }"
             />
             <v-circle
@@ -224,7 +246,7 @@
                 width: draftRect.width,
                 height: draftRect.height,
                 stroke: '#38bdf8',
-                strokeWidth: 2,
+                strokeWidth: bboxStrokeWidth,
                 dash: [6, 4],
               }"
             />
@@ -260,8 +282,8 @@
         </div>
       </div>
 
-      <Teleport to="#inspector-extra">
-        <aside class="rounded border border-slate-700 bg-slate-950/70 p-3 space-y-2 overflow-y-auto xl:w-[320px] xl:min-w-[260px] xl:max-w-[560px] xl:resize-x">
+      <Teleport v-if="inspectorTeleportTarget" :to="inspectorTeleportTarget">
+        <aside class="w-full rounded border border-slate-700 bg-slate-950/70 p-3 space-y-2 overflow-y-auto">
           <div class="space-y-2">
             <button
               data-testid="submit-annotations"
@@ -344,7 +366,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { useBlinkControl } from '../composables/useBlinkControl'
 import { useFitsImagePool } from '../composables/useFitsImagePool'
@@ -361,6 +383,7 @@ const stageX = ref(0)
 const stageY = ref(0)
 const stageScale = ref(1)
 const toolMode = ref('move')
+const middlePanActive = ref(false)
 const annotations = ref([])
 const draftRect = ref(null)
 const drawStart = ref(null)
@@ -374,11 +397,14 @@ const selectedLabel = ref('Unlabeled')
 const fitsCanvasRef = ref(null)
 const canvasHostRef = ref(null)
 const stageRef = ref(null)
+const hotkeysTeleportTarget = ref(null)
+const inspectorTeleportTarget = ref(null)
 const stretchRangeMin = ref(0)
 const stretchRangeMax = ref(1)
 const stretchMin = ref(0)
 const stretchMax = ref(1)
 const invertDisplay = ref(false)
+const bboxStrokeWidth = ref(2)
 let hostResizeObserver = null
 
 const taskProgressText = computed(() => {
@@ -396,11 +422,18 @@ const hasNextTask = computed(() => (
 const stageConfig = computed(() => ({
   width: stageWidth.value,
   height: stageHeight.value,
-  draggable: toolMode.value === 'move',
+  draggable: toolMode.value === 'move' && !middlePanActive.value,
   x: stageX.value,
   y: stageY.value,
   scaleX: stageScale.value,
   scaleY: stageScale.value,
+}))
+
+const fitsCanvasStyle = computed(() => ({
+  width: `${stageWidth.value}px`,
+  height: `${stageHeight.value}px`,
+  transform: `translate(${stageX.value}px, ${stageY.value}px) scale(${stageScale.value})`,
+  transformOrigin: 'top left',
 }))
 
 const {
@@ -447,16 +480,49 @@ function onDragEnd(event) {
   stageY.value = position.y
 }
 
-function onWheel(event) {
-  const deltaY = event?.evt?.deltaY
-  if (typeof deltaY !== 'number') {
+function onDragMove(event) {
+  const position = event?.target?.position?.()
+  if (!position) {
     return
   }
 
-  event.evt.preventDefault()
+  stageX.value = position.x
+  stageY.value = position.y
+}
+
+function zoomAtPointer(deltaY, pointerX, pointerY) {
+  if (typeof deltaY !== 'number' || typeof pointerX !== 'number' || typeof pointerY !== 'number') {
+    return
+  }
+
+  const oldScale = stageScale.value
   const direction = deltaY > 0 ? -1 : 1
-  const nextScale = stageScale.value * (direction > 0 ? 1.05 : 0.95)
-  stageScale.value = Math.max(0.1, Math.min(10, nextScale))
+  const nextScaleRaw = oldScale * (direction > 0 ? 1.05 : 0.95)
+  const nextScale = Math.max(0.1, Math.min(10, nextScaleRaw))
+  if (nextScale === oldScale) {
+    return
+  }
+
+  const worldX = (pointerX - stageX.value) / oldScale
+  const worldY = (pointerY - stageY.value) / oldScale
+
+  stageScale.value = nextScale
+  stageX.value = pointerX - worldX * nextScale
+  stageY.value = pointerY - worldY * nextScale
+}
+
+function onWheel(event) {
+  const rawEvent = event?.evt
+  const deltaY = rawEvent?.deltaY
+  const stage = event?.target?.getStage?.()
+  const pointer = stage?.getPointerPosition?.()
+  if (typeof deltaY !== 'number' || !pointer) {
+    return
+  }
+
+  rawEvent.preventDefault?.()
+  rawEvent.stopPropagation?.()
+  zoomAtPointer(deltaY, pointer.x, pointer.y)
 }
 
 function switchToView(view) {
@@ -515,13 +581,15 @@ async function goToNextTask() {
 
 function onContainerWheel(event) {
   const deltaY = event?.deltaY
-  if (typeof deltaY !== 'number') {
+  const host = canvasHostRef.value
+  if (typeof deltaY !== 'number' || !host) {
     return
   }
 
-  const direction = deltaY > 0 ? -1 : 1
-  const nextScale = stageScale.value * (direction > 0 ? 1.05 : 0.95)
-  stageScale.value = Math.max(0.1, Math.min(10, nextScale))
+  const rect = host.getBoundingClientRect()
+  const pointerX = event.clientX - rect.left
+  const pointerY = event.clientY - rect.top
+  zoomAtPointer(deltaY, pointerX, pointerY)
 }
 
 function onStretchMinInput(event) {
@@ -542,6 +610,14 @@ function onStretchMaxInput(event) {
 
 function onInvertChange(event) {
   invertDisplay.value = Boolean(event?.target?.checked)
+}
+
+function onBboxStrokeWidthInput(event) {
+  const value = Number(event?.target?.value)
+  if (!Number.isFinite(value)) {
+    return
+  }
+  bboxStrokeWidth.value = Math.max(1, Math.min(8, value))
 }
 
 function redrawFitsCanvas() {
@@ -575,6 +651,14 @@ function syncStageSizeToHost() {
   if (!host) {
     return
   }
+
+  const node = activeFitsNode.value
+  if (node?.width && node?.height) {
+    stageWidth.value = Math.max(1, Math.floor(node.width))
+    stageHeight.value = Math.max(1, Math.floor(node.height))
+    return
+  }
+
   const nextWidth = Math.max(320, Math.floor(host.clientWidth))
   const nextHeight = Math.max(240, Math.floor(host.clientHeight))
   stageWidth.value = nextWidth
@@ -733,7 +817,53 @@ function normalizeRect(start, current) {
   }
 }
 
+let middlePanLast = null
+
+function onMiddlePanMove(event) {
+  if (!middlePanActive.value || !middlePanLast) {
+    return
+  }
+
+  const dx = event.clientX - middlePanLast.x
+  const dy = event.clientY - middlePanLast.y
+  stageX.value += dx
+  stageY.value += dy
+  middlePanLast = { x: event.clientX, y: event.clientY }
+}
+
+function stopMiddlePan() {
+  if (!middlePanActive.value) {
+    return
+  }
+  middlePanActive.value = false
+  middlePanLast = null
+  window.removeEventListener('mousemove', onMiddlePanMove)
+  window.removeEventListener('mouseup', stopMiddlePan)
+}
+
+function startMiddlePan(rawEvent) {
+  if (typeof rawEvent?.clientX !== 'number' || typeof rawEvent?.clientY !== 'number') {
+    return
+  }
+
+  middlePanActive.value = true
+  middlePanLast = { x: rawEvent.clientX, y: rawEvent.clientY }
+  window.addEventListener('mousemove', onMiddlePanMove)
+  window.addEventListener('mouseup', stopMiddlePan)
+}
+
 function onStageMouseDown(event) {
+  const raw = event?.evt ?? event
+  if (raw?.button === 1) {
+    raw.preventDefault?.()
+    startMiddlePan(raw)
+    return
+  }
+
+  if (middlePanActive.value) {
+    return
+  }
+
   if (toolMode.value !== 'bbox') {
     return
   }
@@ -753,6 +883,10 @@ function onStageMouseDown(event) {
 }
 
 function onStageMouseMove(event) {
+  if (middlePanActive.value) {
+    return
+  }
+
   if (toolMode.value !== 'bbox' || !drawStart.value) {
     return
   }
@@ -766,6 +900,12 @@ function onStageMouseMove(event) {
 }
 
 function onStageMouseUp(event) {
+  const raw = event?.evt ?? event
+  if (raw?.button === 1 || middlePanActive.value) {
+    stopMiddlePan()
+    return
+  }
+
   const pointer = getPointer(event)
   if (!pointer) {
     if (toolMode.value === 'bbox') {
@@ -883,6 +1023,7 @@ watch(activeFitsNode, (node) => {
   stretchRangeMax.value = range.max
   stretchMin.value = range.min
   stretchMax.value = range.max
+  syncStageSizeToHost()
 })
 
 watch(
@@ -929,7 +1070,17 @@ function onKeyDown(event) {
   }
 }
 
+function resolveTeleportTargets() {
+  if (typeof document === 'undefined') {
+    return
+  }
+  hotkeysTeleportTarget.value = document.getElementById('hotkeys-extra')
+  inspectorTeleportTarget.value = document.getElementById('inspector-extra')
+}
+
 onMounted(async () => {
+  await nextTick()
+  resolveTeleportTargets()
   syncStageSizeToHost()
   if (typeof ResizeObserver !== 'undefined') {
     hostResizeObserver = new ResizeObserver(() => {
@@ -944,6 +1095,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  stopMiddlePan()
   if (hostResizeObserver) {
     hostResizeObserver.disconnect()
     hostResizeObserver = null
