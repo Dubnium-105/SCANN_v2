@@ -24,6 +24,7 @@
             </ul>
           </div>
         </div>
+        <div id="hotkeys-extra" class="mt-3" />
       </aside>
 
       <div class="flex-1 min-w-0 min-h-0">
@@ -31,6 +32,7 @@
       </div>
       <div class="lg:w-[320px] lg:min-w-[240px] lg:max-w-[560px] lg:resize-x overflow-auto">
         <InspectorPanel :task-id="activeTaskId" :refresh-key="historyRefreshKey" />
+        <div id="inspector-extra" class="mt-3" />
       </div>
     </main>
   </div>

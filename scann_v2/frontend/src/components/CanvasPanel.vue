@@ -1,150 +1,152 @@
 <template>
   <section class="rounded-lg border border-slate-800 bg-slate-900 p-3 min-h-0">
     <div class="h-full flex flex-col xl:flex-row gap-3 min-h-0">
-      <aside class="rounded border border-slate-700 bg-slate-950/70 p-3 space-y-3 overflow-y-auto xl:w-[320px] xl:min-w-[260px] xl:max-w-[560px] xl:resize-x">
-        <div class="space-y-3">
-          <div class="space-y-2">
-            <p class="text-xs text-slate-200">任务切换</p>
-            <p class="text-[11px] text-slate-400">{{ activeTask?.task_id || '暂无任务' }}</p>
-            <p class="text-[10px] text-slate-500">进度 {{ taskProgressText }}</p>
-            <div class="grid grid-cols-2 gap-2">
-              <button
-                data-testid="task-prev"
-                class="text-xs px-2 py-1 rounded border border-slate-700 text-slate-300 disabled:opacity-50"
-                :disabled="!hasPrevTask || isLoading || isSubmitting"
-                @click="goToPreviousTask"
-              >
-                上一任务
-              </button>
-              <button
-                data-testid="task-next"
-                class="text-xs px-2 py-1 rounded border border-slate-700 text-slate-300 disabled:opacity-50"
-                :disabled="!hasNextTask || isLoading || isSubmitting"
-                @click="goToNextTask"
-              >
-                下一任务
-              </button>
+      <Teleport to="#hotkeys-extra">
+        <aside class="rounded border border-slate-700 bg-slate-950/70 p-3 space-y-3 overflow-y-auto xl:w-[320px] xl:min-w-[260px] xl:max-w-[560px] xl:resize-x">
+          <div class="space-y-3">
+            <div class="space-y-2">
+              <p class="text-xs text-slate-200">任务切换</p>
+              <p class="text-[11px] text-slate-400">{{ activeTask?.task_id || '暂无任务' }}</p>
+              <p class="text-[10px] text-slate-500">进度 {{ taskProgressText }}</p>
+              <div class="grid grid-cols-2 gap-2">
+                <button
+                  data-testid="task-prev"
+                  class="text-xs px-2 py-1 rounded border border-slate-700 text-slate-300 disabled:opacity-50"
+                  :disabled="!hasPrevTask || isLoading || isSubmitting"
+                  @click="goToPreviousTask"
+                >
+                  上一任务
+                </button>
+                <button
+                  data-testid="task-next"
+                  class="text-xs px-2 py-1 rounded border border-slate-700 text-slate-300 disabled:opacity-50"
+                  :disabled="!hasNextTask || isLoading || isSubmitting"
+                  @click="goToNextTask"
+                >
+                  下一任务
+                </button>
+              </div>
+              <p class="text-[10px] text-slate-500">快捷键：Q / E 切换任务</p>
             </div>
-            <p class="text-[10px] text-slate-500">快捷键：Q / E 切换任务</p>
-          </div>
 
-          <div class="space-y-2">
-            <p class="text-xs text-slate-200">任务视图切换</p>
-            <div class="grid grid-cols-3 gap-2">
-              <button
-                data-testid="switch-view-new"
-                class="text-xs px-2 py-1 rounded border"
-                :class="currentView === 'new' ? 'border-sky-400 text-sky-300' : 'border-slate-700 text-slate-300'"
-                @click="switchToView('new')"
-              >
-                新图
-              </button>
-              <button
-                data-testid="switch-view-new-marked"
-                class="text-xs px-2 py-1 rounded border"
-                :class="currentView === 'new_marked' ? 'border-sky-400 text-sky-300' : 'border-slate-700 text-slate-300'"
-                @click="switchToView('new_marked')"
-              >
-                新图标记
-              </button>
-              <button
-                data-testid="switch-view-old"
-                class="text-xs px-2 py-1 rounded border"
-                :class="currentView === 'old' ? 'border-sky-400 text-sky-300' : 'border-slate-700 text-slate-300'"
-                @click="switchToView('old')"
-              >
-                旧图
-              </button>
+            <div class="space-y-2">
+              <p class="text-xs text-slate-200">任务视图切换</p>
+              <div class="grid grid-cols-3 gap-2">
+                <button
+                  data-testid="switch-view-new"
+                  class="text-xs px-2 py-1 rounded border"
+                  :class="currentView === 'new' ? 'border-sky-400 text-sky-300' : 'border-slate-700 text-slate-300'"
+                  @click="switchToView('new')"
+                >
+                  新图
+                </button>
+                <button
+                  data-testid="switch-view-new-marked"
+                  class="text-xs px-2 py-1 rounded border"
+                  :class="currentView === 'new_marked' ? 'border-sky-400 text-sky-300' : 'border-slate-700 text-slate-300'"
+                  @click="switchToView('new_marked')"
+                >
+                  新图标记
+                </button>
+                <button
+                  data-testid="switch-view-old"
+                  class="text-xs px-2 py-1 rounded border"
+                  :class="currentView === 'old' ? 'border-sky-400 text-sky-300' : 'border-slate-700 text-slate-300'"
+                  @click="switchToView('old')"
+                >
+                  旧图
+                </button>
+              </div>
+              <p class="text-[10px] text-slate-400">快捷键：Tab / Space 循环切换</p>
             </div>
-            <p class="text-[10px] text-slate-400">快捷键：Tab / Space 循环切换</p>
-          </div>
 
-          <div class="space-y-2">
-            <p class="text-xs text-slate-200">Tools</p>
-            <div class="grid grid-cols-2 gap-2">
+            <div class="space-y-2">
+              <p class="text-xs text-slate-200">Tools</p>
+              <div class="grid grid-cols-2 gap-2">
+                <button
+                  data-testid="tool-move"
+                  class="text-xs px-2 py-1 rounded border"
+                  :class="toolMode === 'move' ? 'border-sky-400 text-sky-300' : 'border-slate-700 text-slate-300'"
+                  @click="setToolMode('move')"
+                >
+                  Move
+                </button>
+                <button
+                  data-testid="tool-bbox"
+                  class="text-xs px-2 py-1 rounded border"
+                  :class="toolMode === 'bbox' ? 'border-emerald-400 text-emerald-300' : 'border-slate-700 text-slate-300'"
+                  @click="setToolMode('bbox')"
+                >
+                  BBox
+                </button>
+                <button
+                  data-testid="tool-point"
+                  class="text-xs px-2 py-1 rounded border"
+                  :class="toolMode === 'point' ? 'border-amber-400 text-amber-300' : 'border-slate-700 text-slate-300'"
+                  @click="setToolMode('point')"
+                >
+                  Point
+                </button>
+                <button
+                  data-testid="tool-polygon"
+                  class="text-xs px-2 py-1 rounded border"
+                  :class="toolMode === 'polygon' ? 'border-violet-400 text-violet-300' : 'border-slate-700 text-slate-300'"
+                  @click="setToolMode('polygon')"
+                >
+                  Polygon
+                </button>
+              </div>
               <button
-                data-testid="tool-move"
-                class="text-xs px-2 py-1 rounded border"
-                :class="toolMode === 'move' ? 'border-sky-400 text-sky-300' : 'border-slate-700 text-slate-300'"
-                @click="setToolMode('move')"
+                v-if="toolMode === 'polygon'"
+                data-testid="finish-polygon"
+                class="w-full text-xs px-2 py-1 rounded border border-violet-700 text-violet-200"
+                @click="finishPolygon"
               >
-                Move
-              </button>
-              <button
-                data-testid="tool-bbox"
-                class="text-xs px-2 py-1 rounded border"
-                :class="toolMode === 'bbox' ? 'border-emerald-400 text-emerald-300' : 'border-slate-700 text-slate-300'"
-                @click="setToolMode('bbox')"
-              >
-                BBox
-              </button>
-              <button
-                data-testid="tool-point"
-                class="text-xs px-2 py-1 rounded border"
-                :class="toolMode === 'point' ? 'border-amber-400 text-amber-300' : 'border-slate-700 text-slate-300'"
-                @click="setToolMode('point')"
-              >
-                Point
-              </button>
-              <button
-                data-testid="tool-polygon"
-                class="text-xs px-2 py-1 rounded border"
-                :class="toolMode === 'polygon' ? 'border-violet-400 text-violet-300' : 'border-slate-700 text-slate-300'"
-                @click="setToolMode('polygon')"
-              >
-                Polygon
+                Finish Polygon
               </button>
             </div>
-            <button
-              v-if="toolMode === 'polygon'"
-              data-testid="finish-polygon"
-              class="w-full text-xs px-2 py-1 rounded border border-violet-700 text-violet-200"
-              @click="finishPolygon"
-            >
-              Finish Polygon
-            </button>
-          </div>
 
-          <div class="space-y-2">
-            <p class="text-[11px] text-slate-200">Stretch</p>
-            <div class="space-y-1">
-              <label class="text-[10px] text-slate-400">Min: {{ stretchMin.toFixed(2) }}</label>
-              <input
-                data-testid="stretch-min-slider"
-                type="range"
-                class="w-full"
-                :min="stretchRangeMin"
-                :max="stretchRangeMax"
-                step="0.01"
-                :value="stretchMin"
-                @input="onStretchMinInput"
-              >
+            <div class="space-y-2">
+              <p class="text-[11px] text-slate-200">Stretch</p>
+              <div class="space-y-1">
+                <label class="text-[10px] text-slate-400">Min: {{ stretchMin.toFixed(2) }}</label>
+                <input
+                  data-testid="stretch-min-slider"
+                  type="range"
+                  class="w-full"
+                  :min="stretchRangeMin"
+                  :max="stretchRangeMax"
+                  step="0.01"
+                  :value="stretchMin"
+                  @input="onStretchMinInput"
+                >
+              </div>
+              <div class="space-y-1">
+                <label class="text-[10px] text-slate-400">Max: {{ stretchMax.toFixed(2) }}</label>
+                <input
+                  data-testid="stretch-max-slider"
+                  type="range"
+                  class="w-full"
+                  :min="stretchRangeMin"
+                  :max="stretchRangeMax"
+                  step="0.01"
+                  :value="stretchMax"
+                  @input="onStretchMaxInput"
+                >
+              </div>
+              <label class="text-[11px] text-slate-300 inline-flex items-center gap-2">
+                <input
+                  data-testid="invert-toggle"
+                  type="checkbox"
+                  :checked="invertDisplay"
+                  @change="onInvertChange"
+                >
+                Invert
+              </label>
             </div>
-            <div class="space-y-1">
-              <label class="text-[10px] text-slate-400">Max: {{ stretchMax.toFixed(2) }}</label>
-              <input
-                data-testid="stretch-max-slider"
-                type="range"
-                class="w-full"
-                :min="stretchRangeMin"
-                :max="stretchRangeMax"
-                step="0.01"
-                :value="stretchMax"
-                @input="onStretchMaxInput"
-              >
-            </div>
-            <label class="text-[11px] text-slate-300 inline-flex items-center gap-2">
-              <input
-                data-testid="invert-toggle"
-                type="checkbox"
-                :checked="invertDisplay"
-                @change="onInvertChange"
-              >
-              Invert
-            </label>
           </div>
-        </div>
-      </aside>
+        </aside>
+      </Teleport>
 
       <div
         ref="canvasHostRef"
@@ -258,67 +260,69 @@
         </div>
       </div>
 
-      <aside class="rounded border border-slate-700 bg-slate-950/70 p-3 space-y-2 overflow-y-auto xl:w-[320px] xl:min-w-[260px] xl:max-w-[560px] xl:resize-x">
-        <div class="space-y-2">
-          <button
-            data-testid="submit-annotations"
-            class="w-full text-xs px-2 py-2 rounded border border-emerald-600 text-emerald-300 disabled:opacity-50"
-            :disabled="isSubmitting || !activeTask"
-            @click="submitCurrentAnnotations"
-          >
-            {{ isSubmitting ? 'Submitting...' : 'Submit' }}
-          </button>
-          <p
-            v-if="saveMessage"
-            data-testid="save-message"
-            class="text-xs px-2 py-1 rounded bg-slate-900 text-emerald-300"
-          >
-            {{ saveMessage }}
-          </p>
-
-          <p class="text-[11px] text-slate-200">Annotations</p>
-          <ul data-testid="annotation-list" class="max-h-28 overflow-auto space-y-1">
-            <li v-for="ann in annotations" :key="`list-${ann.id}`">
-              <button
-                data-testid="annotation-item"
-                class="w-full text-left text-[11px] px-2 py-1 rounded border"
-                :class="selectedAnnotationId === ann.id ? 'border-sky-500 text-sky-200' : 'border-slate-700 text-slate-300'"
-                :data-ann-id="ann.id"
-                :data-ann-type="ann.type"
-                :data-ann-label="ann.label"
-                @click="selectAnnotation(ann.id)"
-              >
-                {{ ann.type }} · {{ ann.detail_type ? ann.detail_type : ann.label }}
-              </button>
-            </li>
-          </ul>
-
-          <label class="text-[11px] text-slate-300 block">
-            Target Type (目标类型)
-            <select
-              data-testid="annotation-label-select"
-              class="mt-1 w-full text-xs bg-slate-800 text-slate-200 border border-slate-700 rounded px-2 py-1"
-              :disabled="!selectedAnnotationId"
-              :value="selectedLabel"
-              @change="onSelectedLabelChange"
+      <Teleport to="#inspector-extra">
+        <aside class="rounded border border-slate-700 bg-slate-950/70 p-3 space-y-2 overflow-y-auto xl:w-[320px] xl:min-w-[260px] xl:max-w-[560px] xl:resize-x">
+          <div class="space-y-2">
+            <button
+              data-testid="submit-annotations"
+              class="w-full text-xs px-2 py-2 rounded border border-emerald-600 text-emerald-300 disabled:opacity-50"
+              :disabled="isSubmitting || !activeTask"
+              @click="submitCurrentAnnotations"
             >
-              <option value="Unlabeled">Unlabeled (未标记)</option>
-              <optgroup label="Real (真实目标)">
-                <option value="real:asteroid">Asteroid (小行星)</option>
-                <option value="real:supernova">Supernova (超新星)</option>
-                <option value="real:variable_star">Variable Star (变星)</option>
-              </optgroup>
-              <optgroup label="Bogus (伪目标)">
-                <option value="bogus:satellite_trail">Satellite Trail (卫星轨迹)</option>
-                <option value="bogus:noise">Noise (噪声)</option>
-                <option value="bogus:diffraction_spike">Diffraction Spike (衍射芒)</option>
-                <option value="bogus:cmos_condensation">CMOS Condensation (CMOS结露)</option>
-                <option value="bogus:corresponding">Corresponding (对应体)</option>
-              </optgroup>
-            </select>
-          </label>
-        </div>
-      </aside>
+              {{ isSubmitting ? 'Submitting...' : 'Submit' }}
+            </button>
+            <p
+              v-if="saveMessage"
+              data-testid="save-message"
+              class="text-xs px-2 py-1 rounded bg-slate-900 text-emerald-300"
+            >
+              {{ saveMessage }}
+            </p>
+
+            <p class="text-[11px] text-slate-200">Annotations</p>
+            <ul data-testid="annotation-list" class="max-h-28 overflow-auto space-y-1">
+              <li v-for="ann in annotations" :key="`list-${ann.id}`">
+                <button
+                  data-testid="annotation-item"
+                  class="w-full text-left text-[11px] px-2 py-1 rounded border"
+                  :class="selectedAnnotationId === ann.id ? 'border-sky-500 text-sky-200' : 'border-slate-700 text-slate-300'"
+                  :data-ann-id="ann.id"
+                  :data-ann-type="ann.type"
+                  :data-ann-label="ann.label"
+                  @click="selectAnnotation(ann.id)"
+                >
+                  {{ ann.type }} · {{ ann.detail_type ? ann.detail_type : ann.label }}
+                </button>
+              </li>
+            </ul>
+
+            <label class="text-[11px] text-slate-300 block">
+              Target Type (目标类型)
+              <select
+                data-testid="annotation-label-select"
+                class="mt-1 w-full text-xs bg-slate-800 text-slate-200 border border-slate-700 rounded px-2 py-1"
+                :disabled="!selectedAnnotationId"
+                :value="selectedLabel"
+                @change="onSelectedLabelChange"
+              >
+                <option value="Unlabeled">Unlabeled (未标记)</option>
+                <optgroup label="Real (真实目标)">
+                  <option value="real:asteroid">Asteroid (小行星)</option>
+                  <option value="real:supernova">Supernova (超新星)</option>
+                  <option value="real:variable_star">Variable Star (变星)</option>
+                </optgroup>
+                <optgroup label="Bogus (伪目标)">
+                  <option value="bogus:satellite_trail">Satellite Trail (卫星轨迹)</option>
+                  <option value="bogus:noise">Noise (噪声)</option>
+                  <option value="bogus:diffraction_spike">Diffraction Spike (衍射芒)</option>
+                  <option value="bogus:cmos_condensation">CMOS Condensation (CMOS结露)</option>
+                  <option value="bogus:corresponding">Corresponding (对应体)</option>
+                </optgroup>
+              </select>
+            </label>
+          </div>
+        </aside>
+      </Teleport>
 
       <ul class="hidden" data-testid="image-state-list">
         <li
