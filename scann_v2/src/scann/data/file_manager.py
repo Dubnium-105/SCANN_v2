@@ -93,16 +93,37 @@ def match_new_old_pairs(
     new_files = scan_fits_folder(new_folder)
     old_files = scan_fits_folder(old_folder)
 
-    # 构建名称→路径映射
+    # 构建名称→路径映射（原始大小写和小写）
     new_map = {f.stem.lower(): f for f in new_files}
     old_map = {f.stem.lower(): f for f in old_files}
+    new_stem_to_file = {f.stem: f for f in new_files}  # 原始大小写映射
 
-    # ─── 智能配对: 处理 FW_ 等常见前缀差异 ───
+    # ─── 智能配对: 处理时间戳和 FW_ 等常见前缀差异 ───
     # 与标注工具的前缀兼容机制保持一致
     _STRIP_PREFIXES = ("FW_", "fw_", "Fw_")
 
+    def _extract_datetime_prefix(stem: str) -> str | None:
+        """提取时间戳前缀，格式如: 20221227T214251__（支持大小写）"""
+        if len(stem) < 17:
+            return None
+        prefix = stem[:15]
+        if (
+            prefix[0:8].isdigit()
+            and prefix[8].lower() == "t"
+            and prefix[9:15].isdigit()
+            and stem[15:17] == "__"
+        ):
+            return prefix
+        return None
+
     def _normalize_stem(stem: str) -> str:
-        """去除常见前缀用于匹配"""
+        """去除时间戳前缀和 FW_ 等常见前缀用于匹配"""
+        # 先去除时间戳前缀（如 20221227T214251__）
+        datetime_prefix = _extract_datetime_prefix(stem)
+        if datetime_prefix is not None:
+            stem = stem[17:]  # 去除 "YYYYMMDDThhmmss__"
+        
+        # 再去除 FW_ 等前缀
         for prefix in _STRIP_PREFIXES:
             if stem.startswith(prefix):
                 return stem[len(prefix):]
@@ -140,19 +161,28 @@ def match_new_old_pairs(
     # 处理配对
     for new_stem in new_to_old:
         old_stem = new_to_old[new_stem]
+        # 使用原始大小写的新图文件名进行 normalize
+        new_file = new_map[new_stem]
+        norm_name = _normalize_stem(new_file.stem)
         pairs.append(FitsImagePair(
-            name=new_map[new_stem].stem,  # 使用原始大小写
-            new_path=new_map[new_stem].path,
+            name=norm_name,
+            new_path=new_file.path,
             old_path=old_map[old_stem].path,
         ))
 
     # 处理仅新图
     for new_stem in new_map:
         if new_stem not in new_to_old:
-            only_new.append(new_map[new_stem].stem)
+            # 使用原始大小写进行 normalize
+            new_file = new_map[new_stem]
+            norm_name = _normalize_stem(new_file.stem)
+            only_new.append(norm_name)
 
     # 处理仅旧图
     for old_stem in unmatched_old:
-        only_old.append(old_map[old_stem].stem)
+        # 使用原始大小写进行 normalize
+        old_file = old_map[old_stem]
+        norm_name = _normalize_stem(old_file.stem)
+        only_old.append(norm_name)
 
     return pairs, only_new, only_old

@@ -40,6 +40,19 @@ def _utc_now() -> str:
 
 
 def _strip_known_prefix(stem: str) -> str:
+    """去除时间戳前缀（如 20221227T214251__）和 FW_ 等常见前缀"""
+    # 先去除时间戳前缀（如 20221227T214251__，支持大小写）
+    if len(stem) >= 17:
+        prefix = stem[:15]
+        if (
+            prefix[0:8].isdigit()
+            and prefix[8].lower() == "t"
+            and prefix[9:15].isdigit()
+            and stem[15:17] == "__"
+        ):
+            stem = stem[17:]
+    
+    # 再去除 FW_ 等前缀
     for p in ("FW_", "fw_", "Fw_"):
         if stem.startswith(p):
             return stem[len(p) :]

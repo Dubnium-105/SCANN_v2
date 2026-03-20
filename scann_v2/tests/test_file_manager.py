@@ -178,30 +178,64 @@ class TestFileManager:
         assert "IC 196.fts" in names
         assert "IC 196__aligned_crop.fts" not in names
 
-    def test_match_pairs_ignores_aligned_crop_artifacts(self, tmp_dir, synth_fits_data_16bit):
-        """配对列表与仅新/仅旧列表均不应显式包含 __aligned_crop 产物文件"""
+    def test_match_pairs_with_datetime_prefix(self, tmp_dir, synth_fits_data_16bit):
+        """测试时间戳前缀匹配：YYYYMMDDThhmmss__ 前缀应正确匹配"""
         try:
             from astropy.io import fits
         except ImportError:
             pytest.skip("astropy not installed")
         from scann.data.file_manager import match_new_old_pairs
 
-        new_dir = tmp_dir / "new_ignore_aligned"
-        old_dir = tmp_dir / "old_ignore_aligned"
+        new_dir = tmp_dir / "new_datetime"
+        old_dir = tmp_dir / "old_datetime"
         new_dir.mkdir()
         old_dir.mkdir()
+
         hdr = fits.Header()
+        # 新图：带时间戳前缀
+        fits.writeto(str(new_dir / "20221227T201014__NGC 3381.fits"), synth_fits_data_16bit, header=hdr)
+        fits.writeto(str(new_dir / "20221227T214251__SAC NGC 3813.fits"), synth_fits_data_16bit, header=hdr)
 
-        fits.writeto(str(new_dir / "IC 196.fts"), synth_fits_data_16bit, header=hdr)
-        fits.writeto(str(old_dir / "FW_IC 196.fit"), synth_fits_data_16bit, header=hdr)
-
-        # 历史对齐产物（应被忽略）
-        fits.writeto(str(new_dir / "IC 196__aligned_crop.fts"), synth_fits_data_16bit, header=hdr)
-        fits.writeto(str(old_dir / "FW_IC 196__aligned_crop.fit"), synth_fits_data_16bit, header=hdr)
+        # 旧图：带不同时间戳前缀
+        fits.writeto(str(old_dir / "20260308T212601__NGC 3381.fits"), synth_fits_data_16bit, header=hdr)
+        fits.writeto(str(old_dir / "20260308T215954__SAC NGC 3813.fits"), synth_fits_data_16bit, header=hdr)
 
         pairs, only_new, only_old = match_new_old_pairs(str(new_dir), str(old_dir))
 
-        assert len(pairs) == 1
-        assert pairs[0].name == "IC 196"
-        assert only_new == []
-        assert only_old == []
+        assert len(pairs) == 2, f"应配对2对，实际配对: {len(pairs)}"
+        assert len(only_new) == 0, f"不应有仅新图: {only_new}"
+        assert len(only_old) == 0, f"不应有仅旧图: {only_old}"
+
+        # 验证配对名称为去除时间戳后的部分
+        pair_names = [p.name for p in pairs]
+        assert "NGC 3381" in pair_names
+        assert "SAC NGC 3813" in pair_names
+
+    def test_match_pairs_with_datetime_and_fw_prefix(self, tmp_dir, synth_fits_data_16bit):
+        """测试时间戳 + FW_ 组合前缀匹配"""
+        try:
+            from astropy.io import fits
+        except ImportError:
+            pytest.skip("astropy not installed")
+        from scann.data.file_manager import match_new_old_pairs
+
+        new_dir = tmp_dir / "new_combined"
+        old_dir = tmp_dir / "old_combined"
+        new_dir.mkdir()
+        old_dir.mkdir()
+
+        hdr = fits.Header()
+        # 新图：带时间戳前缀
+        fits.writeto(str(new_dir / "20221227T201014__PGC 32620.fits"), synth_fits_data_16bit, header=hdr)
+
+        # 旧图：带时间戳 + FW_ 前缀
+        fits.writeto(str(old_dir / "20260308T212942__FW_PGC 32620.fits"), synth_fits_data_16bit, header=hdr)
+
+        pairs, only_new, only_old = match_new_old_pairs(str(new_dir), str(old_dir))
+
+        assert len(pairs) == 1, f"应配对1对，实际配对: {len(pairs)}"
+        assert len(only_new) == 0
+        assert len(only_old) == 0
+
+        # 验证配对成功
+        assert pairs[0].name == "PGC 32620"

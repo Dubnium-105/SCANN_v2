@@ -360,6 +360,7 @@ class FitsAnnotationBackend(AnnotationBackend):
         raw_root = root / "dataset_raw"
         folder_names = ("new", "old", "new_marked")
 
+        # 第一步：完成所有文件夹的标准化
         for folder_name in folder_names:
             work_dir = root / folder_name
             if not work_dir.is_dir():
@@ -382,8 +383,8 @@ class FitsAnnotationBackend(AnnotationBackend):
                 normalized_path = work_dir / normalized_name
                 shutil.copy2(backup_path, normalized_path)
 
-            # 标准化完成后统一执行对齐，确保对齐产物与标准化命名一致
-            self._ensure_aligned_crop_files(root)
+        # 第二步：所有标准化完成后统一执行对齐，确保对齐产物与标准化命名一致
+        self._ensure_aligned_crop_files(root)
 
     @staticmethod
     def _should_standardize_file(file_path: Path) -> bool:
@@ -450,14 +451,14 @@ class FitsAnnotationBackend(AnnotationBackend):
 
     @staticmethod
     def _extract_datetime_prefix(stem: str) -> Optional[str]:
-        if len(stem) < 16:
+        """提取时间戳前缀，格式如: 20221227T214251__（支持大小写）"""
+        if len(stem) < 17:
             return None
         prefix = stem[:15]
         if (
             prefix[0:8].isdigit()
-            and prefix[8] == "T"
+            and prefix[8].lower() == "t"
             and prefix[9:15].isdigit()
-            and len(stem) > 16
             and stem[15:17] == "__"
         ):
             return prefix
