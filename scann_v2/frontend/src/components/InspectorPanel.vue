@@ -2,8 +2,6 @@
   <aside class="rounded-lg border border-slate-800 bg-slate-900 p-3 space-y-3">
     <p class="text-sm text-slate-300">Inspector</p>
 
-    <div id="inspector-annotations-mount" class="rounded border border-slate-800 bg-slate-950/30 p-2" />
-
     <div class="rounded border border-slate-800 bg-slate-950/30 p-2">
       <p class="text-xs text-slate-300">Version History</p>
       <p v-if="!taskId" class="text-xs text-slate-500 mt-2" data-testid="history-empty-task">No task selected</p>

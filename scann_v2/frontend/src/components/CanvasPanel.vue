@@ -1,119 +1,7 @@
 <template>
   <section class="rounded-lg border border-slate-800 bg-slate-900 p-3 min-h-0">
     <div class="h-full flex flex-col xl:flex-row gap-3 min-h-0">
-      <div
-        ref="canvasHostRef"
-        class="rounded border border-slate-700 overflow-hidden relative min-h-[480px]"
-        :class="['flex-1 min-w-0', toolMode === 'move' ? 'cursor-grab' : 'cursor-crosshair']"
-        data-testid="canvas-host"
-        @wheel.prevent="onContainerWheel"
-      >
-        <canvas
-          ref="fitsCanvasRef"
-          class="absolute inset-0 w-full h-full pointer-events-none z-0"
-          data-testid="fits-render-canvas"
-        />
-
-        <v-stage
-          ref="stageRef"
-          :config="stageConfig"
-          class="absolute inset-0 z-10"
-          @dragend="onDragEnd"
-          @wheel="onWheel"
-          @mousedown="onStageMouseDown"
-          @mousemove="onStageMouseMove"
-          @mouseup="onStageMouseUp"
-        >
-          <v-layer>
-            <v-rect
-              v-for="ann in annotations.filter((item) => item.type === 'bbox')"
-              :key="ann.id"
-              :config="{
-                x: ann.x,
-                y: ann.y,
-                width: ann.width,
-                height: ann.height,
-                stroke: '#22c55e',
-                strokeWidth: 2,
-              }"
-            />
-            <v-circle
-              v-for="ann in annotations.filter((item) => item.type === 'point')"
-              :key="ann.id"
-              :config="{
-                x: ann.x,
-                y: ann.y,
-                radius: 4,
-                fill: '#f59e0b',
-                stroke: '#fde68a',
-                strokeWidth: 1,
-              }"
-            />
-            <v-line
-              v-for="ann in annotations.filter((item) => item.type === 'polygon')"
-              :key="ann.id"
-              :config="{
-                points: toFlatPoints(ann.points),
-                closed: true,
-                stroke: '#a78bfa',
-                strokeWidth: 2,
-              }"
-            />
-            <v-line
-              v-if="toolMode === 'polygon' && currentPolygonPoints.length > 0"
-              :config="{
-                points: toFlatPoints(currentPolygonPoints),
-                closed: false,
-                stroke: '#60a5fa',
-                strokeWidth: 2,
-                dash: [4, 4],
-              }"
-            />
-            <v-rect
-              v-if="draftRect"
-              :config="{
-                x: draftRect.x,
-                y: draftRect.y,
-                width: draftRect.width,
-                height: draftRect.height,
-                stroke: '#38bdf8',
-                strokeWidth: 2,
-                dash: [6, 4],
-              }"
-            />
-          </v-layer>
-        </v-stage>
-
-        <div
-          v-if="isLoading"
-          class="absolute inset-0 flex items-center justify-center text-sm text-slate-300 bg-slate-950/65"
-        >
-          Loading triplet images...
-        </div>
-
-        <div
-          v-else-if="error"
-          class="absolute inset-0 flex items-center justify-center text-sm text-rose-300 bg-slate-950/65"
-        >
-          {{ error }}
-        </div>
-
-        <div
-          v-else-if="fitsError"
-          class="absolute inset-0 flex items-center justify-center text-sm text-rose-300 bg-slate-950/65"
-        >
-          {{ fitsError }}
-        </div>
-
-        <div
-          v-else-if="!activeTask"
-          class="absolute inset-0 flex items-center justify-center text-sm text-slate-400 bg-slate-950/65"
-        >
-          Waiting for tasks...
-        </div>
-      </div>
-
-      <Teleport to="#left-sidebar-controls-mount">
+      <aside class="rounded border border-slate-700 bg-slate-950/70 p-3 space-y-3 overflow-y-auto xl:w-[320px] xl:min-w-[260px] xl:max-w-[560px] xl:resize-x">
         <div class="space-y-3">
           <div class="space-y-2">
             <p class="text-xs text-slate-200">任务切换</p>
@@ -256,9 +144,121 @@
             </label>
           </div>
         </div>
-      </Teleport>
+      </aside>
 
-      <Teleport to="#inspector-annotations-mount">
+      <div
+        ref="canvasHostRef"
+        class="rounded border border-slate-700 overflow-hidden relative min-h-[480px]"
+        :class="['flex-1 min-w-0', toolMode === 'move' ? 'cursor-grab' : 'cursor-crosshair']"
+        data-testid="canvas-host"
+        @wheel.prevent="onContainerWheel"
+      >
+        <canvas
+          ref="fitsCanvasRef"
+          class="absolute inset-0 w-full h-full pointer-events-none z-0"
+          data-testid="fits-render-canvas"
+        />
+
+        <v-stage
+          ref="stageRef"
+          :config="stageConfig"
+          class="absolute inset-0 z-10"
+          @dragend="onDragEnd"
+          @wheel="onWheel"
+          @mousedown="onStageMouseDown"
+          @mousemove="onStageMouseMove"
+          @mouseup="onStageMouseUp"
+        >
+          <v-layer>
+            <v-rect
+              v-for="ann in annotations.filter((item) => item.type === 'bbox')"
+              :key="ann.id"
+              :config="{
+                x: ann.x,
+                y: ann.y,
+                width: ann.width,
+                height: ann.height,
+                stroke: '#22c55e',
+                strokeWidth: 2,
+              }"
+            />
+            <v-circle
+              v-for="ann in annotations.filter((item) => item.type === 'point')"
+              :key="ann.id"
+              :config="{
+                x: ann.x,
+                y: ann.y,
+                radius: 4,
+                fill: '#f59e0b',
+                stroke: '#fde68a',
+                strokeWidth: 1,
+              }"
+            />
+            <v-line
+              v-for="ann in annotations.filter((item) => item.type === 'polygon')"
+              :key="ann.id"
+              :config="{
+                points: toFlatPoints(ann.points),
+                closed: true,
+                stroke: '#a78bfa',
+                strokeWidth: 2,
+              }"
+            />
+            <v-line
+              v-if="toolMode === 'polygon' && currentPolygonPoints.length > 0"
+              :config="{
+                points: toFlatPoints(currentPolygonPoints),
+                closed: false,
+                stroke: '#60a5fa',
+                strokeWidth: 2,
+                dash: [4, 4],
+              }"
+            />
+            <v-rect
+              v-if="draftRect"
+              :config="{
+                x: draftRect.x,
+                y: draftRect.y,
+                width: draftRect.width,
+                height: draftRect.height,
+                stroke: '#38bdf8',
+                strokeWidth: 2,
+                dash: [6, 4],
+              }"
+            />
+          </v-layer>
+        </v-stage>
+
+        <div
+          v-if="isLoading"
+          class="absolute inset-0 flex items-center justify-center text-sm text-slate-300 bg-slate-950/65"
+        >
+          Loading triplet images...
+        </div>
+
+        <div
+          v-else-if="error"
+          class="absolute inset-0 flex items-center justify-center text-sm text-rose-300 bg-slate-950/65"
+        >
+          {{ error }}
+        </div>
+
+        <div
+          v-else-if="fitsError"
+          class="absolute inset-0 flex items-center justify-center text-sm text-rose-300 bg-slate-950/65"
+        >
+          {{ fitsError }}
+        </div>
+
+        <div
+          v-else-if="!activeTask"
+          class="absolute inset-0 flex items-center justify-center text-sm text-slate-400 bg-slate-950/65"
+        >
+          Waiting for tasks...
+        </div>
+      </div>
+
+      <aside class="rounded border border-slate-700 bg-slate-950/70 p-3 space-y-2 overflow-y-auto xl:w-[320px] xl:min-w-[260px] xl:max-w-[560px] xl:resize-x">
         <div class="space-y-2">
           <button
             data-testid="submit-annotations"
@@ -318,7 +318,7 @@
             </select>
           </label>
         </div>
-      </Teleport>
+      </aside>
 
       <ul class="hidden" data-testid="image-state-list">
         <li

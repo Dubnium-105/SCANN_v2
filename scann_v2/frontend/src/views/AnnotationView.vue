@@ -24,7 +24,6 @@
             </ul>
           </div>
         </div>
-        <div class="mt-4 pt-3 border-t border-slate-800" id="left-sidebar-controls-mount" />
       </aside>
 
       <div class="flex-1 min-w-0 min-h-0">
