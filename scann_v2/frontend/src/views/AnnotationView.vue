@@ -40,19 +40,19 @@
               <div class="flex-1 min-w-0">
               <p class="text-emerald-400 font-medium mb-1">真实目标 (Real)</p>
               <ul class="space-y-1">
-                <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">1</kbd> - 小行星</li>
-                <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">2</kbd> - 超新星</li>
-                <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">3</kbd> - 变星</li>
+                <li class="text-emerald-300"><kbd class="bg-emerald-900/60 border border-emerald-500 px-1 rounded text-emerald-200">1</kbd> - 小行星</li>
+                <li class="text-green-300"><kbd class="bg-green-900/60 border border-green-500 px-1 rounded text-green-200">2</kbd> - 超新星</li>
+                <li class="text-lime-300"><kbd class="bg-lime-900/60 border border-lime-500 px-1 rounded text-lime-200">3</kbd> - 变星</li>
               </ul>
               </div>
               <div class="flex-1 min-w-0">
               <p class="text-rose-400 font-medium mb-1">伪目标 (Bogus)</p>
               <ul class="space-y-1">
-                <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">4</kbd> - 卫星轨迹</li>
-                <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">5</kbd> - 噪声</li>
-                <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">6</kbd> - 衍射芒</li>
-                <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">7</kbd> - CMOS结露</li>
-                <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">8</kbd> - 对应体</li>
+                <li class="text-rose-300"><kbd class="bg-rose-900/50 border border-rose-500 px-1 rounded text-rose-200">4</kbd> - 卫星轨迹</li>
+                <li class="text-rose-300"><kbd class="bg-rose-900/50 border border-rose-500 px-1 rounded text-rose-200">5</kbd> - 噪声</li>
+                <li class="text-red-300"><kbd class="bg-red-900/50 border border-red-500 px-1 rounded text-red-200">6</kbd> - 衍射芒</li>
+                <li class="text-pink-300"><kbd class="bg-pink-900/50 border border-pink-500 px-1 rounded text-pink-200">7</kbd> - CMOS结露</li>
+                <li class="text-rose-400"><kbd class="bg-rose-950/60 border border-rose-600 px-1 rounded text-rose-300">8</kbd> - 对应体</li>
               </ul>
               </div>
             </div>

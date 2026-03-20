@@ -202,7 +202,7 @@
                 y: ann.y,
                 width: ann.width,
                 height: ann.height,
-                stroke: '#22c55e',
+                stroke: getAnnotationColor(ann),
                 strokeWidth: bboxStrokeWidth,
               }"
             />
@@ -213,8 +213,8 @@
                 x: ann.x,
                 y: ann.y,
                 radius: 4,
-                fill: '#f59e0b',
-                stroke: '#fde68a',
+                fill: getAnnotationColor(ann),
+                stroke: getAnnotationColor(ann),
                 strokeWidth: 1,
               }"
             />
@@ -224,7 +224,7 @@
               :config="{
                 points: toFlatPoints(ann.points),
                 closed: true,
-                stroke: '#a78bfa',
+                stroke: getAnnotationColor(ann),
                 strokeWidth: 2,
               }"
             />
@@ -307,13 +307,22 @@
                 <button
                   data-testid="annotation-item"
                   class="w-full text-left text-[11px] px-2 py-1 rounded border"
-                  :class="selectedAnnotationId === ann.id ? 'border-sky-500 text-sky-200' : 'border-slate-700 text-slate-300'"
+                  :class="selectedAnnotationId === ann.id ? 'border-sky-500 text-sky-200 ring-1 ring-sky-500/30' : 'border-slate-700 text-slate-300'"
+                  :style="getAnnotationItemStyle(ann, selectedAnnotationId === ann.id)"
                   :data-ann-id="ann.id"
+                  :data-ann-display-id="ann.display_id"
                   :data-ann-type="ann.type"
                   :data-ann-label="ann.label"
                   @click="selectAnnotation(ann.id)"
                 >
-                  {{ ann.type }} · {{ ann.detail_type ? ann.detail_type : ann.label }}
+                    <span class="inline-flex items-center gap-2">
+                      <span
+                        class="inline-block w-2 h-2 rounded-full"
+                        :style="{ backgroundColor: getAnnotationColor(ann) }"
+                      />
+                      <span class="font-semibold">{{ ann.display_id }}</span>
+                      <span>{{ ann.type }} · {{ ann.detail_type ? ann.detail_type : ann.label }}</span>
+                    </span>
                 </button>
               </li>
             </ul>
@@ -385,6 +394,7 @@ const stageScale = ref(1)
 const toolMode = ref('move')
 const middlePanActive = ref(false)
 const annotations = ref([])
+const annotationDisplayCounter = ref(1)
 const draftRect = ref(null)
 const drawStart = ref(null)
 const currentPolygonPoints = ref([])
@@ -534,6 +544,7 @@ function switchToView(view) {
 
 function resetAnnotationStates() {
   annotations.value = []
+  annotationDisplayCounter.value = 1
   selectedAnnotationId.value = ''
   selectedLabel.value = 'Unlabeled'
   draftRect.value = null
@@ -698,6 +709,7 @@ function createAnnotation(base) {
 
   return {
     id: `ann-${Date.now()}-${annotations.value.length}`,
+    display_id: `A${String(annotationDisplayCounter.value).padStart(4, '0')}`,
     label: initialLabel,
     detail_type: initialDetail,
     ...base,
@@ -706,7 +718,56 @@ function createAnnotation(base) {
 
 function addAnnotation(annotation) {
   annotations.value.push(annotation)
+  annotationDisplayCounter.value += 1
   selectAnnotation(annotation.id)
+}
+
+function getAnnotationLabelKey(annotation) {
+  if (!annotation || annotation.label === 'Unlabeled' || !annotation.label) {
+    return 'Unlabeled'
+  }
+  if (annotation.detail_type) {
+    return `${annotation.label}:${annotation.detail_type}`
+  }
+  return annotation.label
+}
+
+function getAnnotationColor(annotation) {
+  const key = getAnnotationLabelKey(annotation)
+  const colorMap = {
+    Unlabeled: '#94a3b8',
+    'real:asteroid': '#22c55e',
+    'real:supernova': '#16a34a',
+    'real:variable_star': '#4ade80',
+    'bogus:satellite_trail': '#f43f5e',
+    'bogus:noise': '#ef4444',
+    'bogus:diffraction_spike': '#e11d48',
+    'bogus:cmos_condensation': '#fb7185',
+    'bogus:corresponding': '#be123c',
+    real: '#22c55e',
+    bogus: '#ef4444',
+  }
+  return colorMap[key] || '#94a3b8'
+}
+
+function hexToRgba(hexColor, alpha) {
+  const match = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hexColor)
+  if (!match) {
+    return `rgba(148, 163, 184, ${alpha})`
+  }
+  const r = parseInt(match[1], 16)
+  const g = parseInt(match[2], 16)
+  const b = parseInt(match[3], 16)
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
+function getAnnotationItemStyle(annotation, isSelected) {
+  const color = getAnnotationColor(annotation)
+  return {
+    borderColor: isSelected ? '#0ea5e9' : color,
+    color: isSelected ? '#bae6fd' : color,
+    backgroundColor: hexToRgba(color, isSelected ? 0.18 : 0.08),
+  }
 }
 
 function selectAnnotation(annotationId) {
