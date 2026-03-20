@@ -194,7 +194,9 @@ describe('CanvasPanel', () => {
     await wrapper.get('[data-testid="submit-annotations"]').trigger('click')
     await flushPromises()
 
-    const submitCall = fetchCalls.find((item) => String(item.url).startsWith('/api/annotations/'))
+    const submitCall = fetchCalls.find(
+      (item) => String(item.url).startsWith('/api/annotations/') && item.options?.method === 'POST',
+    )
     expect(submitCall).toBeTruthy()
     expect(submitCall.options?.method).toBe('POST')
 
@@ -289,5 +291,40 @@ describe('CanvasPanel', () => {
     await flushPromises()
 
     expect(wrapper.findAll('[data-testid="annotation-item"]')[0].attributes('data-ann-label')).toBe('real')
+  })
+
+  it('requires second click to delete and supports undo for annotation item', async () => {
+    const wrapper = mount(CanvasPanel, {
+      global: {
+        stubs: globalStubs,
+      },
+    })
+
+    await flushPromises()
+
+    await wrapper.get('[data-testid="tool-point"]').trigger('click')
+    const stage = wrapper.get('[data-testid="stage"]')
+    await stage.trigger('mouseup', { clientX: 44, clientY: 52 })
+    await flushPromises()
+
+    const countBeforeDelete = wrapper.findAll('[data-testid="annotation-item"]').length
+    expect(countBeforeDelete).toBeGreaterThanOrEqual(1)
+
+    await wrapper.get('[data-testid="annotation-remove"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="annotation-item"]').length).toBe(countBeforeDelete)
+
+    await wrapper.get('[data-testid="annotation-remove"]').trigger('click')
+    await flushPromises()
+
+    const countAfterDelete = wrapper.findAll('[data-testid="annotation-item"]').length
+    expect(countAfterDelete).toBe(countBeforeDelete - 1)
+    expect(wrapper.find('[data-testid="undo-delete-banner"]').exists()).toBe(true)
+
+    await wrapper.get('[data-testid="undo-delete"]').trigger('click')
+    await flushPromises()
+
+    const countAfterUndo = wrapper.findAll('[data-testid="annotation-item"]').length
+    expect(countAfterUndo).toBe(countBeforeDelete)
   })
 })

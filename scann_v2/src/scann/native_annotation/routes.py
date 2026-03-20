@@ -10,7 +10,8 @@ from pydantic import BaseModel
 
 from .annotation_service import (
     AnnotationHistoryResponse,
-    AnnotationRevision,
+    AnnotationRevisionDetail,
+    AnnotationRollbackResponse,
     AnnotationSaveRequest,
     AnnotationSaveResponse,
     AnnotationService,
@@ -18,10 +19,12 @@ from .annotation_service import (
 from .auth_service import (
     AuthUser,
     LoginRequest,
+    RegisterRequest,
     TokenResponse,
     authenticate_user,
     create_access_token,
     get_current_user,
+    register_user,
 )
 from .dataset_service import DatasetService, TaskSession
 from .fits_engine import FITSEngine
@@ -80,6 +83,21 @@ def login(payload: LoginRequest) -> TokenResponse:
     user = authenticate_user(payload.username, payload.password)
     if user is None:
         raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    token = create_access_token(user)
+    return TokenResponse(
+        access_token=token,
+        username=user.username,
+        role=user.role,
+    )
+
+
+@api_router.post("/register", response_model=TokenResponse)
+def register(payload: RegisterRequest) -> TokenResponse:
+    try:
+        user = register_user(payload.username, payload.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     token = create_access_token(user)
     return TokenResponse(
@@ -183,15 +201,35 @@ def get_annotation_history(
     return service.list_history(task_id)
 
 
-@api_router.get("/annotations/{task_id}/history/{revision_id}", response_model=AnnotationRevision)
+@api_router.get("/annotations/{task_id}/history/{revision_id}", response_model=AnnotationRevisionDetail)
 def get_annotation_revision(
     task_id: str,
     revision_id: str,
     current_user: AuthUser = Depends(get_current_user),
-) -> AnnotationRevision:
+) -> AnnotationRevisionDetail:
     _ = current_user
     service = get_annotation_service()
     try:
         return service.get_revision(task_id=task_id, revision_id=revision_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@api_router.post("/annotations/{task_id}/rollback/{revision_id}", response_model=AnnotationRollbackResponse)
+def rollback_annotation_revision(
+    task_id: str,
+    revision_id: str,
+    current_user: AuthUser = Depends(get_current_user),
+) -> AnnotationRollbackResponse:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can rollback revisions")
+
+    service = get_annotation_service()
+    try:
+        return service.rollback_to_revision(
+            task_id=task_id,
+            revision_id=revision_id,
+            submitted_by=current_user.username,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

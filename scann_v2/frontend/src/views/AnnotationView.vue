@@ -69,7 +69,11 @@
       />
 
       <div class="flex-1 min-w-0 min-h-0 flex">
-        <CanvasPanel @task-changed="onTaskChanged" @annotations-saved="onAnnotationsSaved" />
+        <CanvasPanel
+          :revision-overlay="activeRevisionOverlay"
+          @task-changed="onTaskChanged"
+          @annotations-saved="onAnnotationsSaved"
+        />
       </div>
 
       <div
@@ -90,7 +94,14 @@
             </button>
           </div>
           <div v-show="!rightCollapsed">
-            <InspectorPanel :task-id="activeTaskId" :refresh-key="historyRefreshKey" />
+            <InspectorPanel
+              :task-id="activeTaskId"
+              :refresh-key="historyRefreshKey"
+              :user-role="authState.role"
+              @revision-selected="onRevisionSelected"
+              @revision-cleared="onRevisionCleared"
+              @history-mutated="onHistoryMutated"
+            />
           </div>
           <div id="inspector-extra" class="mt-3" :class="rightCollapsed ? 'hidden' : ''" />
         </aside>
@@ -112,6 +123,7 @@ import { authState } from '../services/authStore'
 const router = useRouter()
 const activeTaskId = ref('')
 const historyRefreshKey = ref(0)
+const activeRevisionOverlay = ref(null)
 const mainRef = ref(null)
 
 const LEFT_MIN_WIDTH = 180
@@ -189,10 +201,23 @@ function toggleRightCollapsed() {
 
 function onTaskChanged(taskId) {
   activeTaskId.value = taskId || ''
+  activeRevisionOverlay.value = null
 }
 
-function onAnnotationsSaved(taskId) {
-  activeTaskId.value = taskId || activeTaskId.value
+function onAnnotationsSaved() {
+  historyRefreshKey.value += 1
+  activeRevisionOverlay.value = null
+}
+
+function onRevisionSelected(revisionDetail) {
+  activeRevisionOverlay.value = revisionDetail || null
+}
+
+function onRevisionCleared() {
+  activeRevisionOverlay.value = null
+}
+
+function onHistoryMutated() {
   historyRefreshKey.value += 1
 }
 

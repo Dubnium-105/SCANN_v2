@@ -29,6 +29,14 @@
         </button>
       </form>
 
+      <button
+        data-testid="login-go-register"
+        class="w-full rounded border border-slate-700 px-3 py-2 text-xs text-slate-300"
+        @click="router.push({ name: 'register' })"
+      >
+        没有账号？去注册
+      </button>
+
       <p v-if="errorMessage" data-testid="login-error" class="text-xs text-rose-300">{{ errorMessage }}</p>
     </div>
   </div>

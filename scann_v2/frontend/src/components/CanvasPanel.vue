@@ -5,7 +5,16 @@
         <aside class="w-full rounded border border-slate-700 bg-slate-950/70 p-3 space-y-3">
           <div class="space-y-3">
             <div class="space-y-2">
-              <p class="text-xs text-slate-200">任务切换</p>
+              <div class="flex items-center justify-between gap-2">
+                <p class="text-xs text-slate-200">任务切换</p>
+                <button
+                  data-testid="task-catalog-open"
+                  class="text-[10px] px-2 py-0.5 rounded border border-slate-700 text-slate-300"
+                  @click="openTaskCatalog"
+                >
+                  总任务目录
+                </button>
+              </div>
               <p class="text-[11px] text-slate-400">{{ activeTask?.task_id || '暂无任务' }}</p>
               <p class="text-[10px] text-slate-500">进度 {{ taskProgressText }}</p>
               <div class="grid grid-cols-2 gap-2">
@@ -107,7 +116,18 @@
             </div>
 
             <div class="space-y-2">
-              <p class="text-[11px] text-slate-200">Stretch</p>
+              <div class="flex items-center justify-between gap-2">
+                <p class="text-[11px] text-slate-200">Stretch</p>
+                <label class="text-[10px] text-slate-300 inline-flex items-center gap-1">
+                  <input
+                    data-testid="auto-stretch-toggle"
+                    type="checkbox"
+                    :checked="autoStretchEnabled"
+                    @change="onAutoStretchToggle"
+                  >
+                  自动拉伸
+                </label>
+              </div>
               <div class="space-y-1">
                 <label class="text-[10px] text-slate-400">Min: {{ stretchMin.toFixed(2) }}</label>
                 <input
@@ -166,6 +186,48 @@
       </Teleport>
 
       <div
+        v-if="taskCatalogVisible"
+        class="fixed inset-0 z-50 bg-black/50 backdrop-blur-[1px] flex items-center justify-center p-4"
+        data-testid="task-catalog-modal"
+        @click.self="closeTaskCatalog"
+      >
+        <aside class="w-full max-w-xl rounded-lg border border-slate-700 bg-slate-950 p-3 space-y-3 max-h-[80vh] flex flex-col">
+          <div class="flex items-center justify-between gap-2">
+            <p class="text-sm text-slate-200">总任务目录</p>
+            <button
+              data-testid="task-catalog-close"
+              class="text-xs px-2 py-1 rounded border border-slate-700 text-slate-300"
+              @click="closeTaskCatalog"
+            >
+              关闭
+            </button>
+          </div>
+          <input
+            v-model="taskCatalogQuery"
+            data-testid="task-catalog-search"
+            type="text"
+            class="w-full text-xs bg-slate-900 text-slate-200 border border-slate-700 rounded px-2 py-1"
+            placeholder="搜索任务ID..."
+          >
+          <p class="text-[11px] text-slate-500">共 {{ filteredTaskCatalog.length }} / {{ taskList.length }} 个任务</p>
+          <ul class="flex-1 min-h-0 overflow-auto space-y-1" data-testid="task-catalog-list">
+            <li
+              v-for="item in filteredTaskCatalog"
+              :key="item.task.task_id"
+            >
+              <button
+                class="w-full text-left text-xs px-2 py-1 rounded border"
+                :class="currentTaskIndex === item.index ? 'border-sky-500 text-sky-200 bg-sky-950/20' : 'border-slate-700 text-slate-300'"
+                @click="jumpToTaskIndex(item.index)"
+              >
+                {{ item.task.task_id }}
+              </button>
+            </li>
+          </ul>
+        </aside>
+      </div>
+
+      <div
         ref="canvasHostRef"
         class="rounded border border-slate-700 overflow-hidden relative min-h-[480px]"
         :class="[
@@ -204,6 +266,57 @@
                 height: ann.height,
                 stroke: getAnnotationColor(ann),
                 strokeWidth: bboxStrokeWidth,
+              }"
+            />
+            <v-rect
+              v-for="(overlay, index) in revisionOverlayRemovedRects"
+              :key="`overlay-removed-${index}`"
+              :config="{
+                x: overlay.x,
+                y: overlay.y,
+                width: overlay.width,
+                height: overlay.height,
+                stroke: '#fb7185',
+                strokeWidth: Math.max(1.5, bboxStrokeWidth),
+                dash: [8, 4],
+              }"
+            />
+            <v-rect
+              v-for="(overlay, index) in revisionOverlayModifiedBeforeRects"
+              :key="`overlay-modified-before-${index}`"
+              :config="{
+                x: overlay.x,
+                y: overlay.y,
+                width: overlay.width,
+                height: overlay.height,
+                stroke: '#f59e0b',
+                strokeWidth: Math.max(1.5, bboxStrokeWidth),
+                dash: [5, 3],
+              }"
+            />
+            <v-rect
+              v-for="(overlay, index) in revisionOverlayModifiedAfterRects"
+              :key="`overlay-modified-after-${index}`"
+              :config="{
+                x: overlay.x,
+                y: overlay.y,
+                width: overlay.width,
+                height: overlay.height,
+                stroke: '#fde047',
+                strokeWidth: Math.max(1.5, bboxStrokeWidth),
+              }"
+            />
+            <v-rect
+              v-for="(overlay, index) in revisionOverlayAddedRects"
+              :key="`overlay-added-${index}`"
+              :config="{
+                x: overlay.x,
+                y: overlay.y,
+                width: overlay.width,
+                height: overlay.height,
+                stroke: '#2dd4bf',
+                strokeWidth: Math.max(1.5, bboxStrokeWidth),
+                dash: [2, 2],
               }"
             />
             <v-circle
@@ -300,30 +413,55 @@
             >
               {{ saveMessage }}
             </p>
+            <div
+              v-if="undoDeleteVisible"
+              data-testid="undo-delete-banner"
+              class="text-xs px-2 py-1 rounded bg-amber-950/40 border border-amber-700/50 text-amber-200 flex items-center justify-between gap-2"
+            >
+              <span>{{ undoDeleteMessage }}</span>
+              <button
+                data-testid="undo-delete"
+                class="px-2 py-0.5 rounded border border-amber-500 text-amber-100"
+                @click="undoRemoveAnnotation"
+              >
+                Undo
+              </button>
+            </div>
 
             <p class="text-[11px] text-slate-200">Annotations</p>
             <ul data-testid="annotation-list" class="max-h-28 overflow-auto space-y-1">
               <li v-for="ann in annotations" :key="`list-${ann.id}`">
-                <button
-                  data-testid="annotation-item"
-                  class="w-full text-left text-[11px] px-2 py-1 rounded border"
-                  :class="selectedAnnotationId === ann.id ? 'border-sky-500 text-sky-200 ring-1 ring-sky-500/30' : 'border-slate-700 text-slate-300'"
-                  :style="getAnnotationItemStyle(ann, selectedAnnotationId === ann.id)"
-                  :data-ann-id="ann.id"
-                  :data-ann-display-id="ann.display_id"
-                  :data-ann-type="ann.type"
-                  :data-ann-label="ann.label"
-                  @click="selectAnnotation(ann.id)"
-                >
-                    <span class="inline-flex items-center gap-2">
-                      <span
-                        class="inline-block w-2 h-2 rounded-full"
-                        :style="{ backgroundColor: getAnnotationColor(ann) }"
-                      />
-                      <span class="font-semibold">{{ ann.display_id }}</span>
-                      <span>{{ ann.type }} · {{ ann.detail_type ? ann.detail_type : ann.label }}</span>
-                    </span>
-                </button>
+                <div class="flex items-center gap-1">
+                  <button
+                    data-testid="annotation-item"
+                    class="flex-1 text-left text-[11px] px-2 py-1 rounded border"
+                    :class="selectedAnnotationId === ann.id ? 'border-sky-500 text-sky-200 ring-1 ring-sky-500/30' : 'border-slate-700 text-slate-300'"
+                    :style="getAnnotationItemStyle(ann, selectedAnnotationId === ann.id)"
+                    :data-ann-id="ann.id"
+                    :data-ann-display-id="ann.display_id"
+                    :data-ann-type="ann.type"
+                    :data-ann-label="ann.label"
+                    @click="selectAnnotation(ann.id)"
+                  >
+                      <span class="inline-flex items-center gap-2">
+                        <span
+                          class="inline-block w-2 h-2 rounded-full"
+                          :style="{ backgroundColor: getAnnotationColor(ann) }"
+                        />
+                        <span class="font-semibold">{{ ann.display_id }}</span>
+                        <span>{{ ann.type }} · {{ ann.detail_type ? ann.detail_type : ann.label }}</span>
+                      </span>
+                  </button>
+                  <button
+                    data-testid="annotation-remove"
+                    class="text-[10px] px-2 py-1 rounded border hover:bg-rose-900/20"
+                    :class="pendingDeleteAnnotationId === ann.id ? 'border-rose-500 text-rose-100 bg-rose-900/30' : 'border-rose-800 text-rose-300'"
+                    title="删除该标注"
+                    @click.stop="removeAnnotation(ann.id)"
+                  >
+                    {{ pendingDeleteAnnotationId === ann.id ? '确认删除' : '删除' }}
+                  </button>
+                </div>
               </li>
             </ul>
 
@@ -381,10 +519,17 @@ import { useBlinkControl } from '../composables/useBlinkControl'
 import { useFitsImagePool } from '../composables/useFitsImagePool'
 import { useImageLoader } from '../composables/useImageLoader'
 import { calculatePixelRange, renderStretchToRgba } from '../fits/stretchRenderer'
+import { fetchAnnotationHistory, fetchAnnotationRevision } from '../services/annotationHistoryApi'
 import { submitAnnotations } from '../services/annotationApi'
 import { fetchTasks } from '../services/taskApi'
 
 const emit = defineEmits(['task-changed', 'annotations-saved'])
+const props = defineProps({
+  revisionOverlay: {
+    type: Object,
+    default: null,
+  },
+})
 
 const stageWidth = ref(1024)
 const stageHeight = ref(768)
@@ -404,6 +549,14 @@ const isSubmitting = ref(false)
 const saveMessage = ref('')
 const selectedAnnotationId = ref('')
 const selectedLabel = ref('Unlabeled')
+const taskCatalogVisible = ref(false)
+const taskCatalogQuery = ref('')
+const undoDeleteVisible = ref(false)
+const undoDeleteMessage = ref('')
+const lastRemovedAnnotation = ref(null)
+const lastRemovedIndex = ref(-1)
+const pendingDeleteAnnotationId = ref('')
+let pendingDeleteTimerId = null
 const fitsCanvasRef = ref(null)
 const canvasHostRef = ref(null)
 const stageRef = ref(null)
@@ -413,6 +566,8 @@ const stretchRangeMin = ref(0)
 const stretchRangeMax = ref(1)
 const stretchMin = ref(0)
 const stretchMax = ref(1)
+const autoStretchEnabled = ref(true)
+const taskAutoStretchById = ref({})
 const invertDisplay = ref(false)
 const bboxStrokeWidth = ref(2)
 let hostResizeObserver = null
@@ -423,6 +578,51 @@ const taskProgressText = computed(() => {
   }
   return `${currentTaskIndex.value + 1} / ${taskList.value.length}`
 })
+
+const filteredTaskCatalog = computed(() => {
+  const keyword = String(taskCatalogQuery.value || '').trim().toLowerCase()
+  const mapped = taskList.value.map((task, index) => ({ task, index }))
+  if (!keyword) {
+    return mapped
+  }
+  return mapped.filter((item) => String(item.task.task_id || '').toLowerCase().includes(keyword))
+})
+
+const revisionOverlayItems = computed(() => props.revisionOverlay?.changed_items || [])
+
+function toOverlayRect(annotation) {
+  if (!annotation) {
+    return null
+  }
+  const x = Number(annotation.x)
+  const y = Number(annotation.y)
+  const width = Number(annotation.width)
+  const height = Number(annotation.height)
+  if (![x, y, width, height].every(Number.isFinite)) {
+    return null
+  }
+  return { x, y, width, height }
+}
+
+const revisionOverlayAddedRects = computed(() => revisionOverlayItems.value
+  .filter((item) => item?.change_type === 'added')
+  .map((item) => toOverlayRect(item.after))
+  .filter(Boolean))
+
+const revisionOverlayRemovedRects = computed(() => revisionOverlayItems.value
+  .filter((item) => item?.change_type === 'removed')
+  .map((item) => toOverlayRect(item.before))
+  .filter(Boolean))
+
+const revisionOverlayModifiedBeforeRects = computed(() => revisionOverlayItems.value
+  .filter((item) => item?.change_type === 'modified')
+  .map((item) => toOverlayRect(item.before))
+  .filter(Boolean))
+
+const revisionOverlayModifiedAfterRects = computed(() => revisionOverlayItems.value
+  .filter((item) => item?.change_type === 'modified')
+  .map((item) => toOverlayRect(item.after))
+  .filter(Boolean))
 
 const hasPrevTask = computed(() => currentTaskIndex.value > 0)
 const hasNextTask = computed(() => (
@@ -547,9 +747,26 @@ function resetAnnotationStates() {
   annotationDisplayCounter.value = 1
   selectedAnnotationId.value = ''
   selectedLabel.value = 'Unlabeled'
+  clearPendingDeleteState()
+  clearUndoState()
   draftRect.value = null
   drawStart.value = null
   currentPolygonPoints.value = []
+}
+
+function clearUndoState() {
+  undoDeleteVisible.value = false
+  undoDeleteMessage.value = ''
+  lastRemovedAnnotation.value = null
+  lastRemovedIndex.value = -1
+}
+
+function clearPendingDeleteState() {
+  pendingDeleteAnnotationId.value = ''
+  if (pendingDeleteTimerId) {
+    clearTimeout(pendingDeleteTimerId)
+    pendingDeleteTimerId = null
+  }
 }
 
 async function loadTaskAtIndex(index) {
@@ -565,8 +782,46 @@ async function loadTaskAtIndex(index) {
 
   currentTaskIndex.value = index
   resetAnnotationStates()
+  await loadLatestRevisionAnnotations(task.task_id)
   emit('task-changed', task.task_id)
   return true
+}
+
+async function loadLatestRevisionAnnotations(taskId) {
+  if (!taskId) {
+    return
+  }
+
+  try {
+    const history = await fetchAnnotationHistory(taskId)
+    const latest = history?.revisions?.[0]
+    if (!latest?.revision_id) {
+      return
+    }
+
+    const detail = await fetchAnnotationRevision(taskId, latest.revision_id)
+    const revisionAnnotations = Array.isArray(detail?.annotations) ? detail.annotations : []
+    const restored = revisionAnnotations.map((ann, index) => ({
+      id: `hist-${taskId}-${index}-${Date.now()}`,
+      display_id: `A${String(index + 1).padStart(4, '0')}`,
+      type: 'bbox',
+      x: Number(ann.x) || 0,
+      y: Number(ann.y) || 0,
+      width: Number(ann.width) || 0,
+      height: Number(ann.height) || 0,
+      label: ann.label || 'Unlabeled',
+      detail_type: ann.detail_type,
+    }))
+
+    annotations.value = restored
+    annotationDisplayCounter.value = restored.length + 1
+
+    if (detail?.source_view && ['new', 'new_marked', 'old'].includes(detail.source_view)) {
+      setCurrentView(detail.source_view)
+    }
+  } catch {
+    // 历史读取失败时保持空状态，避免阻塞任务切换。
+  }
 }
 
 async function goToTaskByOffset(offset) {
@@ -588,6 +843,22 @@ async function goToPreviousTask() {
 
 async function goToNextTask() {
   await goToTaskByOffset(1)
+}
+
+function openTaskCatalog() {
+  taskCatalogQuery.value = ''
+  taskCatalogVisible.value = true
+}
+
+function closeTaskCatalog() {
+  taskCatalogVisible.value = false
+}
+
+async function jumpToTaskIndex(index) {
+  const loaded = await loadTaskAtIndex(index)
+  if (loaded) {
+    closeTaskCatalog()
+  }
 }
 
 function onContainerWheel(event) {
@@ -617,6 +888,106 @@ function onStretchMaxInput(event) {
     return
   }
   stretchMax.value = Math.max(value, stretchMin.value)
+}
+
+function onAutoStretchToggle(event) {
+  autoStretchEnabled.value = Boolean(event?.target?.checked)
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value))
+}
+
+function quantile(sortedValues, ratio) {
+  if (!Array.isArray(sortedValues) || sortedValues.length === 0) {
+    return 0
+  }
+  const index = clamp(Math.floor((sortedValues.length - 1) * ratio), 0, sortedValues.length - 1)
+  return sortedValues[index]
+}
+
+function buildHistogramAutoStretch(pixels) {
+  const range = calculatePixelRange(pixels)
+  const allFinite = []
+  const maxSamples = 50000
+  const step = Math.max(1, Math.floor(pixels.length / maxSamples))
+  for (let i = 0; i < pixels.length; i += step) {
+    const value = Number(pixels[i])
+    if (Number.isFinite(value)) {
+      allFinite.push(value)
+    }
+  }
+
+  if (allFinite.length < 8) {
+    return {
+      rangeMin: range.min,
+      rangeMax: range.max,
+      stretchMin: range.min,
+      stretchMax: range.max,
+    }
+  }
+
+  allFinite.sort((a, b) => a - b)
+  const low = quantile(allFinite, 0.003)
+  const high = quantile(allFinite, 0.997)
+
+  if (!Number.isFinite(low) || !Number.isFinite(high) || high <= low) {
+    return {
+      rangeMin: range.min,
+      rangeMax: range.max,
+      stretchMin: range.min,
+      stretchMax: range.max,
+    }
+  }
+
+  return {
+    rangeMin: range.min,
+    rangeMax: range.max,
+    stretchMin: clamp(low, range.min, range.max),
+    stretchMax: clamp(high, range.min, range.max),
+  }
+}
+
+function applyStretchForNode(node) {
+  if (!node?.pixels || node.pixels.length === 0) {
+    return
+  }
+
+  if (!autoStretchEnabled.value) {
+    const range = calculatePixelRange(node.pixels)
+    stretchRangeMin.value = range.min
+    stretchRangeMax.value = range.max
+    stretchMin.value = range.min
+    stretchMax.value = range.max
+    syncStageSizeToHost()
+    return
+  }
+
+  const taskId = String(activeTask.value?.task_id || '')
+  if (!taskId) {
+    const range = calculatePixelRange(node.pixels)
+    stretchRangeMin.value = range.min
+    stretchRangeMax.value = range.max
+    stretchMin.value = range.min
+    stretchMax.value = range.max
+    syncStageSizeToHost()
+    return
+  }
+
+  let preset = taskAutoStretchById.value[taskId]
+  if (!preset) {
+    preset = buildHistogramAutoStretch(node.pixels)
+    taskAutoStretchById.value = {
+      ...taskAutoStretchById.value,
+      [taskId]: preset,
+    }
+  }
+
+  stretchRangeMin.value = preset.rangeMin
+  stretchRangeMax.value = preset.rangeMax
+  stretchMin.value = clamp(preset.stretchMin, preset.rangeMin, preset.rangeMax)
+  stretchMax.value = clamp(preset.stretchMax, preset.rangeMin, preset.rangeMax)
+  syncStageSizeToHost()
 }
 
 function onInvertChange(event) {
@@ -778,6 +1149,56 @@ function selectAnnotation(annotationId) {
   } else {
     selectedLabel.value = 'Unlabeled'
   }
+}
+
+function removeAnnotation(annotationId) {
+  const target = annotations.value.find((item) => item.id === annotationId)
+  if (!target) {
+    return
+  }
+
+  if (pendingDeleteAnnotationId.value !== annotationId) {
+    clearPendingDeleteState()
+    pendingDeleteAnnotationId.value = annotationId
+    undoDeleteMessage.value = `请在2秒内再次点击“删除”以确认删除 ${target.display_id}`
+    pendingDeleteTimerId = setTimeout(() => {
+      clearPendingDeleteState()
+      if (!undoDeleteVisible.value) {
+        undoDeleteMessage.value = ''
+      }
+    }, 2000)
+    return
+  }
+
+  clearPendingDeleteState()
+
+  const index = annotations.value.findIndex((item) => item.id === annotationId)
+  if (index < 0) {
+    return
+  }
+
+  clearUndoState()
+  lastRemovedAnnotation.value = target
+  lastRemovedIndex.value = index
+
+  annotations.value = annotations.value.filter((item) => item.id !== annotationId)
+  if (selectedAnnotationId.value === annotationId) {
+    selectedAnnotationId.value = ''
+    selectedLabel.value = 'Unlabeled'
+  }
+
+  undoDeleteVisible.value = true
+  undoDeleteMessage.value = `已删除 ${target.display_id}`
+}
+
+function undoRemoveAnnotation() {
+  if (!lastRemovedAnnotation.value) {
+    clearUndoState()
+    return
+  }
+  const insertIndex = Math.max(0, Math.min(lastRemovedIndex.value, annotations.value.length))
+  annotations.value.splice(insertIndex, 0, lastRemovedAnnotation.value)
+  clearUndoState()
 }
 
 function onSelectedLabelChange(event) {
@@ -1075,16 +1496,11 @@ async function loadInitialTask() {
 }
 
 watch(activeFitsNode, (node) => {
-  if (!node?.pixels || node.pixels.length === 0) {
-    return
-  }
+  applyStretchForNode(node)
+})
 
-  const range = calculatePixelRange(node.pixels)
-  stretchRangeMin.value = range.min
-  stretchRangeMax.value = range.max
-  stretchMin.value = range.min
-  stretchMax.value = range.max
-  syncStageSizeToHost()
+watch(autoStretchEnabled, () => {
+  applyStretchForNode(activeFitsNode.value)
 })
 
 watch(
@@ -1096,6 +1512,12 @@ watch(
 )
 
 function onKeyDown(event) {
+  if (event.key === 'Escape' && taskCatalogVisible.value) {
+    event.preventDefault()
+    closeTaskCatalog()
+    return
+  }
+
   if (event.key === 'q' || event.key === 'Q') {
     event.preventDefault()
     goToPreviousTask()
@@ -1135,8 +1557,9 @@ function resolveTeleportTargets() {
   if (typeof document === 'undefined') {
     return
   }
-  hotkeysTeleportTarget.value = document.getElementById('hotkeys-extra')
-  inspectorTeleportTarget.value = document.getElementById('inspector-extra')
+  const fallbackTarget = canvasHostRef.value?.parentElement ?? null
+  hotkeysTeleportTarget.value = document.getElementById('hotkeys-extra') || fallbackTarget
+  inspectorTeleportTarget.value = document.getElementById('inspector-extra') || fallbackTarget
 }
 
 onMounted(async () => {
@@ -1157,6 +1580,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   stopMiddlePan()
+  clearPendingDeleteState()
+  clearUndoState()
   if (hostResizeObserver) {
     hostResizeObserver.disconnect()
     hostResizeObserver = null
