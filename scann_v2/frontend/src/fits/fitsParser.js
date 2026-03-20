@@ -50,23 +50,56 @@ export function parseFitsArrayBuffer(buffer) {
   const width = Number(headers.NAXIS1)
   const height = naxis >= 2 ? Number(headers.NAXIS2) : 1
 
-  if (bitpix !== -32) {
-    throw new Error(`Unsupported BITPIX: ${bitpix}`)
-  }
+  // 支持多种FITS数据类型
+  const bytesPerPixel = Math.abs(bitpix) / 8
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     throw new Error('Invalid FITS dimensions')
   }
 
   const pixelCount = width * height
-  const dataByteLength = pixelCount * 4
+  const dataByteLength = pixelCount * bytesPerPixel
   if (dataStart + dataByteLength > bytes.length) {
     throw new Error('FITS data section is truncated')
   }
 
+  let pixels
   const view = new DataView(buffer, dataStart, dataByteLength)
-  const pixels = new Float32Array(pixelCount)
-  for (let i = 0; i < pixelCount; i += 1) {
-    pixels[i] = view.getFloat32(i * 4, false)
+
+  switch (bitpix) {
+    case 8: // 8位无符号字节
+      pixels = new Float32Array(pixelCount)
+      for (let i = 0; i < pixelCount; i += 1) {
+        pixels[i] = view.getUint8(i)
+      }
+      break
+    case 16: // 16位有符号整数
+      pixels = new Float32Array(pixelCount)
+      for (let i = 0; i < pixelCount; i += 1) {
+        pixels[i] = view.getInt16(i * 2, false)
+      }
+      break
+    case 32: // 32位有符号整数
+      pixels = new Float32Array(pixelCount)
+      for (let i = 0; i < pixelCount; i += 1) {
+        pixels[i] = view.getInt32(i * 4, false)
+      }
+      break
+    case -32: // 32位浮点数
+      pixels = new Float32Array(pixelCount)
+      for (let i = 0; i < pixelCount; i += 1) {
+        pixels[i] = view.getFloat32(i * 4, false)
+      }
+      break
+    case -64: // 64位双精度浮点数
+      const doublePixels = new Float64Array(pixelCount)
+      for (let i = 0; i < pixelCount; i += 1) {
+        doublePixels[i] = view.getFloat64(i * 8, false)
+      }
+      // 转换为Float32以保持一致性
+      pixels = new Float32Array(doublePixels)
+      break
+    default:
+      throw new Error(`Unsupported BITPIX: ${bitpix}`)
   }
 
   return {

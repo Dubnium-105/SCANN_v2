@@ -1,9 +1,29 @@
 <template>
   <div class="h-full grid grid-rows-[56px_1fr]">
     <HeaderBar :username="authState.username" @logout="onLogout" />
-    <main class="grid grid-cols-[220px_1fr_300px] gap-3 p-3 min-h-0">
-      <aside class="rounded-lg border border-slate-800 bg-slate-900 p-3">
-        <p class="text-sm text-slate-300">Tools</p>
+    <main class="grid grid-cols-1 md:grid-cols-[1fr_250px] lg:grid-cols-[200px_1fr_300px] gap-3 p-3 min-h-0">
+      <aside class="hidden lg:block rounded-lg border border-slate-800 bg-slate-900 p-3 overflow-y-auto">
+        <p class="text-sm font-semibold text-slate-200 mb-2">快捷键 (Hotkeys)</p>
+        <div class="text-xs text-slate-400 space-y-3">
+          <div>
+            <p class="text-emerald-400 font-medium mb-1">真实目标 (Real)</p>
+            <ul class="space-y-1">
+              <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">1</kbd> - 小行星</li>
+              <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">2</kbd> - 超新星</li>
+              <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">3</kbd> - 变星</li>
+            </ul>
+          </div>
+          <div>
+            <p class="text-rose-400 font-medium mb-1">伪目标 (Bogus)</p>
+            <ul class="space-y-1">
+              <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">4</kbd> - 卫星轨迹</li>
+              <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">5</kbd> - 噪声</li>
+              <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">6</kbd> - 衍射芒</li>
+              <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">7</kbd> - CMOS结露</li>
+              <li><kbd class="bg-slate-700 px-1 rounded text-slate-200">8</kbd> - 对应体</li>
+            </ul>
+          </div>
+        </div>
       </aside>
 
       <CanvasPanel @task-changed="onTaskChanged" @annotations-saved="onAnnotationsSaved" />

@@ -15,6 +15,7 @@ class AnnotationBox(BaseModel):
     width: float = Field(..., ge=0)
     height: float = Field(..., ge=0)
     label: Optional[str] = None
+    detail_type: Optional[str] = None
 
 
 class AnnotationSaveRequest(BaseModel):

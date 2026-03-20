@@ -138,6 +138,23 @@ def render_fits_png(
     return Response(content=png_data, media_type="image/png")
 
 
+@api_router.get("/fits/{file_path:path}")
+def fetch_fits_binary(
+    file_path: str,
+    current_user: AuthUser = Depends(get_current_user),
+) -> Response:
+    _ = current_user
+    engine = get_fits_engine()
+    try:
+        fits_data = engine.get_fits_binary(file_path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="FITS file not found") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Failed to fetch FITS") from exc
+
+    return Response(content=fits_data, media_type="application/octet-stream")
+
+
 @api_router.post("/annotations/{task_id}", response_model=AnnotationSaveResponse)
 def save_annotations(
     task_id: str,

@@ -74,3 +74,11 @@ class FITSEngine:
         png_bytes = buffer.getvalue()
         self._cache[cache_key] = png_bytes
         return png_bytes
+
+    def get_fits_binary(self, relative_path: str) -> bytes:
+        """返回FITS文件的原始二进制数据。"""
+        file_path = self._resolve_file(relative_path)
+        if not file_path.exists() or not file_path.is_file():
+            raise FileNotFoundError(str(file_path))
+
+        return file_path.read_bytes()

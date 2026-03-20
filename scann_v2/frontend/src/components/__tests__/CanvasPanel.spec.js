@@ -185,6 +185,12 @@ describe('CanvasPanel', () => {
     await stage.trigger('mouseup', { clientX: 42, clientY: 58 })
     await flushPromises()
 
+    const item = wrapper.findAll('[data-testid="annotation-item"]')[0]
+    await item.trigger('click')
+    const select = wrapper.get('[data-testid="annotation-label-select"]')
+    await select.setValue('real:asteroid')
+    await flushPromises()
+
     await wrapper.get('[data-testid="submit-annotations"]').trigger('click')
     await flushPromises()
 
@@ -253,7 +259,7 @@ describe('CanvasPanel', () => {
     expect(polygonItems.length).toBeGreaterThanOrEqual(1)
   })
 
-  it('updates selected annotation label to Artifact from annotation list', async () => {
+  it('updates selected annotation label to target type from annotation list', async () => {
     const wrapper = mount(CanvasPanel, {
       global: {
         stubs: globalStubs,
@@ -272,9 +278,9 @@ describe('CanvasPanel', () => {
     await item.trigger('click')
 
     const select = wrapper.get('[data-testid="annotation-label-select"]')
-    await select.setValue('Artifact')
+    await select.setValue('real:asteroid')
     await flushPromises()
 
-    expect(wrapper.findAll('[data-testid="annotation-item"]')[0].attributes('data-ann-label')).toBe('Artifact')
+    expect(wrapper.findAll('[data-testid="annotation-item"]')[0].attributes('data-ann-label')).toBe('real')
   })
 })

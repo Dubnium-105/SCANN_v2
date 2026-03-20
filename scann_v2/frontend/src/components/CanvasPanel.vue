@@ -250,13 +250,13 @@
               :data-ann-label="ann.label"
               @click="selectAnnotation(ann.id)"
             >
-              {{ ann.type }} · {{ ann.label }}
+              {{ ann.type }} · {{ ann.detail_type ? ann.detail_type : ann.label }}
             </button>
           </li>
         </ul>
 
         <label class="text-[11px] text-slate-300 block">
-          Label
+          Target Type (目标类型)
           <select
             data-testid="annotation-label-select"
             class="mt-1 w-full text-xs bg-slate-800 text-slate-200 border border-slate-700 rounded px-2 py-1"
@@ -264,9 +264,19 @@
             :value="selectedLabel"
             @change="onSelectedLabelChange"
           >
-            <option value="Unlabeled">Unlabeled</option>
-            <option value="True Positive">True Positive</option>
-            <option value="Artifact">Artifact</option>
+            <option value="Unlabeled">Unlabeled (未标记)</option>
+            <optgroup label="Real (真实目标)">
+              <option value="real:asteroid">Asteroid (小行星)</option>
+              <option value="real:supernova">Supernova (超新星)</option>
+              <option value="real:variable_star">Variable Star (变星)</option>
+            </optgroup>
+            <optgroup label="Bogus (伪目标)">
+              <option value="bogus:satellite_trail">Satellite Trail (卫星轨迹)</option>
+              <option value="bogus:noise">Noise (噪声)</option>
+              <option value="bogus:diffraction_spike">Diffraction Spike (衍射芒)</option>
+              <option value="bogus:cmos_condensation">CMOS Condensation (CMOS结露)</option>
+              <option value="bogus:corresponding">Corresponding (对应体)</option>
+            </optgroup>
           </select>
         </label>
       </div>
@@ -440,21 +450,38 @@ function toFlatPoints(points) {
 }
 
 function createAnnotation(base) {
+  let initialLabel = 'Unlabeled'
+  let initialDetail = undefined
+
+  if (selectedLabel.value && selectedLabel.value !== 'Unlabeled') {
+    const parts = selectedLabel.value.split(':')
+    initialLabel = parts[0]
+    if (parts.length > 1) {
+      initialDetail = parts[1]
+    }
+  }
+
   return {
     id: `ann-${Date.now()}-${annotations.value.length}`,
-    label: 'Unlabeled',
+    label: initialLabel,
+    detail_type: initialDetail,
     ...base,
   }
 }
 
 function addAnnotation(annotation) {
   annotations.value.push(annotation)
+  selectAnnotation(annotation.id)
 }
 
 function selectAnnotation(annotationId) {
   selectedAnnotationId.value = annotationId
   const selected = annotations.value.find((item) => item.id === annotationId)
-  selectedLabel.value = selected?.label ?? 'Unlabeled'
+  if (selected && selected.label && selected.label !== 'Unlabeled') {
+    selectedLabel.value = selected.detail_type ? `${selected.label}:${selected.detail_type}` : selected.label
+  } else {
+    selectedLabel.value = 'Unlabeled'
+  }
 }
 
 function onSelectedLabelChange(event) {
@@ -464,11 +491,23 @@ function onSelectedLabelChange(event) {
     return
   }
 
+  let newLabel = 'Unlabeled'
+  let newDetailType = undefined
+
+  if (value !== 'Unlabeled') {
+    const parts = value.split(':')
+    newLabel = parts[0]
+    if (parts.length > 1) {
+      newDetailType = parts[1]
+    }
+  }
+
   annotations.value = annotations.value.map((item) =>
     item.id === selectedAnnotationId.value
       ? {
           ...item,
-          label: value,
+          label: newLabel,
+          detail_type: newDetailType,
         }
       : item,
   )
@@ -590,10 +629,12 @@ function onStageMouseUp(event) {
 
 async function submitCurrentAnnotations() {
   saveMessage.value = ''
-  const bboxAnnotations = annotations.value.filter((ann) => ann.type === 'bbox')
+  const bboxAnnotations = annotations.value.filter(
+    (ann) => ann.type === 'bbox' && ann.label !== 'Unlabeled'
+  )
 
   if (!activeTask.value || bboxAnnotations.length === 0) {
-    saveMessage.value = 'No bbox annotations to submit'
+    saveMessage.value = 'No valid bbox annotations to submit'
     return
   }
 
@@ -611,6 +652,7 @@ async function submitCurrentAnnotations() {
         width: ann.width,
         height: ann.height,
         label: ann.label,
+        detail_type: ann.detail_type,
       })),
     }
     const response = await submitAnnotations(activeTask.value.task_id, payload)
@@ -662,11 +704,37 @@ watch(
   { immediate: true },
 )
 
+function onKeyDown(event) {
+  if (!selectedAnnotationId.value) return
+
+  const keyMap = {
+    '1': 'real:asteroid',
+    '2': 'real:supernova',
+    '3': 'real:variable_star',
+    '4': 'bogus:satellite_trail',
+    '5': 'bogus:noise',
+    '6': 'bogus:diffraction_spike',
+    '7': 'bogus:cmos_condensation',
+    '8': 'bogus:corresponding',
+  }
+
+  const newLabelStr = keyMap[event.key]
+  if (newLabelStr) {
+    onSelectedLabelChange({ target: { value: newLabelStr } })
+  } else if (event.key === 'Backspace' || event.key === 'Delete') {
+    annotations.value = annotations.value.filter((ann) => ann.id !== selectedAnnotationId.value)
+    selectedAnnotationId.value = ''
+    selectedLabel.value = 'Unlabeled'
+  }
+}
+
 onMounted(async () => {
+  window.addEventListener('keydown', onKeyDown)
   await loadInitialTask()
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeyDown)
   releaseObjectUrls()
 })
 </script>
