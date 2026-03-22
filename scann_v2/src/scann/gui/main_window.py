@@ -630,14 +630,16 @@ class MainWindow(QMainWindow):
         dx: float,
         dy: float,
         aligned_old: Optional[np.ndarray] = None,
+        new_image: Optional[np.ndarray] = None,
     ) -> Optional[tuple[int, int, int, int]]:
-        """根据平移量和旧图有效区域计算重叠裁剪区域。"""
+        """根据平移量和新旧图有效区域计算重叠裁剪区域（取交集以移除L型黑边）。"""
         return self.pair_controller.calc_overlap_crop_bounds(
             w=w,
             h=h,
             dx=dx,
             dy=dy,
             aligned_old=aligned_old,
+            new_image=new_image,
         )
 
     def _on_pair_selected(self, index: int) -> None:

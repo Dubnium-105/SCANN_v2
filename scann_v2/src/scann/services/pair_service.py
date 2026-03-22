@@ -95,15 +95,17 @@ class PairService:
             return None
 
         arr = np.nan_to_num(image.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
-        mask = np.abs(arr) > 1e-6
+        # 使用更敏感的阈值来检测有效信号
+        mask = np.abs(arr) > 1e-4
         if not np.any(mask):
             return None
 
         row_ratio = np.mean(mask, axis=1)
         col_ratio = np.mean(mask, axis=0)
 
-        row_valid = row_ratio > 0.98
-        col_valid = col_ratio > 0.98
+        # 使用更宽松的阈值来检测有效行/列
+        row_valid = row_ratio > 0.90
+        col_valid = col_ratio > 0.90
         if not np.any(row_valid):
             row_valid = np.any(mask, axis=1)
         if not np.any(col_valid):
@@ -126,21 +128,44 @@ class PairService:
         dx: float,
         dy: float,
         aligned_old: np.ndarray | None = None,
+        new_image: np.ndarray | None = None,
     ) -> tuple[int, int, int, int] | None:
-        """根据平移量和旧图有效区域，计算重叠裁剪区域。"""
+        """根据平移量和新旧图有效区域，计算重叠裁剪区域（取交集以移除L型黑边）。"""
+        # 计算几何重叠区域
         x0 = max(0, int(math.ceil(dx)))
         x1 = min(w, int(math.floor(w + dx)))
         y0 = max(0, int(math.ceil(dy)))
         y1 = min(h, int(math.floor(h + dy)))
 
+        # 获取旧图的有效区域边界
         if aligned_old is not None:
-            valid = self.calc_nonzero_valid_bounds(aligned_old)
-            if valid is not None:
-                vx0, vx1, vy0, vy1 = valid
+            valid_old = self.calc_nonzero_valid_bounds(aligned_old)
+            if valid_old is not None:
+                vx0, vx1, vy0, vy1 = valid_old
                 x0 = max(x0, vx0)
                 x1 = min(x1, vx1)
                 y0 = max(y0, vy0)
                 y1 = min(y1, vy1)
+
+        # 获取新图的有效区域边界
+        if new_image is not None:
+            valid_new = self.calc_nonzero_valid_bounds(new_image)
+            if valid_new is not None:
+                # 将新图的有效区域坐标转换到旧图坐标系
+                # 新图坐标 (x, y) 对应对齐后的坐标 (x - dx, y - dy)
+                # 新图有效区域 [vx0, vx1) 转换到旧图坐标系为 [vx0 - dx, vx1 - dx)
+                # 然后再与几何重叠区域取交集
+                vx0, vx1, vy0, vy1 = valid_new
+                # 计算新图有效区域在旧图坐标系中的边界
+                new_x0 = int(math.ceil(dx + vx0))  # 新图左边框在旧图坐标系中的位置
+                new_x1 = int(math.floor(dx + vx1))  # 新图右边框在旧图坐标系中的位置
+                new_y0 = int(math.ceil(dy + vy0))
+                new_y1 = int(math.floor(dy + vy1))
+                # 与当前边界取交集
+                x0 = max(x0, new_x0)
+                x1 = min(x1, new_x1)
+                y0 = max(y0, new_y0)
+                y1 = min(y1, new_y1)
 
         if x1 <= x0 or y1 <= y0:
             return None

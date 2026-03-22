@@ -548,6 +548,7 @@ class FitsAnnotationBackend(AnnotationBackend):
             dx=result.dx,
             dy=result.dy,
             aligned_old=result.aligned_old,
+            new_image=new_data,
         )
         if crop_bounds is None:
             logger.warning("标注集对齐后无有效重叠区域: %s", pair.name)

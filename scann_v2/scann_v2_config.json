@@ -1,6 +1,6 @@
 {
-  "new_folder": "",
-  "old_folder": "",
+  "new_folder": "G:/wksp/SCANN_v2/dataset/new",
+  "old_folder": "G:/wksp/SCANN_v2/dataset/old",
   "save_folder": "",
   "telescope": {
     "pixel_size_um": 9.0,
@@ -50,7 +50,10 @@
   "blink_speed_ms": 500,
   "mpcorb_path": "",
   "limit_magnitude": 20.0,
-  "recent_folders": [],
+  "recent_folders": [
+    "G:/wksp/SCANN_v2/dataset/old",
+    "G:/wksp/SCANN_v2/dataset/new"
+  ],
   "max_recent_count": 10,
   "max_threads": 4,
   "auto_save_annotations": false,
@@ -62,7 +65,7 @@
   "show_markers": true,
   "show_mpcorb": true,
   "show_known_objects": true,
-  "histogram_visible": false,
+  "histogram_visible": true,
   "sidebar_collapsed": false,
   "sidebar_width": 240,
   "window_width": 2560,

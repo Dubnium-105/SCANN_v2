@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication
 
 from scann.core.candidate_detector import DetectionParams
@@ -71,7 +72,12 @@ class DetectionController:
     def resolve_current_new_image_path(self) -> str | None:
         return self._resolve_current_new_image_path()
 
-    def batch_align(self) -> None:
+    def batch_align(self, force: bool = False) -> None:
+        """执行批量对齐。
+        
+        Args:
+            force: 是否强制重新对齐（忽略已有的对齐产物）
+        """
         if not self._window._image_pairs:
             self._window._show_message("请先加载新旧图文件夹配对")
             return
@@ -87,12 +93,19 @@ class DetectionController:
         self._window.btn_align.setEnabled(False)
         self._window.act_align.setEnabled(False)
 
-        self._window._show_message(f"开始批量对齐: 共 {total} 对", 3000)
+        # 获取键盘修饰键状态
+        modifiers = QApplication.keyboardModifiers()
+        force_realign = force or (modifiers & Qt.ShiftModifier)
+
+        if force_realign:
+            self._window._show_message(f"强制重新对齐模式: 共 {total} 对", 3000)
+        else:
+            self._window._show_message(f"开始批量对齐: 共 {total} 对", 3000)
 
         try:
             for idx, pair in enumerate(self._window._image_pairs, start=1):
                 try:
-                    if self._window._pair_has_aligned_artifacts(pair):
+                    if not force_realign and self._window._pair_has_aligned_artifacts(pair):
                         skip_count += 1
                         self._window._logger.info(
                             "[%s/%s] 已有对齐裁剪标记，跳过: %s",
@@ -193,6 +206,7 @@ class DetectionController:
                             dx=result.dx,
                             dy=result.dy,
                             aligned_old=result.aligned_old,
+                            new_image=new_data,
                         )
                         if crop_bounds is None:
                             fail_count += 1
