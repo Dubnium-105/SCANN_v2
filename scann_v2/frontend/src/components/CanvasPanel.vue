@@ -66,7 +66,32 @@
                   旧图
                 </button>
               </div>
-              <p class="text-[10px] text-slate-400">快捷键：Tab / Space 循环切换</p>
+              <p class="text-[10px] text-slate-400">快捷键：Space 切换视图 / Tab 开关闪烁</p>
+            </div>
+
+            <div class="space-y-2">
+              <p class="text-xs text-slate-200">闪烁 (Blink)</p>
+              <button
+                data-testid="blink-toggle"
+                class="w-full text-xs px-2 py-1.5 rounded border"
+                :class="blinkEnabled ? 'border-amber-500 text-amber-300 bg-amber-950/30' : 'border-slate-700 text-slate-300'"
+                @click="onBlinkToggle"
+              >
+                {{ blinkEnabled ? '停止闪烁' : '开始闪烁' }}
+              </button>
+              <div class="space-y-1">
+                <label class="text-[10px] text-slate-400">间隔: {{ (blinkInterval / 1000).toFixed(1) }}s</label>
+                <input
+                  data-testid="blink-interval-slider"
+                  type="range"
+                  class="w-full"
+                  min="100"
+                  max="3000"
+                  step="100"
+                  :value="blinkInterval"
+                  @input="onBlinkIntervalInput"
+                >
+              </div>
             </div>
 
             <div class="space-y-2">
@@ -703,10 +728,27 @@ const stretchedRgba = computed(() => {
 
 const stretchDebug = computed(() => Array.from(stretchedRgba.value.slice(0, 16)).join(','))
 
-useBlinkControl({
+const {
+  blinkInterval,
+  blinkEnabled,
+  toggleBlink,
+  setBlinkInterval,
+} = useBlinkControl({
   currentView,
   setCurrentView,
 })
+
+function onBlinkToggle() {
+  toggleBlink()
+}
+
+function onBlinkIntervalInput(event) {
+  const value = Number(event?.target?.value)
+  if (!Number.isFinite(value)) {
+    return
+  }
+  setBlinkInterval(value)
+}
 
 function onDragEnd(event) {
   const position = event?.target?.position?.()

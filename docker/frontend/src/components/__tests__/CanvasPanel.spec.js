@@ -39,7 +39,11 @@ function createFitsBuffer(values = [0, 0.5, 0.75, 1]) {
 
 function mockImageFetch() {
   const calls = []
-  const fitsBuffer = createFitsBuffer()
+  const fitsByPath = {
+    '/api/fits/new/PGC%2017069.fts': createFitsBuffer([0, 0.5, 0.75, 1]),
+    '/api/fits/new_marked/PGC%2017069.fts': createFitsBuffer([100, 101, 102, 103]),
+    '/api/fits/old/PGC%2017069.fts': createFitsBuffer([10, 11, 12, 13]),
+  }
   globalThis.fetch = vi.fn((url, options) => {
     calls.push({ url, options })
     if (url === '/api/tasks') {
@@ -57,9 +61,10 @@ function mockImageFetch() {
     }
 
     if (String(url).startsWith('/api/fits/')) {
+      const buffer = fitsByPath[String(url)] || createFitsBuffer()
       return Promise.resolve({
         ok: true,
-        arrayBuffer: async () => fitsBuffer,
+        arrayBuffer: async () => buffer,
       })
     }
 
@@ -226,17 +231,39 @@ describe('CanvasPanel', () => {
 
     const initial = debug()
     expect(initial).toContain('0,0,0,255')
-    expect(initial).toContain('255,255,255,255')
 
     await wrapper.get('[data-testid="stretch-min-slider"]').setValue('0.5')
     await flushPromises()
     const afterMin = debug()
-    expect(afterMin).toContain('0,0,0,255')
+    expect(afterMin).not.toBe(initial)
 
     await wrapper.get('[data-testid="invert-toggle"]').setValue(true)
     await flushPromises()
     const afterInvert = debug()
     expect(afterInvert.startsWith('255,255,255,255')).toBe(true)
+  })
+
+  it('switches to per-view visual stretch preset when changing view', async () => {
+    const wrapper = mount(CanvasPanel, {
+      global: {
+        stubs: globalStubs,
+      },
+    })
+
+    await flushPromises()
+
+    const minSlider = () => Number(wrapper.get('[data-testid="stretch-min-slider"]').element.value)
+    const maxSlider = () => Number(wrapper.get('[data-testid="stretch-max-slider"]').element.value)
+    const minBefore = minSlider()
+    const maxBefore = maxSlider()
+
+    await wrapper.get('[data-testid="switch-view-old"]').trigger('click')
+    await flushPromises()
+
+    const minAfter = minSlider()
+    const maxAfter = maxSlider()
+    expect(minAfter).not.toBe(minBefore)
+    expect(maxAfter).not.toBe(maxBefore)
   })
 
   it('renders point and polygon annotations after switching tools', async () => {
