@@ -196,6 +196,25 @@ def _match_intensity_scale(aligned: np.ndarray, reference: np.ndarray) -> np.nda
     return mapped.astype(np.float32)
 
 
+def _estimate_translation(reference_image: np.ndarray, moving_image: np.ndarray) -> tuple[float, float] | None:
+    """估计将 moving 平移到 reference 所需的位移（dx, dy）。"""
+    import cv2
+
+    ref = _enhance_stars(_normalize_for_alignment(_to_gray_f32(reference_image)))
+    mov = _enhance_stars(_normalize_for_alignment(_to_gray_f32(moving_image)))
+    h, w = ref.shape[:2]
+    if h < 16 or w < 16:
+        return None
+
+    window = cv2.createHanningWindow((w, h), cv2.CV_32F)
+    (dx, dy), response = cv2.phaseCorrelate(ref, mov, window)
+    if not np.isfinite(dx) or not np.isfinite(dy):
+        return None
+    if response < 1e-4:
+        return None
+    return float(dx), float(dy)
+
+
 def _align_phase_correlation(
     new_image: np.ndarray,
     old_image: np.ndarray,
@@ -546,11 +565,15 @@ def _align_siril(
         # Siril 结果在部分版本中为归一化 32-bit，这里将其映射回旧图亮度范围
         aligned = _match_intensity_scale(aligned, old_image)
 
-        # Siril 使用 setref=1 意味着以新图为参考，对齐后旧图已与新图对齐
-        # 不再需要用相位相关估计微调，直接使用 dx=0, dy=0
-        # 这样可以避免相位相关因黑边干扰而估计错误
-        dx = 0.0
-        dy = 0.0
+        # 对齐后的旧图已与新图同坐标系。为了 marker 可追踪性，
+        # 这里估计“原旧图 -> 对齐旧图”的近似平移量，失败时回退 0。
+        estimated_shift = _estimate_translation(aligned, old_image)
+        if estimated_shift is None:
+            dx = 0.0
+            dy = 0.0
+        else:
+            dx, dy = estimated_shift
+            logger.info("Siril estimated shift: dx=%.3f dy=%.3f", dx, dy)
 
         return AlignResult(
             aligned_old=aligned,

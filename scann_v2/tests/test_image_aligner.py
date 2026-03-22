@@ -127,6 +127,60 @@ class TestImageAlignCrop:
         assert x0 >= 4, f"x0 should be >= 4, got {x0}"
         assert x1 <= 10, f"x1 should be <= 10, got {x1}"
 
+    def test_calc_overlap_crop_bounds_prefers_direct_aligned_overlap(self):
+        """当提供 new_image + aligned_old 时，优先按共同有效区域裁剪。"""
+        service = PairService()
+
+        w, h = 12, 10
+        new_image = np.ones((h, w), dtype=np.float32)
+        aligned_old = np.ones((h, w), dtype=np.float32)
+
+        # 模拟 Siril 对齐后旧图出现左侧和顶部黑边
+        aligned_old[:, :4] = 0.0
+        aligned_old[:2, :] = 0.0
+
+        crop_bounds = service.calc_overlap_crop_bounds(
+            w=w,
+            h=h,
+            dx=0.0,
+            dy=0.0,
+            aligned_old=aligned_old,
+            new_image=new_image,
+        )
+
+        assert crop_bounds is not None
+        x0, x1, y0, y1 = crop_bounds
+        assert x0 >= 4, f"x0 should be >= 4, got {x0}"
+        assert y0 >= 2, f"y0 should be >= 2, got {y0}"
+        assert x1 <= w and y1 <= h
+
+    def test_calc_overlap_crop_bounds_removes_edge_floor_band(self):
+        """边缘低值填充（非0）也应被裁掉，避免视觉黑边残留。"""
+        service = PairService()
+
+        h, w = 12, 14
+        new_image = np.full((h, w), 1200.0, dtype=np.float32)
+        aligned_old = np.full((h, w), 1200.0, dtype=np.float32)
+
+        # 模拟 Siril/插值填充后的“边缘低值带”（非0）
+        aligned_old[:, :3] = 862.0
+        aligned_old[:2, :] = 862.0
+
+        crop_bounds = service.calc_overlap_crop_bounds(
+            w=w,
+            h=h,
+            dx=0.0,
+            dy=0.0,
+            aligned_old=aligned_old,
+            new_image=new_image,
+        )
+
+        assert crop_bounds is not None
+        x0, x1, y0, y1 = crop_bounds
+        assert x0 >= 3, f"x0 should be >= 3, got {x0}"
+        assert y0 >= 2, f"y0 should be >= 2, got {y0}"
+        assert x1 <= w and y1 <= h
+
 
 class TestImageAlignCropEdgeCases:
     """测试边界情况"""

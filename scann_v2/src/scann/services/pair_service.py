@@ -103,13 +103,100 @@ class PairService:
         row_ratio = np.mean(mask, axis=1)
         col_ratio = np.mean(mask, axis=0)
 
-        # 使用更宽松的阈值来检测有效行/列
-        row_valid = row_ratio > 0.90
-        col_valid = col_ratio > 0.90
+        # 优先保留“绝大多数像素有效”的行列，便于去掉对齐后的黑边
+        row_valid = row_ratio > 0.995
+        col_valid = col_ratio > 0.995
+        if not np.any(row_valid):
+            row_valid = row_ratio > 0.98
+        if not np.any(col_valid):
+            col_valid = col_ratio > 0.98
+        if not np.any(row_valid):
+            row_valid = row_ratio > 0.90
+        if not np.any(col_valid):
+            col_valid = col_ratio > 0.90
         if not np.any(row_valid):
             row_valid = np.any(mask, axis=1)
         if not np.any(col_valid):
             col_valid = np.any(mask, axis=0)
+        if not np.any(row_valid) or not np.any(col_valid):
+            return None
+
+        ys = np.where(row_valid)[0]
+        xs = np.where(col_valid)[0]
+        y0, y1 = int(ys[0]), int(ys[-1] + 1)
+        x0, x1 = int(xs[0]), int(xs[-1] + 1)
+        if x1 <= x0 or y1 <= y0:
+            return None
+        return x0, x1, y0, y1
+
+    def calc_overlap_crop_bounds_from_aligned_images(
+        self,
+        new_image: np.ndarray | None,
+        aligned_old: np.ndarray | None,
+    ) -> tuple[int, int, int, int] | None:
+        """根据已在同一坐标系的新旧图直接计算重叠有效区域。"""
+        if new_image is None or aligned_old is None:
+            return None
+        if new_image.size == 0 or aligned_old.size == 0:
+            return None
+        if new_image.shape[:2] != aligned_old.shape[:2]:
+            return None
+
+        new_arr = np.nan_to_num(new_image.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+        old_arr = np.nan_to_num(aligned_old.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+
+        eps_new = max(float(np.percentile(np.abs(new_arr), 99)) * 1e-6, 1e-6)
+        eps_old = max(float(np.percentile(np.abs(old_arr), 99)) * 1e-6, 1e-6)
+        mask_new = np.abs(new_arr) > eps_new
+        mask_old = np.abs(old_arr) > eps_old
+
+        def _remove_edge_floor(mask: np.ndarray, arr: np.ndarray) -> np.ndarray:
+            """去除边缘低值填充带（常见于仿射插值后的无效区）。"""
+            a_min = float(np.min(arr))
+            a_max = float(np.max(arr))
+            a_rng = a_max - a_min
+            if a_rng <= 1e-6:
+                return mask
+
+            floor_thr = a_min + max(a_rng * 1e-3, 1e-6)
+            low_mask = arr <= floor_thr
+            if not np.any(low_mask):
+                return mask
+
+            edge = np.zeros_like(low_mask, dtype=bool)
+            edge[0, :] = True
+            edge[-1, :] = True
+            edge[:, 0] = True
+            edge[:, -1] = True
+
+            edge_low_ratio = float(np.mean(low_mask[edge]))
+            global_low_ratio = float(np.mean(low_mask))
+            if edge_low_ratio > 0.10 and edge_low_ratio > global_low_ratio * 1.5:
+                return mask & (~low_mask)
+            return mask
+
+        mask_new = _remove_edge_floor(mask_new, new_arr)
+        mask_old = _remove_edge_floor(mask_old, old_arr)
+        common = mask_new & mask_old
+        if not np.any(common):
+            return None
+
+        row_ratio = np.mean(common, axis=1)
+        col_ratio = np.mean(common, axis=0)
+
+        row_valid = None
+        col_valid = None
+        for thr in (0.999, 0.995, 0.98, 0.95, 0.90):
+            rv = row_ratio > thr
+            cv = col_ratio > thr
+            if np.any(rv) and np.any(cv):
+                row_valid = rv
+                col_valid = cv
+                break
+
+        if row_valid is None or col_valid is None:
+            row_valid = np.any(common, axis=1)
+            col_valid = np.any(common, axis=0)
         if not np.any(row_valid) or not np.any(col_valid):
             return None
 
@@ -131,6 +218,10 @@ class PairService:
         new_image: np.ndarray | None = None,
     ) -> tuple[int, int, int, int] | None:
         """根据平移量和新旧图有效区域，计算重叠裁剪区域（取交集以移除L型黑边）。"""
+        direct_bounds = self.calc_overlap_crop_bounds_from_aligned_images(new_image, aligned_old)
+        if direct_bounds is not None:
+            return direct_bounds
+
         # 计算几何重叠区域
         x0 = max(0, int(math.ceil(dx)))
         x1 = min(w, int(math.floor(w + dx)))
