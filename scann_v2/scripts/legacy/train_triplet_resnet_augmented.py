@@ -9,7 +9,7 @@ from PIL import Image
 from pathlib import Path
 
 # 设置PyTorch模型下载路径到项目内（必须在导入torch之前设置）
-project_root = Path(__file__).parent
+project_root = Path(__file__).resolve().parents[2]
 model_cache_dir = project_root / "models" / "torch_cache"
 model_cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -213,7 +213,11 @@ def evaluate(model, loader, device, target_recall=0.98):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", default="dataset", help="root folder")
+    ap.add_argument(
+        "--data",
+        default=str(project_root.parent / "dataset"),
+        help="root folder",
+    )
     ap.add_argument("--epochs", type=int, default=30)
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--lr", type=float, default=2e-4)

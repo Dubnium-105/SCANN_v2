@@ -35,8 +35,11 @@ scann_v2/
 │   ├── services/          # 服务层（闪烁、检测、查询）
 │   ├── gui/               # GUI 组件
 │   └── data/              # 数据管理
-├── tests/                 # 测试套件
-├── docs/                  # 文档（架构、UI/UX 设计）
+├── tests/                 # 自动化测试套件
+├── docs/                  # 文档（架构、设计、仓库说明）
+├── scripts/               # 发布、诊断、legacy 工具
+│   ├── diagnostics/       # 手动验证/排障脚本（不参与 pytest 收集）
+│   └── legacy/            # 旧版 triplet 工作流脚本
 ├── logs/                  # 日志文件
 └── pyproject.toml         # 项目配置
 ```
@@ -44,8 +47,8 @@ scann_v2/
 ## v1 项目结构（遗留）
 
 - `SCANN.py`: 主 GUI 应用程序，支持数据下载、联动查看和分类。
-- `train_triplet_resnet_augmented.py`: 使用 ResNet-18 进行三联图分类的模型训练脚本，支持数据增强和加权采样。
-- `calc_triplet_mean_std.py`: 计算数据集均值和标准差的工具脚本，用于训练时的归一化。
+- `scann_v2/scripts/legacy/train_triplet_resnet_augmented.py`: 使用 ResNet-18 进行三联图分类的模型训练脚本，支持数据增强和加权采样。
+- `scann_v2/scripts/legacy/calc_triplet_mean_std.py`: 计算数据集均值和标准差的工具脚本，用于训练时的归一化。
 - `dataset/`: 存放训练数据的目录（PNG 格式）。
 - `best_model.pth`: 训练好的模型权重文件。
 - `requirements.txt`: v1 版本依赖包列表。
@@ -207,13 +210,13 @@ pytest --cov=src/scann --cov-report=html
   - 管理本地数据库（SQLite）中的数据联动信息。
   - 提供图像查看器，支持缩放和分类操作。
 
-### 2. 模型训练 (`train_triplet_resnet_augmented.py`)
+### 2. 模型训练 (`scann_v2/scripts/legacy/train_triplet_resnet_augmented.py`)
 
 用于训练 ResNet-18 分类器。它将 80x240 的三联图切分为三个 80x80 的通道（差异图、新图、参考图）。
 
 - **运行方法**:
   ```bash
-  python train_triplet_resnet_augmented.py --data dataset --epochs 30 --batch 32
+  python scann_v2/scripts/legacy/train_triplet_resnet_augmented.py --data dataset --epochs 30 --batch 32
   ```
 - **主要参数**:
   - `--data`: 数据集根目录（默认为 `dataset`）。
@@ -222,13 +225,13 @@ pytest --cov=src/scann --cov-report=html
   - `--lr`: 学习率。
   - `--target_recall`: 目标召回率（用于保存模型）。
 
-### 3. 计算归一化参数 (`calc_triplet_mean_std.py`)
+### 3. 计算归一化参数 (`scann_v2/scripts/legacy/calc_triplet_mean_std.py`)
 
 在训练新数据集之前，建议先计算数据集的均值和标准差。
 
 - **运行方法**:
   ```bash
-  python calc_triplet_mean_std.py --neg dataset/negative --pos dataset/positive
+  python scann_v2/scripts/legacy/calc_triplet_mean_std.py --neg dataset/negative --pos dataset/positive
   ```
 - **输出**: 脚本会输出 `mean` 和 `std`，您可以将其复制到训练脚本的 `Normalize` 转换中。
 
@@ -381,6 +384,7 @@ A: 可以。报告完全符合 MPC 80列格式标准。建议人工复核后再�
 - `ui_ux_design.md` - UI/UX 设计文档
 - `new requirements.md` - 详细的功能需求
 - `TODO.md` - 开发进度和待办事项
+- `guides/repository_layout.md` - 仓库结构和文件放置约定
 
 ### v1 与 v2 的技术细节对比
 
