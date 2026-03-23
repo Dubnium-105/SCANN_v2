@@ -421,7 +421,7 @@
           v-if="isLoading"
           class="absolute inset-0 flex items-center justify-center text-sm text-slate-300 bg-slate-950/65"
         >
-          Loading triplet images...
+          Loading FITS images...
         </div>
 
         <div
@@ -568,7 +568,6 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { useBlinkControl } from '../composables/useBlinkControl'
 import { useFitsImagePool } from '../composables/useFitsImagePool'
-import { useImageLoader } from '../composables/useImageLoader'
 import { calculatePixelRange, renderStretchToRgba } from '../fits/stretchRenderer'
 import { fetchAnnotationHistory, fetchAnnotationRevision } from '../services/annotationHistoryApi'
 import { submitAnnotations } from '../services/annotationApi'
@@ -613,6 +612,9 @@ const canvasHostRef = ref(null)
 const stageRef = ref(null)
 const hotkeysTeleportTarget = ref(null)
 const inspectorTeleportTarget = ref(null)
+const activeTask = ref(null)
+const currentView = ref('new')
+const error = ref('')
 const stretchRangeMin = ref(0)
 const stretchRangeMax = ref(1)
 const stretchMin = ref(0)
@@ -700,22 +702,28 @@ const fitsCanvasStyle = computed(() => ({
 }))
 
 const {
-  activeTask,
-  currentView,
-  error,
-  imageNodes,
-  isLoading,
-  preloadTaskImages,
-  releaseObjectUrls,
-  setError,
-  setCurrentView,
-} = useImageLoader()
-
-const {
   fitsError,
   fitsNodes,
+  isFitsLoading,
   preloadTaskFits,
 } = useFitsImagePool()
+
+const isLoading = computed(() => isFitsLoading.value)
+
+const imageNodes = computed(() => (
+  fitsNodes.value.map((node) => ({
+    view: node.view,
+    visible: node.view === currentView.value,
+  }))
+))
+
+function setError(message) {
+  error.value = message
+}
+
+function setCurrentView(view) {
+  currentView.value = view
+}
 
 const activeFitsNode = computed(
   () => fitsNodes.value.find((node) => node.view === currentView.value) ?? null,
@@ -845,10 +853,8 @@ async function loadTaskAtIndex(index) {
   }
 
   const task = taskList.value[index]
-  await Promise.all([
-    preloadTaskImages(task),
-    preloadTaskFits(task),
-  ])
+  activeTask.value = task
+  await preloadTaskFits(task)
 
   currentTaskIndex.value = index
   resetAnnotationStates()
@@ -1571,6 +1577,7 @@ async function loadInitialTask() {
   try {
     const tasks = await fetchTasks()
     taskList.value = tasks
+    activeTask.value = null
     if (!tasks[0]) {
       return
     }
@@ -1673,6 +1680,5 @@ onBeforeUnmount(() => {
     hostResizeObserver = null
   }
   window.removeEventListener('keydown', onKeyDown)
-  releaseObjectUrls()
 })
 </script>

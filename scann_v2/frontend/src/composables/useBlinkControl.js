@@ -72,6 +72,8 @@ export function useBlinkControl({ currentView, setCurrentView }) {
         return
       }
       event.preventDefault()
+      const nextView = getNextView(currentView.value)
+      setCurrentView(nextView)
       toggleBlink()
       return
     }
