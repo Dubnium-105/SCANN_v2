@@ -182,3 +182,8 @@ dmypy.json
 model_cache/
 torch_cache/
 scann_v2/release/
+docker/dist/
+docker/runtime/
+docker/*.tar.gz
+docker/*.tgz
+docker/.env

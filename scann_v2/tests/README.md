@@ -6,4 +6,4 @@
 - Keep manual verification helpers in [`../scripts/diagnostics`](../scripts/README.md)
   so they do not get collected accidentally.
 - Add subdirectories when a domain has enough tests to benefit from grouping,
-  such as the existing `bridge/` suite.
+  such as API, GUI, or service-focused suites.

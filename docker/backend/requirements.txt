@@ -1,34 +1,13 @@
-# SCANN Native Annotation Backend - Production Dependencies
-# Python 3.9+
-
-# FastAPI and web framework
 fastapi>=0.110,<1.0
 uvicorn[standard]>=0.27,<1.0
 python-multipart>=0.0.6
-
-# Authentication and security
 PyJWT>=2.8,<3.0
-passlib[bcrypt]>=1.7,<2.0
-
-# Scientific computing
+passlib>=1.7,<2.0
 numpy>=1.24,<2.0
-
-# Image processing
 opencv-python>=4.8,<4.12
 Pillow>=10.0,<11.0
-
-# Astronomy
 astropy>=5.3,<7.0
-
-# Data processing
 scikit-learn>=1.3,<2.0
-
-# HTTP clients
 requests>=2.31,<3.0
-
-# Utilities
 tqdm>=4.65,<5.0
-
-# Pydantic for data validation
 pydantic>=2.0,<3.0
-pydantic-settings>=2.0,<3.0
