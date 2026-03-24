@@ -1,0 +1,124 @@
+name: SCANN Pipeline
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: scann-pipeline-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-tests:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: ${{ github.workspace }}/scann_v2/src
+    defaults:
+      run:
+        working-directory: scann_v2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ../docker/backend/requirements.txt
+          pip install pytest pytest-mock
+
+      - name: Compile native annotation backend
+        run: python -m py_compile src/scann/native_annotation/*.py
+
+      - name: Run native annotation backend suite
+        run: |
+          pytest \
+            tests/test_auth.py \
+            tests/test_dataset.py \
+            tests/test_health.py \
+            tests/test_task_locking.py \
+            -q
+
+  frontend-tests:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: scann_v2/frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: scann_v2/frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run frontend tests
+        run: npm run test
+
+      - name: Build frontend bundle
+        run: npm run build
+
+  container-build-check:
+    name: Container Build Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate Docker Compose
+        run: docker compose -f docker/docker-compose.yml --env-file docker/.env.example config > /tmp/scann-compose.yaml
+
+      - name: Build backend image
+        run: docker build -f docker/backend/Dockerfile -t scann-backend:ci .
+
+      - name: Build frontend image
+        run: docker build -f docker/frontend/Dockerfile -t scann-frontend:ci .
+
+  deploy-production:
+    name: Deploy Production
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs:
+      - backend-tests
+      - frontend-tests
+      - container-build-check
+    runs-on:
+      - self-hosted
+      - linux
+      - scann-prod
+    timeout-minutes: 30
+    environment:
+      name: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy to local Linux server
+        env:
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+        run: |
+          chmod +x docker/deploy_from_runner.sh
+          ./docker/deploy_from_runner.sh

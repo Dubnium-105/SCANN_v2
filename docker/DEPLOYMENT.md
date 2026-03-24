@@ -55,3 +55,9 @@ previous bundle on disk. Rollback is then:
 1. switch back to the previous code snapshot
 2. rerun `./docker/deploy.sh`
 3. keep the same dataset directory mounted
+
+## CI/CD handoff
+
+If you want deployments to happen automatically after merges to `main`, follow
+[`CI_CD.md`](./CI_CD.md) and install a self-hosted GitHub Actions runner on the
+same Linux server.

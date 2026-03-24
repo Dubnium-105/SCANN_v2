@@ -53,3 +53,8 @@ docker compose --env-file .env ps
 docker compose --env-file .env logs -f
 docker compose --env-file .env down
 ```
+
+## CI/CD
+
+For GitHub Actions plus self-hosted production deployment, see
+[`CI_CD.md`](./CI_CD.md).
