@@ -87,28 +87,21 @@
 
 ## P2: v1 三联图 AI 建议展示逻辑未完成
 
-- 状态: 已确认未完成
+- 状态: 已完成
 - 影响: 低到中
 - 模块: `TripletPreviewPanel`
 - 文件:
   - `scann_v2/src/scann/gui/widgets/triplet_preview.py`
   - `scann_v2/src/scann/gui/dialogs/annotation_dialog.py`
-- 问题描述:
-  - 上层会在 v1 模式中调用 `set_ai_suggestion()`。
-  - 该方法内部注释写的是“在面板上叠加 AI 建议信息”。
-  - 但实际循环体为 `pass`，当前只更新了 tooltip。
-- 风险:
-  - 用户无法在界面上看到设计中的 AI 建议提示。
-  - 名义上支持的展示能力实际上没有完成。
-- 建议修复:
-  - 先定义最小展示方式，避免过度设计。
-  - 可以先用面板角标、顶部状态条或标签文本展示建议和置信度。
-  - 若暂不做叠加 UI，至少把注释改成真实行为，避免误导。
-- 最小验收标准:
-  - `set_ai_suggestion()` 不再是空循环。
-  - 用户能在界面上看到 AI 建议，而不只是 tooltip。
-- 建议测试:
-  - 在 `tests/test_annotation_dialog.py` 或新增 widget 测试中验证建议文本已显示到控件上。
+  - `scann_v2/tests/test_triplet_preview.py`
+- 完成说明:
+  - `TripletPreviewPanel` 已新增可见的 AI 建议提示条，显示建议类别与置信度，不再只写 tooltip。
+  - 建议条会根据 `real/bogus` 使用不同配色，作为最小可视化方案落地。
+  - `AnnotationDialog._update_v1_display()` 已在样本没有 AI 建议时主动清空提示，避免跨样本残留旧结果。
+- 验收结果:
+  - `set_ai_suggestion()` 已有真实 UI 行为。
+  - 用户在 v1 标注界面可以直接看到 AI 建议，而不必依赖 tooltip。
+  - 新增测试覆盖了提示显示、清空，以及对话框跨样本切换时的残留清理。
 
 ---
 

@@ -1021,6 +1021,8 @@ class AnnotationDialog(QDialog):
             self._triplet_preview.set_ai_suggestion(
                 sample.ai_suggestion, sample.ai_confidence
             )
+        else:
+            self._triplet_preview.clear_ai_suggestion()
 
     def _update_v2_display(self, sample: AnnotationSample) -> None:
         """更新 v2 FITS 显示"""
