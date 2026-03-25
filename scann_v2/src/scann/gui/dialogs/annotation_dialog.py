@@ -1334,7 +1334,7 @@ class AnnotationDialog(QDialog):
                 old_data = np.zeros_like(new_data)
 
             result = pipeline.process_pair(
-                pair_name=sample.id,
+                pair_name=self._build_pipeline_pair_name(sample),
                 new_data=new_data,
                 old_data=old_data,
                 image_path=sample.source_path,
@@ -1355,6 +1355,20 @@ class AnnotationDialog(QDialog):
             bbox_count += len(bboxes)
 
         return processed_count, bbox_count
+
+    def _build_pipeline_pair_name(self, sample: AnnotationSample) -> str:
+        """Resolve a stable logical pair name for v2 detection pipelines."""
+        if not isinstance(self._backend, FitsAnnotationBackend):
+            return sample.id
+
+        stem = sample.id
+        if sample.display_name:
+            stem = Path(sample.display_name).stem
+        elif sample.source_path:
+            stem = Path(sample.source_path).stem
+
+        stem = FitsAnnotationBackend._strip_aligned_crop_suffix(stem)
+        return FitsAnnotationBackend._normalize_pair_stem(stem)
 
     def _build_detection_params(self) -> DetectionParams:
         """从当前配置构造检测参数。"""

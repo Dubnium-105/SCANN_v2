@@ -443,13 +443,32 @@ class TestFitsImageData:
         assert info["has_old_image"] is True
         assert info["has_new_marked_image"] is True
 
-    def test_get_new_and_old_image(self, fits_backend):
+    def test_get_new_and_old_image(self, fits_dataset: Path):
         """v2 后端应能分别获取新图和旧图"""
-        sample = fits_backend.samples[0]
-        new_img = fits_backend.get_image_data(sample, image_type="new")
-        old_img = fits_backend.get_image_data(sample, image_type="old")
+        from scann.core.fits_annotation_backend import FitsAnnotationBackend
+        from scann.core.models import AlignResult
+
+        backend = FitsAnnotationBackend()
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "scann.core.fits_annotation_backend.align",
+                lambda new_data, old_data, method="auto", max_shift=None: AlignResult(
+                    aligned_old=old_data.astype(np.float32),
+                    dx=0.0,
+                    dy=0.0,
+                    success=True,
+                ),
+            )
+            samples = backend.load_samples(str(fits_dataset))
+
+        sample = samples[0]
+        new_img = backend.get_image_data(sample, image_type="new")
+        old_img = backend.get_image_data(sample, image_type="old")
         assert isinstance(new_img, np.ndarray)
         assert isinstance(old_img, np.ndarray)
+        paths = backend._image_paths[sample.id]
+        assert Path(paths["new"]).parent.name == "new"
+        assert Path(paths["old"]).parent.name == "old"
         # 新旧图应不完全相同 (有偏移)
         assert not np.array_equal(new_img, old_img)
 
