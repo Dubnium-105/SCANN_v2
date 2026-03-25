@@ -1434,12 +1434,12 @@ class TestHelpEntry:
         assert call_args[0][0] == w
         assert call_args[0][1] == "关于 SCANN v2"
 
-    def test_on_open_scheduler_shows_placeholder_message(self):
+    def test_on_open_scheduler_shows_unavailable_message(self):
         w = _make_mock_window()
 
         w._on_open_scheduler()
 
-        w.statusBar().showMessage.assert_called_with("计划任务功能开发中，敬请期待", 3000)
+        w.statusBar().showMessage.assert_called_with("当前版本未提供计划任务功能", 3000)
 
     @patch("scann.gui.dialogs.shortcut_help_dialog.ShortcutHelpDialog")
     def test_on_shortcut_help_opens_dialog(self, mock_dialog_cls):

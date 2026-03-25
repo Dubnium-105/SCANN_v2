@@ -235,6 +235,8 @@ class MainWindowBuilder:
         settings_menu.addSeparator()
         act_mpcorb_file = settings_menu.addAction("MPCORB 文件...")
         act_scheduler = settings_menu.addAction("计划任务...")
+        act_scheduler.setEnabled(False)
+        act_scheduler.setVisible(False)
 
         help_menu = mb.addMenu("帮助(&H)")
         act_shortcut_help = help_menu.addAction("快捷键列表")

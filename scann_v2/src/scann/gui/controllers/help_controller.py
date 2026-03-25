@@ -39,4 +39,4 @@ class HelpController:
         )
 
     def open_scheduler(self) -> None:
-        self._window._show_message("计划任务功能开发中，敬请期待")
+        self._window._show_message("当前版本未提供计划任务功能")

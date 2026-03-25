@@ -32,3 +32,15 @@ def test_builder_attach_sets_main_window_attributes(qapp):
         assert window.histogram_panel is parts.histogram_panel
     finally:
         window.close()
+
+
+def test_builder_hides_scheduler_placeholder_entry(qapp):
+    window = QMainWindow()
+
+    try:
+        parts = MainWindowBuilder(window).build()
+
+        assert parts.menu.act_scheduler.isVisible() is False
+        assert parts.menu.act_scheduler.isEnabled() is False
+    finally:
+        window.close()
