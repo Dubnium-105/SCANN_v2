@@ -145,6 +145,19 @@ class TestDetectionPipelineRegression:
         assert isinstance(result, PipelineResult)
         assert result.align_result is None
 
+    @patch("scann.services.detection_service.align")
+    def test_process_pair_uses_auto_alignment_method(self, mock_align):
+        pipeline = DetectionPipeline()
+        image = np.ones((32, 32), dtype=np.float32)
+        mock_align.return_value = AlignResult(
+            aligned_old=image.copy(),
+            success=True,
+        )
+
+        pipeline.process_pair("pair-auto-001", image, image)
+
+        assert mock_align.call_args.kwargs["method"] == "auto"
+
     @patch("scann.services.detection_service.detect_candidates")
     @patch("scann.services.detection_service.align")
     def test_process_pair_full_image_mode_uses_dense_and_maps_sorted_candidates(

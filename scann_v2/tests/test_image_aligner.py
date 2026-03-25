@@ -1,8 +1,10 @@
 """图像对齐裁剪测试 - 验证L型无效区域裁剪功能"""
 
+import cv2
 import numpy as np
 import pytest
 
+from scann.core.image_aligner import _align_ecc, _align_phase_correlation, align
 from scann.services.pair_service import PairService
 
 
@@ -239,3 +241,63 @@ class TestImageAlignCropEdgeCases:
         assert crop_bounds is not None
         x0, x1, y0, y1 = crop_bounds
         assert x0 == 3
+
+
+class TestImageAlignAlgorithms:
+    @staticmethod
+    def _make_synthetic_pair(
+        shift_x: float = 7.0,
+        shift_y: float = -5.0,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        height, width = 256, 256
+        new_image = np.zeros((height, width), dtype=np.float32)
+        for x, y in [(40, 50), (120, 180), (180, 80), (200, 210), (90, 100), (160, 150)]:
+            cv2.circle(new_image, (x, y), 2, 1000.0, -1)
+            cv2.circle(new_image, (x, y), 6, 200.0, 1)
+
+        matrix = np.float32([[1, 0, shift_x], [0, 1, shift_y]])
+        old_image = cv2.warpAffine(
+            new_image,
+            matrix,
+            (width, height),
+            flags=cv2.INTER_LANCZOS4,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        )
+        return new_image, old_image
+
+    def test_phase_correlation_aligns_in_correct_direction(self):
+        new_image, old_image = self._make_synthetic_pair()
+
+        result = _align_phase_correlation(new_image, old_image, max_shift=32)
+
+        assert result.success
+        assert result.aligned_old is not None
+        before = float(np.mean(np.abs(new_image - old_image)))
+        after = float(np.mean(np.abs(new_image - result.aligned_old)))
+        assert after < before * 0.5
+        assert result.dx == pytest.approx(-7.0, abs=1.0)
+        assert result.dy == pytest.approx(5.0, abs=1.0)
+
+    def test_ecc_aligns_in_correct_direction(self):
+        new_image, old_image = self._make_synthetic_pair()
+
+        result = _align_ecc(new_image, old_image, max_shift=32)
+
+        assert result.success
+        assert result.aligned_old is not None
+        before = float(np.mean(np.abs(new_image - old_image)))
+        after = float(np.mean(np.abs(new_image - result.aligned_old)))
+        assert after < before * 0.5
+        assert result.dx == pytest.approx(-7.0, abs=1.0)
+        assert result.dy == pytest.approx(5.0, abs=1.0)
+
+    def test_align_defaults_to_auto(self):
+        new_image, old_image = self._make_synthetic_pair()
+
+        default_result = align(new_image, old_image, max_shift=32)
+        auto_result = align(new_image, old_image, method="auto", max_shift=32)
+
+        assert default_result.success == auto_result.success
+        assert default_result.dx == pytest.approx(auto_result.dx, abs=1e-6)
+        assert default_result.dy == pytest.approx(auto_result.dy, abs=1e-6)

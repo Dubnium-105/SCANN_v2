@@ -1,10 +1,4 @@
-"""图像对齐模块
-
-职责:
-- 以新图为参考图，仅移动旧图进行对齐
-- 绝不移动新图！
-- 支持批量对齐
-"""
+"""Image alignment helpers for FITS pairs."""
 
 from __future__ import annotations
 
@@ -18,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
-from scann.core.models import AlignResult, FitsImage
+from scann.core.models import AlignResult
 
 
 logger = logging.getLogger(__name__)
@@ -27,22 +21,10 @@ logger = logging.getLogger(__name__)
 def align(
     new_image: np.ndarray,
     old_image: np.ndarray,
-    method: str = "phase_correlation",
+    method: str = "auto",
     max_shift: int = 100,
 ) -> AlignResult:
-    """对齐旧图到新图
-
-    以新图作为参考图，绝不移动新图，只移动旧图。
-
-    Args:
-        new_image: 新图像素数据 (参考图，不可移动)
-        old_image: 旧图像素数据 (需要对齐的图)
-        method: 对齐算法 ("phase_correlation"/"auto", "siril", "ecc", "feature_matching")
-        max_shift: 最大允许偏移量 (像素)
-
-    Returns:
-        AlignResult: 对齐结果，包含对齐后的旧图和偏移参数
-    """
+    """Align ``old_image`` onto ``new_image``."""
     if new_image.shape != old_image.shape:
         return AlignResult(
             aligned_old=None,
@@ -51,11 +33,10 @@ def align(
         )
 
     try:
-        if method in {"phase_correlation", "auto"}:
-            # 先尝试稳健的相位相关；失败后自动回退到 ECC/特征匹配
-            result = _align_phase_correlation(new_image, old_image, max_shift)
-            if result.success:
-                return result
+        if method == "auto":
+            phase_result = _align_phase_correlation(new_image, old_image, max_shift)
+            if phase_result.success:
+                return phase_result
 
             ecc_result = _align_ecc(new_image, old_image, max_shift)
             if ecc_result.success:
@@ -69,11 +50,14 @@ def align(
                 aligned_old=None,
                 success=False,
                 error_message=(
-                    f"phase失败: {result.error_message}; "
+                    f"phase失败: {phase_result.error_message}; "
                     f"ECC失败: {ecc_result.error_message}; "
                     f"feature失败: {feature_result.error_message}"
                 ),
             )
+
+        if method == "phase_correlation":
+            return _align_phase_correlation(new_image, old_image, max_shift)
 
         if method == "feature_matching":
             return _align_feature_matching(new_image, old_image, max_shift)
@@ -89,16 +73,16 @@ def align(
             success=False,
             error_message=f"不支持的对齐方法: {method}",
         )
-    except Exception as e:
+    except Exception as exc:
         return AlignResult(
             aligned_old=None,
             success=False,
-            error_message=str(e),
+            error_message=str(exc),
         )
 
 
 def _to_gray_f32(image: np.ndarray) -> np.ndarray:
-    """转灰度 float32，并清理 NaN/Inf。"""
+    """Convert to grayscale float32 and sanitize NaN / Inf."""
     import cv2
 
     if image.ndim == 3:
@@ -109,7 +93,7 @@ def _to_gray_f32(image: np.ndarray) -> np.ndarray:
 
 
 def _normalize_for_alignment(gray_f32: np.ndarray) -> np.ndarray:
-    """鲁棒归一化到 [0, 1]，减弱背景与亮度尺度差异。"""
+    """Robustly normalize to ``[0, 1]`` for alignment."""
     finite = np.isfinite(gray_f32)
     if not np.any(finite):
         return np.zeros_like(gray_f32, dtype=np.float32)
@@ -128,27 +112,27 @@ def _normalize_for_alignment(gray_f32: np.ndarray) -> np.ndarray:
 
 
 def _enhance_stars(norm01: np.ndarray) -> np.ndarray:
-    """星点增强（高通），更接近 v1 常用的“去背景后配准”思路。"""
+    """High-pass star enhancement."""
     import cv2
 
     low = cv2.GaussianBlur(norm01, (0, 0), sigmaX=2.0)
     high = norm01 - low
     high = np.clip(high, 0.0, None)
-    m = float(np.max(high))
-    if m > 0:
-        high /= m
+    max_val = float(np.max(high))
+    if max_val > 0:
+        high /= max_val
     return high.astype(np.float32)
 
 
 def _warp_translate(image: np.ndarray, dx: float, dy: float) -> np.ndarray:
     import cv2
 
-    h, w = image.shape[:2]
-    M = np.float32([[1, 0, dx], [0, 1, dy]])
+    height, width = image.shape[:2]
+    matrix = np.float32([[1, 0, dx], [0, 1, dy]])
     return cv2.warpAffine(
         image,
-        M,
-        (w, h),
+        matrix,
+        (width, height),
         flags=cv2.INTER_LANCZOS4,
         borderMode=cv2.BORDER_CONSTANT,
         borderValue=0,
@@ -156,63 +140,100 @@ def _warp_translate(image: np.ndarray, dx: float, dy: float) -> np.ndarray:
 
 
 def _zncc(a: np.ndarray, b: np.ndarray) -> float:
-    """零均值归一化互相关，范围约 [-1, 1]。"""
+    """Zero-mean normalized cross-correlation in ``[-1, 1]``."""
     aa = a.astype(np.float32).ravel()
     bb = b.astype(np.float32).ravel()
-    am = float(np.mean(aa))
-    bm = float(np.mean(bb))
-    aa -= am
-    bb -= bm
+    aa -= float(np.mean(aa))
+    bb -= float(np.mean(bb))
     denom = float(np.linalg.norm(aa) * np.linalg.norm(bb))
     if denom <= 1e-12:
         return -1.0
     return float(np.dot(aa, bb) / denom)
 
 
+def _calc_overlap_bounds(width: int, height: int, dx: float, dy: float) -> tuple[int, int, int, int] | None:
+    x0 = max(0, int(np.ceil(dx)))
+    x1 = min(width, int(np.floor(width + dx)))
+    y0 = max(0, int(np.ceil(dy)))
+    y1 = min(height, int(np.floor(height + dy)))
+    if x1 <= x0 or y1 <= y0:
+        return None
+    return x0, x1, y0, y1
+
+
+def _alignment_quality(
+    reference_image: np.ndarray,
+    moving_image: np.ndarray,
+    aligned_image: np.ndarray,
+    dx: float,
+    dy: float,
+) -> tuple[float, float]:
+    """Measure before / after similarity on the overlap region."""
+    ref_n = _enhance_stars(_normalize_for_alignment(_to_gray_f32(reference_image)))
+    mov_n = _enhance_stars(_normalize_for_alignment(_to_gray_f32(moving_image)))
+    aligned_n = _enhance_stars(_normalize_for_alignment(_to_gray_f32(aligned_image)))
+
+    bounds = _calc_overlap_bounds(ref_n.shape[1], ref_n.shape[0], dx, dy)
+    if bounds is None:
+        return _zncc(ref_n, mov_n), -1.0
+
+    x0, x1, y0, y1 = bounds
+    if (x1 - x0) < 32 or (y1 - y0) < 32:
+        return _zncc(ref_n, mov_n), -1.0
+
+    ref_crop = ref_n[y0:y1, x0:x1]
+    mov_crop = mov_n[y0:y1, x0:x1]
+    aligned_crop = aligned_n[y0:y1, x0:x1]
+    return _zncc(ref_crop, mov_crop), _zncc(ref_crop, aligned_crop)
+
+
+def _is_quality_improved(before: float, after: float, min_delta: float = 5e-4) -> bool:
+    if not np.isfinite(before) or not np.isfinite(after):
+        return False
+    return after > before + min_delta
+
+
 def _match_intensity_scale(aligned: np.ndarray, reference: np.ndarray) -> np.ndarray:
-    """将对齐结果亮度范围匹配到参考图（用于 Siril 输出归一化场景）。"""
-    a = np.nan_to_num(aligned.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
-    r = np.nan_to_num(reference.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+    """Map normalized Siril output back to the reference brightness range when needed."""
+    aligned_arr = np.nan_to_num(aligned.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+    ref_arr = np.nan_to_num(reference.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
 
-    a1, a99 = np.percentile(a, [1, 99])
-    r1, r99 = np.percentile(r, [1, 99])
-    ar = float(a99 - a1)
-    rr = float(r99 - r1)
+    aligned_p1, aligned_p99 = np.percentile(aligned_arr, [1, 99])
+    ref_p1, ref_p99 = np.percentile(ref_arr, [1, 99])
+    aligned_range = float(aligned_p99 - aligned_p1)
+    ref_range = float(ref_p99 - ref_p1)
 
-    # Siril 常见输出：32-bit 归一化到 [0,1]，导致回写后画面接近纯黑
-    # 仅在范围明显不一致时做线性匹配，避免影响正常情况。
-    if ar <= 1e-6:
-        return a
+    if aligned_range <= 1e-6:
+        return aligned_arr
 
-    ratio = rr / ar if ar > 0 else 1.0
-    if ratio < 20.0 and ratio > 0.05:
-        return a
+    ratio = ref_range / aligned_range if aligned_range > 0 else 1.0
+    if 0.05 < ratio < 20.0:
+        return aligned_arr
 
-    mapped = (a - a1) * (rr / ar) + r1
-    # 使用参考图极值裁剪，防止异常值污染后续显示/处理
-    rmin = float(np.min(r))
-    rmax = float(np.max(r))
-    mapped = np.clip(mapped, rmin, rmax)
+    mapped = (aligned_arr - aligned_p1) * (ref_range / aligned_range) + ref_p1
+    mapped = np.clip(mapped, float(np.min(ref_arr)), float(np.max(ref_arr)))
     return mapped.astype(np.float32)
 
 
 def _estimate_translation(reference_image: np.ndarray, moving_image: np.ndarray) -> tuple[float, float] | None:
-    """估计将 moving 平移到 reference 所需的位移（dx, dy）。"""
+    """Estimate the translation that should be applied to ``moving_image``."""
     import cv2
 
     ref = _enhance_stars(_normalize_for_alignment(_to_gray_f32(reference_image)))
     mov = _enhance_stars(_normalize_for_alignment(_to_gray_f32(moving_image)))
-    h, w = ref.shape[:2]
-    if h < 16 or w < 16:
+    height, width = ref.shape[:2]
+    if height < 16 or width < 16:
         return None
 
-    window = cv2.createHanningWindow((w, h), cv2.CV_32F)
+    window = cv2.createHanningWindow((width, height), cv2.CV_32F)
     (dx, dy), response = cv2.phaseCorrelate(ref, mov, window)
     if not np.isfinite(dx) or not np.isfinite(dy):
         return None
     if response < 1e-4:
         return None
-    return float(dx), float(dy)
+
+    # phaseCorrelate reports the opposite sign of the warp we later apply.
+    return float(-dx), float(-dy)
 
 
 def _align_phase_correlation(
@@ -220,72 +241,63 @@ def _align_phase_correlation(
     old_image: np.ndarray,
     max_shift: int,
 ) -> AlignResult:
-    """稳健相位相关法对齐（多尺度 + 星点增强 + 质量验证）。"""
+    """Translation-only alignment using phase correlation."""
     import cv2
 
-    new_g = _to_gray_f32(new_image)
-    old_g = _to_gray_f32(old_image)
-    new_n = _enhance_stars(_normalize_for_alignment(new_g))
-    old_n = _enhance_stars(_normalize_for_alignment(old_g))
+    new_norm = _enhance_stars(_normalize_for_alignment(_to_gray_f32(new_image)))
+    old_norm = _enhance_stars(_normalize_for_alignment(_to_gray_f32(old_image)))
+    height, width = new_norm.shape[:2]
 
-    # 多尺度从粗到细
-    scales = [0.25, 0.5, 1.0]
-    total_dx = 0.0
-    total_dy = 0.0
-    last_response = 0.0
+    candidates: list[tuple[float, float, float]] = []
+    for frac in (1.0, 0.9, 0.8):
+        crop_h = max(32, int(round(height * frac)))
+        crop_w = max(32, int(round(width * frac)))
+        y0 = (height - crop_h) // 2
+        x0 = (width - crop_w) // 2
+        new_crop = new_norm[y0:y0 + crop_h, x0:x0 + crop_w]
+        old_crop = old_norm[y0:y0 + crop_h, x0:x0 + crop_w]
+        window = cv2.createHanningWindow((crop_w, crop_h), cv2.CV_32F)
+        (raw_dx, raw_dy), response = cv2.phaseCorrelate(new_crop, old_crop, window)
+        if not np.isfinite(raw_dx) or not np.isfinite(raw_dy) or response < 1e-4:
+            continue
+        dx = float(-raw_dx)
+        dy = float(-raw_dy)
+        if abs(dx) <= max_shift and abs(dy) <= max_shift:
+            candidates.append((dx, dy, float(response)))
 
-    for s in scales:
-        h, w = new_n.shape[:2]
-        ws = max(32, int(round(w * s)))
-        hs = max(32, int(round(h * s)))
-
-        new_s = cv2.resize(new_n, (ws, hs), interpolation=cv2.INTER_AREA)
-        old_s = cv2.resize(old_n, (ws, hs), interpolation=cv2.INTER_AREA)
-
-        # 先按上层结果预平移，再估计残差
-        preshift_dx = total_dx * s
-        preshift_dy = total_dy * s
-        old_s_pre = _warp_translate(old_s, preshift_dx, preshift_dy)
-
-        window = cv2.createHanningWindow((ws, hs), cv2.CV_32F)
-        (ddx, ddy), response = cv2.phaseCorrelate(new_s, old_s_pre, window)
-        last_response = float(response)
-
-        # 反投影到全分辨率
-        total_dx += float(ddx) / s
-        total_dy += float(ddy) / s
-
-    if abs(total_dx) > max_shift or abs(total_dy) > max_shift:
+    if not candidates:
         return AlignResult(
             aligned_old=None,
-            dx=total_dx,
-            dy=total_dy,
             success=False,
-            error_message=(
-                f"偏移量过大: dx={total_dx:.1f}, dy={total_dy:.1f} "
-                f"(max={max_shift})"
-            ),
+            error_message="相位相关未得到有效候选位移",
         )
 
-    aligned = _warp_translate(old_image, total_dx, total_dy)
+    best_candidate: tuple[float, float, float, float, float] | None = None
+    for dx, dy, response in candidates:
+        aligned = _warp_translate(old_image, dx, dy)
+        before, after = _alignment_quality(new_image, old_image, aligned, dx, dy)
+        candidate = (after - before, after, response, dx, dy)
+        if best_candidate is None or candidate > best_candidate:
+            best_candidate = candidate
 
-    # 质量验证：对齐后相关性应明显变好
-    before = _zncc(new_n, old_n)
-    aligned_n = _enhance_stars(_normalize_for_alignment(_to_gray_f32(aligned)))
-    after = _zncc(new_n, aligned_n)
-    if after < before + 0.01:
+    assert best_candidate is not None
+    improvement, after, response, dx, dy = best_candidate
+    aligned = _warp_translate(old_image, dx, dy)
+    before, _ = _alignment_quality(new_image, old_image, aligned, dx, dy)
+
+    if not _is_quality_improved(before, after):
         return AlignResult(
             aligned_old=None,
-            dx=total_dx,
-            dy=total_dy,
+            dx=dx,
+            dy=dy,
             success=False,
             error_message=(
                 f"相位相关质量不足: before={before:.4f}, after={after:.4f}, "
-                f"response={last_response:.4f}"
+                f"response={response:.4f}"
             ),
         )
 
-    return AlignResult(aligned_old=aligned, dx=total_dx, dy=total_dy, success=True)
+    return AlignResult(aligned_old=aligned, dx=dx, dy=dy, success=True)
 
 
 def _align_ecc(
@@ -293,11 +305,12 @@ def _align_ecc(
     old_image: np.ndarray,
     max_shift: int,
 ) -> AlignResult:
-    """ECC 配准兜底（先平移，再欧氏）。"""
+    """ECC fallback with consistent transform direction."""
     import cv2
 
-    new_n = _normalize_for_alignment(_to_gray_f32(new_image))
-    old_n = _normalize_for_alignment(_to_gray_f32(old_image))
+    new_norm = _normalize_for_alignment(_to_gray_f32(new_image))
+    old_norm = _normalize_for_alignment(_to_gray_f32(old_image))
+    initial_shift = _estimate_translation(new_image, old_image)
 
     criteria = (
         cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT,
@@ -305,59 +318,84 @@ def _align_ecc(
         1e-6,
     )
 
-    for motion in (cv2.MOTION_TRANSLATION, cv2.MOTION_EUCLIDEAN):
-        try:
-            warp = np.eye(2, 3, dtype=np.float32)
-            _, warp = cv2.findTransformECC(
-                new_n,
-                old_n,
-                warp,
-                motion,
-                criteria,
-                None,
-                5,
-            )
+    best_result: AlignResult | None = None
+    best_improvement = float("-inf")
+    last_error = "ECC 收敛失败"
 
-            dx = float(warp[0, 2])
-            dy = float(warp[1, 2])
-            if abs(dx) > max_shift or abs(dy) > max_shift:
+    for motion in (cv2.MOTION_TRANSLATION, cv2.MOTION_EUCLIDEAN):
+        seeds = [None]
+        if initial_shift is not None:
+            seeds.append(initial_shift)
+
+        for seed in seeds:
+            try:
+                warp = np.eye(2, 3, dtype=np.float32)
+                if seed is not None:
+                    warp[0, 2] = float(seed[0])
+                    warp[1, 2] = float(seed[1])
+
+                _, warp = cv2.findTransformECC(
+                    new_norm,
+                    old_norm,
+                    warp,
+                    motion,
+                    criteria,
+                    None,
+                    5,
+                )
+
+                warp_to_apply = cv2.invertAffineTransform(warp)
+                dx = float(warp_to_apply[0, 2])
+                dy = float(warp_to_apply[1, 2])
+                if abs(dx) > max_shift or abs(dy) > max_shift:
+                    continue
+
+                height, width = old_image.shape[:2]
+                aligned = cv2.warpAffine(
+                    old_image,
+                    warp_to_apply,
+                    (width, height),
+                    flags=cv2.INTER_LANCZOS4,
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=0,
+                )
+
+                before, after = _alignment_quality(new_image, old_image, aligned, dx, dy)
+                if not _is_quality_improved(before, after):
+                    last_error = (
+                        f"ECC 质量不足: before={before:.4f}, after={after:.4f}, motion={motion}"
+                    )
+                    continue
+
+                rotation = float(np.degrees(np.arctan2(warp_to_apply[1, 0], warp_to_apply[0, 0])))
+                result = AlignResult(
+                    aligned_old=aligned,
+                    dx=dx,
+                    dy=dy,
+                    rotation=rotation,
+                    success=True,
+                )
+                improvement = after - before
+                if improvement > best_improvement:
+                    best_improvement = improvement
+                    best_result = result
+            except cv2.error as exc:
+                last_error = f"ECC 收敛失败: {exc}"
                 continue
 
-            h, w = old_image.shape[:2]
-            aligned = cv2.warpAffine(
-                old_image,
-                warp,
-                (w, h),
-                flags=cv2.INTER_LANCZOS4,
-                borderMode=cv2.BORDER_CONSTANT,
-                borderValue=0,
-            )
+    if best_result is not None:
+        return best_result
 
-            rotation = float(np.degrees(np.arctan2(warp[1, 0], warp[0, 0])))
-            return AlignResult(
-                aligned_old=aligned,
-                dx=dx,
-                dy=dy,
-                rotation=rotation,
-                success=True,
-            )
-        except cv2.error:
-            continue
-
-    return AlignResult(
-        aligned_old=None,
-        success=False,
-        error_message="ECC 收敛失败",
-    )
+    return AlignResult(aligned_old=None, success=False, error_message=last_error)
 
 
 def _find_siril_executable() -> Optional[str]:
-    """查找 Siril CLI 可执行文件。"""
+    """Find Siril CLI in PATH."""
     for name in ("siril-cli", "siril-cli.exe", "siril", "siril.exe"):
-        exe = shutil.which(name)
-        if exe:
-            logger.info("Siril executable found: %s", exe)
-            return exe
+        executable = shutil.which(name)
+        if executable:
+            logger.info("Siril executable found: %s", executable)
+            return executable
     logger.warning("Siril executable not found in PATH")
     return None
 
@@ -367,55 +405,50 @@ def _align_siril(
     old_image: np.ndarray,
     max_shift: int,
 ) -> AlignResult:
-    """使用 Siril CLI 对齐（星点配准）。"""
+    """Align with Siril CLI."""
+
     def _safe_decode(data: bytes) -> str:
-        """兼容 Windows 本地编码与 UTF-8 的稳健解码。"""
-        for enc in ("utf-8", "gbk", "mbcs"):
+        for encoding in ("utf-8", "gbk", "mbcs"):
             try:
-                return data.decode(enc)
+                return data.decode(encoding)
             except Exception:
                 continue
         return data.decode("utf-8", errors="replace")
 
     logger.info("Siril alignment start")
-    exe = _find_siril_executable()
-    if not exe:
+    executable = _find_siril_executable()
+    if not executable:
         return AlignResult(
             aligned_old=None,
             success=False,
             error_message="未找到 Siril CLI (siril-cli/siril)",
         )
 
-    # 延迟导入，避免无关路径依赖
     from astropy.io import fits as astropy_fits
 
-    with tempfile.TemporaryDirectory(prefix="scann_siril_align_") as td:
-        work = Path(td)
+    with tempfile.TemporaryDirectory(prefix="scann_siril_align_") as temp_dir:
+        work_dir = Path(temp_dir)
 
-        ref_path = work / "a_ref.fit"
-        old_path = work / "b_old.fit"
-        script_path = work / "align.ssf"
+        ref_path = work_dir / "a_ref.fit"
+        old_path = work_dir / "b_old.fit"
+        script_path = work_dir / "align.ssf"
 
-        # Siril 对输入数据比较敏感：先清理 NaN/Inf 并统一为 float32
         new_sanitized = np.nan_to_num(new_image.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
         old_sanitized = np.nan_to_num(old_image.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
 
         astropy_fits.PrimaryHDU(data=new_sanitized).writeto(ref_path, overwrite=True)
         astropy_fits.PrimaryHDU(data=old_sanitized).writeto(old_path, overwrite=True)
 
-        # Siril 在不同版本上对 setref 索引与变换模型容错差异较大，这里做多策略尝试。
-        # 逐步放宽星点检测条件，提升稀疏星场/低信噪场景下的成功率
         attempts = [
             ("1", "affine", "2.5", "0.25", "off"),
             ("1", "similarity", "1.6", "0.15", "on"),
             ("1", "shift", "1.2", "0.10", "on"),
         ]
 
-        aligned_old_path = None
+        aligned_old_path: Path | None = None
         last_proc = None
 
         for setref_idx, transf, sigma, roundness, relax in attempts:
-            # 清理 Siril 生成工件，避免多次 link/register 互相污染
             cleanup_patterns = [
                 "pair*.fit",
                 "pair*.fits",
@@ -429,14 +462,14 @@ def _align_siril(
                 "R_PAIR*.FITS",
                 "R_PAIR*.FTS",
             ]
-            for pat in cleanup_patterns:
-                for p in work.glob(pat):
+            for pattern in cleanup_patterns:
+                for path in work_dir.glob(pattern):
                     try:
-                        p.unlink()
+                        path.unlink()
                     except Exception:
                         pass
 
-            cache_dir = work / "cache"
+            cache_dir = work_dir / "cache"
             if cache_dir.exists() and cache_dir.is_dir():
                 try:
                     shutil.rmtree(cache_dir, ignore_errors=True)
@@ -445,7 +478,7 @@ def _align_siril(
 
             script = "\n".join([
                 "requires 1.2.0",
-                f'cd "{work.as_posix()}"',
+                f'cd "{work_dir.as_posix()}"',
                 f"setfindstar reset -sigma={sigma} -roundness={roundness} -relax={relax}",
                 "link pair",
                 f"setref pair_ {setref_idx}",
@@ -466,7 +499,7 @@ def _align_siril(
                     relax,
                 )
                 proc = subprocess.run(
-                    [exe, "-d", str(work), "-s", str(script_path)],
+                    [executable, "-d", str(work_dir), "-s", str(script_path)],
                     capture_output=True,
                     text=False,
                     timeout=120,
@@ -474,24 +507,23 @@ def _align_siril(
                 )
                 last_proc = proc
                 logger.info("Siril finished with rc=%s", proc.returncode)
-            except Exception as e:
+            except Exception as exc:
                 logger.exception("Siril execution failed")
                 return AlignResult(
                     aligned_old=None,
                     success=False,
-                    error_message=f"调用 Siril 失败: {e}",
+                    error_message=f"调用 Siril 失败: {exc}",
                 )
 
-            # 期望第二帧是 old 的对齐结果 (00002)
             preferred = [
-                work / "r_pair_00002.fit",
-                work / "r_pair_00002.fits",
-                work / "r_pair_00002.fts",
-                work / "R_PAIR_00002.FIT",
-                work / "R_PAIR_00002.FITS",
-                work / "R_PAIR_00002.FTS",
+                work_dir / "r_pair_00002.fit",
+                work_dir / "r_pair_00002.fits",
+                work_dir / "r_pair_00002.fts",
+                work_dir / "R_PAIR_00002.FIT",
+                work_dir / "R_PAIR_00002.FITS",
+                work_dir / "R_PAIR_00002.FTS",
             ]
-            found = next((p for p in preferred if p.is_file()), None)
+            found = next((path for path in preferred if path.is_file()), None)
             if found is not None:
                 aligned_old_path = found
                 logger.info(
@@ -520,20 +552,17 @@ def _align_siril(
             proc = last_proc
             out = _safe_decode((proc.stdout if proc else b"") or b"")
             err = _safe_decode((proc.stderr if proc else b"") or b"")
-            tail = out[-500:]
-            err_tail = err[-500:]
-            produced = ", ".join(sorted([p.name for p in work.iterdir()]))
+            produced = ", ".join(sorted(path.name for path in work_dir.iterdir()))
             logger.warning("Siril did not produce aligned output. rc=%s", (proc.returncode if proc else "N/A"))
             return AlignResult(
                 aligned_old=None,
                 success=False,
                 error_message=(
                     f"Siril 未生成对齐结果: rc={(proc.returncode if proc else 'N/A')}; "
-                    f"out={tail}; err={err_tail}; files={produced}"
+                    f"out={out[-500:]}; err={err[-500:]}; files={produced}"
                 ),
             )
 
-        # Windows 下偶发 Siril 刚落盘即读导致异常，做短暂重试
         aligned: Optional[np.ndarray] = None
         aligned_path_str = str(aligned_old_path.resolve())
         last_exc: Optional[Exception] = None
@@ -550,8 +579,8 @@ def _align_siril(
                     continue
                 aligned = np.array(data, copy=True)
                 break
-            except Exception as e:
-                last_exc = e
+            except Exception as exc:
+                last_exc = exc
                 time.sleep(0.2)
 
         if aligned is None:
@@ -562,11 +591,8 @@ def _align_siril(
                 error_message=f"读取 Siril 结果失败: {last_exc}",
             )
 
-        # Siril 结果在部分版本中为归一化 32-bit，这里将其映射回旧图亮度范围
         aligned = _match_intensity_scale(aligned, old_image)
 
-        # 对齐后的旧图已与新图同坐标系。为了 marker 可追踪性，
-        # 这里估计“原旧图 -> 对齐旧图”的近似平移量，失败时回退 0。
         estimated_shift = _estimate_translation(aligned, old_image)
         if estimated_shift is None:
             dx = 0.0
@@ -574,6 +600,10 @@ def _align_siril(
         else:
             dx, dy = estimated_shift
             logger.info("Siril estimated shift: dx=%.3f dy=%.3f", dx, dy)
+
+        if abs(dx) > max_shift or abs(dy) > max_shift:
+            dx = 0.0
+            dy = 0.0
 
         return AlignResult(
             aligned_old=aligned,
@@ -588,116 +618,121 @@ def _align_feature_matching(
     old_image: np.ndarray,
     max_shift: int,
 ) -> AlignResult:
-    """特征点匹配法对齐 (适用于旋转+平移)"""
+    """Affine alignment using feature matching."""
     import cv2
 
-    # 转灰度
-    if new_image.ndim == 3:
-        new_gray = cv2.cvtColor(new_image, cv2.COLOR_BGR2GRAY)
-    else:
-        new_gray = new_image.copy()
+    def _prepare_feature_image(image: np.ndarray) -> np.ndarray:
+        enhanced = _enhance_stars(_normalize_for_alignment(_to_gray_f32(image)))
+        return cv2.normalize(enhanced, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
 
-    if old_image.ndim == 3:
-        old_gray = cv2.cvtColor(old_image, cv2.COLOR_BGR2GRAY)
-    else:
-        old_gray = old_image.copy()
+    new_gray = _prepare_feature_image(new_image)
+    old_gray = _prepare_feature_image(old_image)
 
-    # 确保 uint8
-    if new_gray.dtype != np.uint8:
-        new_gray = cv2.normalize(new_gray, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
-    if old_gray.dtype != np.uint8:
-        old_gray = cv2.normalize(old_gray, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+    detectors = [
+        ("AKAZE", cv2.AKAZE_create()),
+        ("ORB", cv2.ORB_create(nfeatures=4000, edgeThreshold=5, fastThreshold=5)),
+    ]
 
-    # ORB 特征检测
-    orb = cv2.ORB_create(nfeatures=2000)
-    kp1, des1 = orb.detectAndCompute(new_gray, None)
-    kp2, des2 = orb.detectAndCompute(old_gray, None)
+    best_result: AlignResult | None = None
+    best_improvement = float("-inf")
+    last_error = "特征匹配失败"
 
-    if des1 is None or des2 is None or len(kp1) < 10 or len(kp2) < 10:
-        return AlignResult(
-            aligned_old=None,
-            success=False,
-            error_message="特征点不足，无法对齐",
+    for detector_name, detector in detectors:
+        kp1, des1 = detector.detectAndCompute(new_gray, None)
+        kp2, des2 = detector.detectAndCompute(old_gray, None)
+        if des1 is None or des2 is None or len(kp1) < 8 or len(kp2) < 8:
+            last_error = f"{detector_name} 特征点不足"
+            continue
+
+        matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+        raw_matches = matcher.knnMatch(des1, des2, k=2)
+        matches = [
+            first for first, second in raw_matches
+            if second is not None and first.distance < 0.75 * second.distance
+        ]
+        matches = sorted(matches, key=lambda match: match.distance)[:200]
+        if len(matches) < 8:
+            last_error = f"{detector_name} 有效匹配点不足: {len(matches)}"
+            continue
+
+        src_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+        dst_pts = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+        matrix, mask = cv2.estimateAffinePartial2D(
+            src_pts,
+            dst_pts,
+            method=cv2.RANSAC,
+            ransacReprojThreshold=3.0,
+            maxIters=5000,
+            confidence=0.99,
+        )
+        if matrix is None or mask is None:
+            last_error = f"{detector_name} 无法估计仿射变换"
+            continue
+
+        inliers = int(np.sum(mask))
+        if inliers < 8 or inliers < max(8, int(len(matches) * 0.25)):
+            last_error = f"{detector_name} RANSAC 内点不足: {inliers}/{len(matches)}"
+            continue
+
+        scale = float(np.hypot(matrix[0, 0], matrix[1, 0]))
+        if not 0.8 <= scale <= 1.2:
+            last_error = f"{detector_name} 尺度异常: {scale:.3f}"
+            continue
+
+        dx = float(matrix[0, 2])
+        dy = float(matrix[1, 2])
+        if abs(dx) > max_shift or abs(dy) > max_shift:
+            last_error = f"{detector_name} 偏移量过大: dx={dx:.1f}, dy={dy:.1f}"
+            continue
+
+        height, width = old_image.shape[:2]
+        aligned = cv2.warpAffine(
+            old_image,
+            matrix,
+            (width, height),
+            flags=cv2.INTER_LANCZOS4,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
         )
 
-    # 匹配
-    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-    matches = bf.match(des1, des2)
-    matches = sorted(matches, key=lambda x: x.distance)
+        before, after = _alignment_quality(new_image, old_image, aligned, dx, dy)
+        if not _is_quality_improved(before, after):
+            last_error = (
+                f"{detector_name} 质量不足: before={before:.4f}, after={after:.4f}, "
+                f"inliers={inliers}/{len(matches)}"
+            )
+            continue
 
-    if len(matches) < 10:
-        return AlignResult(
-            aligned_old=None,
-            success=False,
-            error_message=f"匹配点不足: {len(matches)}",
-        )
-
-    # 提取匹配点
-    src_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
-    dst_pts = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
-
-    # 估算变换矩阵 (仿射或刚体)
-    M, mask = cv2.estimateAffinePartial2D(src_pts, dst_pts, method=cv2.RANSAC)
-    if M is None:
-        return AlignResult(
-            aligned_old=None,
-            success=False,
-            error_message="无法估算变换矩阵",
-        )
-
-    dx = float(M[0, 2])
-    dy = float(M[1, 2])
-    if abs(dx) > max_shift or abs(dy) > max_shift:
-        return AlignResult(
-            aligned_old=None,
+        rotation = float(np.degrees(np.arctan2(matrix[1, 0], matrix[0, 0])))
+        result = AlignResult(
+            aligned_old=aligned,
             dx=dx,
             dy=dy,
-            success=False,
-            error_message=f"特征匹配偏移量过大: dx={dx:.1f}, dy={dy:.1f}",
+            rotation=rotation,
+            success=True,
         )
-    # 从仿射矩阵提取旋转角
-    rotation = float(np.degrees(np.arctan2(M[1, 0], M[0, 0])))
+        improvement = after - before
+        if improvement > best_improvement:
+            best_improvement = improvement
+            best_result = result
 
-    h, w = old_image.shape[:2]
-    aligned = cv2.warpAffine(
-        old_image, M, (w, h),
-        flags=cv2.INTER_LANCZOS4,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=0,
-    )
+    if best_result is not None:
+        return best_result
 
-    return AlignResult(
-        aligned_old=aligned,
-        dx=dx,
-        dy=dy,
-        rotation=rotation,
-        success=True,
-    )
+    return AlignResult(aligned_old=None, success=False, error_message=last_error)
 
 
 def batch_align(
     new_images: List[np.ndarray],
     old_images: List[np.ndarray],
-    method: str = "phase_correlation",
+    method: str = "auto",
     max_shift: int = 100,
 ) -> List[AlignResult]:
-    """批量对齐
-
-    Args:
-        new_images: 新图列表 (参考图)
-        old_images: 旧图列表 (待对齐)
-        method: 对齐方法
-        max_shift: 最大允许偏移量
-
-    Returns:
-        对齐结果列表
-    """
+    """Batch-align image pairs."""
     if len(new_images) != len(old_images):
         raise ValueError("新旧图列表长度不一致")
 
     results = []
     for new_img, old_img in zip(new_images, old_images):
-        result = align(new_img, old_img, method=method, max_shift=max_shift)
-        results.append(result)
-
+        results.append(align(new_img, old_img, method=method, max_shift=max_shift))
     return results
