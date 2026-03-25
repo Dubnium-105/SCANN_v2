@@ -66,6 +66,8 @@ class TestTrainingDialogInit:
         items = [dialog.combo_device.itemText(i) for i in range(dialog.combo_device.count())]
         assert any("Auto" in x for x in items)
         assert "CUDA" in items
+        assert any("NPU" in x for x in items)
+        assert any("MLU" in x for x in items)
         assert "CPU" in items
         assert dialog.combo_device.currentData() == "auto"
 

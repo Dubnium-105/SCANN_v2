@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import json
 import logging
-import random
 import os
+import random
 from pathlib import Path
 from typing import Any, Optional
 
@@ -34,6 +34,7 @@ except Exception:
 
 import torch  # 现在导入torch
 
+from scann.ai.device_utils import resolve_device
 from scann.ai.model import ModelFormat, SCANNClassifier
 from scann.ai.trainer import TrainConfig, compute_metrics, find_threshold_for_recall
 from scann.core.annotation_models import DETAIL_TYPE_TO_LABEL, DetailType
@@ -389,26 +390,12 @@ class TrainingWorker(QThread):
             save_path = str(self._params.get("save_path", "best_model.pth"))
 
             # 设备
-            requested_device = str(self._params.get("device", "auto")).strip().lower()
-            if requested_device in {"auto", ""}:
-                device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-            elif requested_device in {"cuda", "cuda:0", "gpu", "nvidia"}:
-                if torch.cuda.is_available():
-                    device = torch.device("cuda:0")
-                else:
-                    logger.warning("请求使用CUDA但当前环境不可用，回退到CPU")
-                    device = torch.device("cpu")
-            elif requested_device in {"cpu"}:
-                device = torch.device("cpu")
-            else:
-                # 允许传入诸如 "cuda:1" / "mps" 等自定义字符串；失败则回退cpu
-                try:
-                    device = torch.device(requested_device)
-                except Exception:
-                    logger.warning(f"无法解析训练设备: {requested_device}，回退到CPU")
-                    device = torch.device("cpu")
-
-            logger.info(f"训练设备: {device}")
+            requested_device = str(self._params.get("device", "auto")).strip()
+            resolved_device = resolve_device(requested_device)
+            device = resolved_device.resolved
+            if resolved_device.used_fallback:
+                logger.warning("Training device fallback: %s", resolved_device.message)
+            logger.info("Training device: requested=%s resolved=%s", requested_device, resolved_device.message)
 
             if task_type == "detection":
                 if dataset_format != "v2":

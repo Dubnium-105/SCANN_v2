@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -31,6 +30,12 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QSpinBox,
     QVBoxLayout,
+)
+
+from scann.ai.device_utils import (
+    format_accelerator_status,
+    get_training_device_choices,
+    list_accelerators,
 )
 
 
@@ -133,14 +138,11 @@ class TrainingDialog(QDialog):
         # 设备选择
         device_layout = QHBoxLayout()
         self.combo_device = QComboBox()
-        self.combo_device.addItem("Auto (优先CUDA)", "auto")
-        self.combo_device.addItem("CUDA", "cuda:0")
-        self.combo_device.addItem("CPU", "cpu")
+        self._populate_device_choices("auto")
         self.combo_device.setToolTip(
-            "选择训练设备\n"
-            "Auto: 有CUDA则使用cuda:0，否则cpu\n"
-            "CUDA: 强制使用cuda:0（不可用则回退cpu）\n"
-            "CPU: 强制使用cpu"
+            "Select training device\n"
+            "Auto: choose the first available accelerator backend (CUDA / NPU / MLU / MUSA), otherwise fall back to CPU\n"
+            "Other options: prefer the selected backend and fall back to CPU if unavailable"
         )
         device_layout.addWidget(self.combo_device)
         
@@ -312,61 +314,21 @@ class TrainingDialog(QDialog):
         self._check_cuda_availability()
 
     def _check_cuda_availability(self) -> None:
-        """检查CUDA可用性并更新状态标签"""
-        try:
-            import torch
-        except ImportError:
-            self.lbl_cuda_status.setText("❌ PyTorch未安装")
-            self.lbl_cuda_status.setStyleSheet("font-size: 11px; color: #f44336;")
-            return
-        
-        if torch.cuda.is_available():
-            # CUDA可用
-            count = torch.cuda.device_count()
-            current_device = torch.cuda.current_device()
-            device_name = torch.cuda.get_device_name(current_device)
-            cuda_version = torch.version.cuda
-            
-            msg = f"✅ CUDA可用\n"
-            msg += f"  • 版本: {cuda_version}\n"
-            msg += f"  • 设备数: {count}\n"
-            msg += f"  • 当前: {device_name}"
-            
-            self.lbl_cuda_status.setText(msg)
+        """Check accelerator availability and refresh the status label."""
+        self._populate_device_choices(self.combo_device.currentData() or "auto")
+        msg = format_accelerator_status()
+        self.lbl_cuda_status.setText(msg)
+        has_accelerator = any(info.available for info in list_accelerators())
+        if has_accelerator:
             self.lbl_cuda_status.setStyleSheet("font-size: 11px; color: #4CAF50;")
-            
-            # 确保CUDA选项可用
-            if self.combo_device.findData("cuda:0") == -1:
-                self.combo_device.insertItem(1, "CUDA", "cuda:0")
         else:
-            # CUDA不可用，显示可能的原因
-            msg = "❌ CUDA不可用\n"
-            msg += "可能原因:\n"
-            
-            # 检查是否是CPU版本PyTorch
-            if not hasattr(torch, 'cuda'):
-                msg += "  • PyTorch CPU版未支持CUDA"
-            elif not torch.cuda.is_available():
-                # 检查CUDA是否安装
-                try:
-                    import subprocess
-                    result = subprocess.run(
-                        ["nvidia-smi"], 
-                        capture_output=True, 
-                        text=True,
-                        timeout=2,
-                        shell=True
-                    )
-                    if result.returncode != 0:
-                        msg += "  • NVIDIA驱动未安装或nvidia-smi不可用\n"
-                        msg += "  • 需要安装NVIDIA显卡驱动"
-                    else:
-                        msg += "  • 驱动已安装\n"
-                        msg += "  • 可能是PyTorch CPU版\n"
-                        msg += "  • 检查命令: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118"
-                except Exception:
-                    msg += "  • 无法检测NVIDIA驱动\n"
-                    msg += "  • 请确保安装了NVIDIA显卡和驱动"
-            
-            self.lbl_cuda_status.setText(msg)
-            self.lbl_cuda_status.setStyleSheet("font-size: 11px; color: #f44336;")
+            self.lbl_cuda_status.setStyleSheet("font-size: 11px; color: #f57c00;")
+
+    def _populate_device_choices(self, current_value: str | None = None) -> None:
+        current = current_value or (self.combo_device.currentData() if self.combo_device.count() else "auto")
+        self.combo_device.clear()
+        for label, value in get_training_device_choices(current):
+            self.combo_device.addItem(label, value)
+
+        index = self.combo_device.findData(current)
+        self.combo_device.setCurrentIndex(index if index >= 0 else 0)

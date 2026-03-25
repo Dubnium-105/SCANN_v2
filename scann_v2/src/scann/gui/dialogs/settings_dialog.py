@@ -30,6 +30,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from scann.ai.device_utils import get_settings_device_choices
 from scann.core.models import AppConfig as Config
 
 
@@ -232,7 +233,8 @@ class SettingsDialog(QDialog):
         infer_form.addRow("批量大小:", self.spin_batch_size)
 
         self.combo_device = QComboBox()
-        self.combo_device.addItems(["auto", "cpu", "cuda"])
+        for label, value in get_settings_device_choices():
+            self.combo_device.addItem(label, value)
         infer_form.addRow("计算设备:", self.combo_device)
 
         self.combo_detection_mode = QComboBox()
@@ -359,8 +361,11 @@ class SettingsDialog(QDialog):
         self.combo_model_backbone.setCurrentIndex(backbone_map.get(cfg.model_backbone, 0))
 
         # 计算设备
-        device_map = {"auto": 0, "cpu": 1, "cuda": 2}
-        self.combo_device.setCurrentIndex(device_map.get(cfg.compute_device, 0))
+        device_index = self.combo_device.findData(cfg.compute_device)
+        if device_index < 0:
+            self.combo_device.addItem(cfg.compute_device, cfg.compute_device)
+            device_index = self.combo_device.findData(cfg.compute_device)
+        self.combo_device.setCurrentIndex(max(device_index, 0))
 
         detection_mode_map = {"patch": 0, "full_image": 1, "hybrid": 2}
         self.combo_detection_mode.setCurrentIndex(
@@ -419,8 +424,7 @@ class SettingsDialog(QDialog):
         cfg.model_backbone = backbone_values[self.combo_model_backbone.currentIndex()]
 
         # 计算设备
-        device_values = ["auto", "cpu", "cuda"]
-        cfg.compute_device = device_values[self.combo_device.currentIndex()]
+        cfg.compute_device = str(self.combo_device.currentData() or "auto")
 
         detection_mode_values = ["patch", "full_image", "hybrid"]
         cfg.detection_mode = detection_mode_values[self.combo_detection_mode.currentIndex()]

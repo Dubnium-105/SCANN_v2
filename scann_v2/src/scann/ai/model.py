@@ -33,6 +33,8 @@ import torch
 import torch.nn as nn
 from torchvision import models
 
+from scann.ai.device_utils import resolve_device
+
 logger = logging.getLogger(__name__)
 
 # 确认缓存目录
@@ -226,7 +228,7 @@ class SCANNClassifier(nn.Module):
             加载好的模型 (eval mode)
         """
         if device is None:
-            device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+            device = resolve_device("auto").resolved
 
         ckpt = torch.load(path, map_location=device, weights_only=False)
 

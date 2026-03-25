@@ -76,3 +76,74 @@
 - **特殊算子与 FlashAttention：** 标准的 `flash-attn` 是基于 CUDA 编写的无法直接运行，必须调用国产算子库中提供的对应融合 Attention 模块（如昇腾的 `npu_fusion_attention`）。目标检测相关的特殊操作须确认官方库底层C++的实现，防止严重掉速的“算子回退 (Fallback CPU)”。
 - **分布式后端替换 (DDP Backend)：** 分布式训练中将 NVIDIA 的通信库 `nccl` 变更为特有通信库（华为对应 `hccl`，寒武纪对应 `cncl`）。
 - **混合精度的兼容：** 将 `torch.cuda.amp` 调整为对应的硬件专用库函数（如 `torch.npu.amp`）。建议迁移初期先使用 FP32 跑通 Baseline 并在测试集上比对损失曲线与 mAP 水平一致后，再逐步开启混合精度。
+
+### 9.1 当前仓库中的兼容层现状
+目前项目已经落地了一层统一的设备兼容代码，核心位于 `scann_v2/src/scann/ai/device_utils.py`，主要负责：
+- 统一探测可用加速后端。
+- 统一解析设备参数与别名。
+- 在 `auto` 模式下自动选择当前环境里优先级最高的可用设备。
+- 为不同后端提供统一的 AMP 自动混合精度上下文。
+- 为 GUI 提供统一的设备下拉项与状态摘要。
+
+当前默认自动选择优先级为：
+`CUDA -> NPU -> MLU -> MUSA -> XPU -> MPS -> CPU`
+
+也就是说，当配置为 `auto` 时，程序会优先选择可用的 NVIDIA CUDA；若没有 CUDA，则继续尝试昇腾 NPU、寒武纪 MLU、MUSA 等；若均不可用，则安全回退到 CPU。
+
+### 9.2 已接入兼容层的模块
+兼容层目前已经接入以下路径：
+- `scann_v2/src/scann/ai/training_worker.py`
+  训练入口的 `device` 参数已改为统一解析，可接受 `auto`、`cuda`、`npu`、`mlu`、`musa` 等值。
+- `scann_v2/src/scann/ai/inference.py`
+  推理设备与 AMP 上下文不再写死为 CUDA 路径。
+- `scann_v2/src/scann/ai/model.py`
+  模型加载时在未显式指定设备的情况下，改为走统一自动设备选择。
+- `scann_v2/src/scann/gui/dialogs/settings_dialog.py`
+  设置页中的“计算设备”已经从固定 `auto/cpu/cuda` 扩展为统一设备枚举。
+- `scann_v2/src/scann/gui/dialogs/training_dialog.py`
+  训练界面已经支持直接选择 `CUDA`、`NPU (Ascend)`、`MLU (Cambricon)`、`MUSA`，并显示通用加速器状态。
+
+### 9.3 这层兼容当前解决了什么
+当前完成的是“设备兼容层”和“运行时入口兼容”，具体包括：
+- 程序不再把加速设备等同于 CUDA。
+- 训练、推理、模型加载可以接受国产卡设备名。
+- AMP 上下文不再直接硬编码为 `torch.cuda.amp`。
+- 当指定设备不可用时，程序会自动回退，而不是直接崩溃。
+
+这意味着仓库已经具备“迁移到国产卡所需的基础抽象层”，后续适配工作不必再从全局搜 `.cuda()` 开始。
+
+### 9.4 当前还没有完全解决的部分
+需要明确区分：**兼容层到位，不等于所有国产卡已经可直接高性能训练。**
+
+仍然依赖以下前提：
+- 对应厂商的 PyTorch 扩展已经安装并可用。
+  例如昇腾通常依赖 `torch_npu`，寒武纪通常依赖 `torch_mlu`，MUSA 通常依赖 `torch_musa`。
+- 相关算子在目标后端上有实现。
+- ViT、dense detection head、损失函数与后处理路径没有隐式 CPU fallback。
+
+因此，当前状态更准确地说是：
+- **设备选择层：已支持**
+- **厂商运行时层：取决于环境**
+- **算子覆盖与性能层：仍需逐卡验证**
+
+### 9.5 国产卡迁移时的推荐验证顺序
+建议按以下顺序推进：
+
+1. 先安装对应厂商的运行时与 PyTorch 扩展，并确认 `torch.<backend>.is_available()` 为真。
+2. 在设置或训练参数中显式指定目标设备，例如 `npu`、`mlu`、`musa`。
+3. 首次迁移时先关闭 AMP，仅用 FP32 跑通训练与推理主流程。
+4. 与 CPU 或 CUDA 基线对比 loss 曲线、mAP、召回率、误检率。
+5. 在数值一致后，再逐步打开 AMP，并观察吞吐、显存占用与稳定性。
+
+推荐最小验证项：
+- 单 batch 前向是否成功
+- 单 epoch 训练是否成功
+- 验证集指标是否与基线同量级
+- 是否出现异常慢速、CPU 占用异常偏高或显存/片上内存异常抖动
+
+### 9.6 后续建议继续补齐的工作
+若后续要把国产卡支持从“能跑”提升到“可稳定交付”，建议继续补齐：
+- 增加 `torch_npu` / `torch_mlu` / `torch_musa` 的安装说明与版本矩阵。
+- 补充各后端 smoke test，至少覆盖设备解析、训练入口、推理入口和 AMP。
+- 对 ViT 与 dense detection 路径做逐后端 profiling，确认是否存在算子回退。
+- 若未来引入分布式训练，再补 `hccl` / `cncl` 的配置说明与启动脚本。

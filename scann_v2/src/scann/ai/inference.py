@@ -18,6 +18,7 @@ import torch
 import torch.nn.functional as F
 from torchvision import transforms
 
+from scann.ai.device_utils import get_mixed_precision_context, resolve_device
 from scann.core.models import Candidate, Detection, MarkerType
 
 
@@ -30,7 +31,7 @@ class InferenceConfig:
     batch_size: int = 64
     max_memory_mb: int = 8000  # 8GB 显存限制
     use_amp: bool = True       # 混合精度
-    device: str = "auto"       # "auto", "cuda:0", "cpu"
+    device: str = "auto"       # "auto", "cpu", "cuda[:idx]", "npu[:idx]", "mlu[:idx]", ...
     model_format: str = "auto" # "auto", "v1_classifier", "v2_classifier"
     model_backbone: str = "auto"  # "auto", "ResNet18", "ResNet34", "ResNet50", "ViT_B_16"
 
@@ -53,11 +54,10 @@ class InferenceEngine:
             self._load_model(model_path)
 
     def _resolve_device(self) -> torch.device:
-        if self.config.device == "auto":
-            if torch.cuda.is_available():
-                return torch.device("cuda:0")
-            return torch.device("cpu")
-        return torch.device(self.config.device)
+        resolved = resolve_device(self.config.device)
+        self._resolved_device = resolved
+        logger.info("推理设备: requested=%s resolved=%s", self.config.device, resolved.message)
+        return resolved.resolved
 
     def _load_model(self, path: str) -> None:
         """加载模型 (自动检测 v1/v2 格式)
@@ -271,14 +271,9 @@ class InferenceEngine:
 
             stack = torch.stack(tensors).to(self.device)
 
-            if self.config.use_amp and self.device.type == "cuda":
-                amp_mod = getattr(torch, "amp", None)
-                if amp_mod is not None and hasattr(amp_mod, "autocast"):
-                    with amp_mod.autocast("cuda"):
-                        logits = self.model(stack)
-                else:
-                    with torch.cuda.amp.autocast():
-                        logits = self.model(stack)
+            if self.config.use_amp:
+                with get_mixed_precision_context(self.device, enabled=True):
+                    logits = self.model(stack)
             else:
                 logits = self.model(stack)
 
@@ -453,14 +448,9 @@ class InferenceEngine:
             return []
 
         try:
-            if self.config.use_amp and self.device.type == "cuda":
-                amp_mod = getattr(torch, "amp", None)
-                if amp_mod is not None and hasattr(amp_mod, "autocast"):
-                    with amp_mod.autocast("cuda"):
-                        dense_output = dense_forward(input_tensor)
-                else:
-                    with torch.cuda.amp.autocast():
-                        dense_output = dense_forward(input_tensor)
+            if self.config.use_amp:
+                with get_mixed_precision_context(self.device, enabled=True):
+                    dense_output = dense_forward(input_tensor)
             else:
                 dense_output = dense_forward(input_tensor)
         except Exception:
