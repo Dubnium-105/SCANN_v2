@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional, Union
 
@@ -27,6 +27,11 @@ def _datetime_to_jd(dt: datetime) -> float:
           + day_of_year + hour/24 + minute/1440 + second/86400
     """
     # 转换为 UTC 时间戳
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+
     timestamp = dt.timestamp()
     # Unix 时间戳 (1970-01-01 00:00:00 UTC) 对应的 JD
     JD_UNIX = 2440587.5
