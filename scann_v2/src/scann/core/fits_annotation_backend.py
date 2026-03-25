@@ -137,11 +137,7 @@ class FitsAnnotationBackend(AnnotationBackend):
             return
 
         # 记录撤销信息
-        old_value = {
-            "label": sample.label,
-            "detail_type": sample.detail_type,
-            "bboxes": [b.to_dict() for b in sample.bboxes],
-        }
+        old_value = self._snapshot_sample_state(sample)
 
         # 更新标签
         sample.label = label
@@ -156,11 +152,7 @@ class FitsAnnotationBackend(AnnotationBackend):
                 bbox.detail_type = detail_type
             sample.bboxes.append(bbox)
 
-        new_value = {
-            "label": sample.label,
-            "detail_type": sample.detail_type,
-            "bboxes": [b.to_dict() for b in sample.bboxes],
-        }
+        new_value = self._snapshot_sample_state(sample)
 
         self._push_undo(AnnotationAction(
             action_type="bbox_add" if bbox else "label",
@@ -185,21 +177,13 @@ class FitsAnnotationBackend(AnnotationBackend):
             logger.warning("AI预标注失败: 样本 %s 不存在", sample_id)
             return
 
-        old_value = {
-            "bboxes": [bbox.to_dict() for bbox in sample.bboxes],
-            "ai_suggestion": sample.ai_suggestion,
-            "ai_confidence": sample.ai_confidence,
-        }
+        old_value = self._snapshot_sample_state(sample)
 
         sample.bboxes = [BBox.from_dict(bbox.to_dict()) for bbox in bboxes]
         sample.ai_suggestion = ai_suggestion
         sample.ai_confidence = ai_confidence
 
-        new_value = {
-            "bboxes": [bbox.to_dict() for bbox in sample.bboxes],
-            "ai_suggestion": sample.ai_suggestion,
-            "ai_confidence": sample.ai_confidence,
-        }
+        new_value = self._snapshot_sample_state(sample)
 
         self._push_undo(AnnotationAction(
             action_type="ai_prelabel",
@@ -208,6 +192,111 @@ class FitsAnnotationBackend(AnnotationBackend):
             new_value=new_value,
         ))
         self._save_sample_annotation(sample)
+
+    def update_bbox(
+        self,
+        sample_id: str,
+        bbox_index: int,
+        *,
+        label: Optional[str],
+        detail_type: Optional[str],
+        confidence: Optional[float] = None,
+    ) -> bool:
+        """Update an existing bbox annotation and persist it immediately."""
+        sample = self.get_sample(sample_id)
+        if sample is None:
+            logger.warning("bbox update failed: sample %s does not exist", sample_id)
+            return False
+        if bbox_index < 0 or bbox_index >= len(sample.bboxes):
+            logger.warning(
+                "bbox update failed: sample %s has no bbox at index %s",
+                sample_id,
+                bbox_index,
+            )
+            return False
+
+        old_value = self._snapshot_sample_state(sample)
+        bbox = sample.bboxes[bbox_index]
+        bbox.label = label
+        bbox.detail_type = detail_type
+        if confidence is not None:
+            bbox.confidence = confidence
+        self._sync_sample_summary_from_bboxes(sample)
+        new_value = self._snapshot_sample_state(sample)
+
+        self._push_undo(
+            AnnotationAction(
+                action_type="bbox_edit",
+                sample_id=sample_id,
+                old_value=old_value,
+                new_value=new_value,
+            )
+        )
+        self._save_sample_annotation(sample)
+        return True
+
+    def delete_bbox(self, sample_id: str, bbox_index: int) -> bool:
+        """Delete a bbox annotation and persist the updated sample."""
+        sample = self.get_sample(sample_id)
+        if sample is None:
+            logger.warning("bbox delete failed: sample %s does not exist", sample_id)
+            return False
+        if bbox_index < 0 or bbox_index >= len(sample.bboxes):
+            logger.warning(
+                "bbox delete failed: sample %s has no bbox at index %s",
+                sample_id,
+                bbox_index,
+            )
+            return False
+
+        old_value = self._snapshot_sample_state(sample)
+        sample.bboxes.pop(bbox_index)
+        self._sync_sample_summary_from_bboxes(sample)
+        new_value = self._snapshot_sample_state(sample)
+
+        self._push_undo(
+            AnnotationAction(
+                action_type="bbox_remove",
+                sample_id=sample_id,
+                old_value=old_value,
+                new_value=new_value,
+            )
+        )
+        self._save_sample_annotation(sample)
+        return True
+
+    def persist_sample(self, sample_id: str) -> bool:
+        """Persist the current in-memory state of a single sample."""
+        sample = self.get_sample(sample_id)
+        if sample is None:
+            return False
+        self._save_sample_annotation(sample)
+        return True
+
+    def persist_all(self) -> int:
+        """Flush the full in-memory dataset to SQLite."""
+        if self._annotation_storage is None:
+            return 0
+        self._annotation_storage.bulk_replace(self._samples)
+        return len(self._samples)
+
+    def undo(self) -> bool:
+        if not self._undo_stack:
+            return False
+        action = self._undo_stack[-1]
+        result = super().undo()
+        if result:
+            self.persist_sample(action.sample_id)
+        return result
+
+    def redo(self) -> bool:
+        if not self._redo_stack:
+            return False
+        action = self._redo_stack[-1]
+        result = super().redo()
+        if result:
+            self.persist_sample(action.sample_id)
+        return result
 
     def get_image_data(
         self, sample: AnnotationSample, image_type: str = "new"
@@ -746,6 +835,33 @@ class FitsAnnotationBackend(AnnotationBackend):
             if stem.startswith(prefix):
                 return stem[len(prefix):]
         return stem
+
+    @staticmethod
+    def _snapshot_sample_state(sample: AnnotationSample) -> dict:
+        return {
+            "label": sample.label,
+            "detail_type": sample.detail_type,
+            "bboxes": [bbox.to_dict() for bbox in sample.bboxes],
+            "ai_suggestion": sample.ai_suggestion,
+            "ai_confidence": sample.ai_confidence,
+        }
+
+    @staticmethod
+    def _sync_sample_summary_from_bboxes(sample: AnnotationSample) -> None:
+        representative = next(
+            (
+                bbox
+                for bbox in sample.bboxes
+                if bbox.label is not None or bbox.detail_type is not None
+            ),
+            None,
+        )
+        if representative is None:
+            sample.label = None
+            sample.detail_type = None
+            return
+        sample.label = representative.label
+        sample.detail_type = representative.detail_type
 
     def _save_sample_annotation(self, sample: AnnotationSample) -> None:
         """按样本增量持久化，避免全量重写大 JSON。"""

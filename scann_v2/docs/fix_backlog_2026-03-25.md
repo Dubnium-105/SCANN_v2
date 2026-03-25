@@ -49,30 +49,23 @@
 
 ## P1: 标注工具显式保存入口为空实现
 
-- 状态: 已确认未完成
+- 状态: 已完成
 - 影响: 中
-- 模块: `AnnotationDialog`
+- 模块: `AnnotationDialog` / `FitsAnnotationBackend`
 - 文件:
   - `scann_v2/src/scann/gui/dialogs/annotation_dialog.py`
-- 问题描述:
-  - `Ctrl+S` 已绑定到 `_save_annotations()`。
-  - `_save_annotations()` 当前函数体为 `pass`。
-  - 注释说明 v2 会自动持久化，但从用户视角看，显式保存入口仍然是空实现。
-- 风险:
-  - 用户按 `Ctrl+S` 没有反馈，容易误以为未保存。
-  - v1/v2 行为语义不一致，后续维护容易出错。
-  - 若以后后端持久化策略变化，这个空方法会成为隐蔽故障点。
-- 建议修复:
-  - 至少补齐显式反馈逻辑。
-  - 如果 v2 的确自动保存，应在该方法中显示“已保存”或“当前模式为自动保存”。
-  - 如果 v1 仍需要显式保存，应在这里根据 backend 类型分别处理。
-  - 给 `Ctrl+S` 增加可观测行为，不要保留空函数。
-- 最小验收标准:
-  - 触发 `Ctrl+S` 后一定有明确结果: 真正保存、同步刷新、或显示自动保存提示。
-  - 对不同 backend 的行为是确定且可测试的。
-- 建议测试:
-  - 在 `tests/test_annotation_dialog.py` 中增加快捷键或直接调用 `_save_annotations()` 的测试。
-  - 覆盖 v1 backend、v2 backend、无 backend 三种情况。
+  - `scann_v2/src/scann/core/fits_annotation_backend.py`
+  - `scann_v2/src/scann/core/annotation_backend.py`
+  - `scann_v2/tests/test_annotation_dialog.py`
+  - `scann_v2/tests/test_fits_annotation_backend.py`
+- 完成说明:
+  - `_save_annotations()` 已实现明确行为: 未加载数据时告警、v2 显式 flush 到 SQLite、v1 明确提示“即时保存”。
+  - v2 模式下的框标签修改和删框已改为通过 `FitsAnnotationBackend` 持久化，不再只改内存。
+  - `FitsAnnotationBackend.undo()/redo()` 现在会把回滚后的样本状态重新写回 SQLite。
+  - 基础 undo/redo 状态恢复已覆盖 `ai_suggestion` / `ai_confidence`，避免 AI 预标注回滚只改内存不改持久层。
+- 验收结果:
+  - `Ctrl+S` 触发后已有明确反馈，且 v2 会执行显式全量落盘。
+  - 新增回归测试覆盖 bbox 编辑持久化、删框持久化、undo/redo 持久化，以及对话框保存提示。
 
 ## P1: “计划任务”菜单仍是占位实现
 

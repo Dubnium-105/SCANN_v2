@@ -202,12 +202,7 @@ class AnnotationBackend(ABC):
         if sample is None:
             return
         if action.old_value is not None:
-            if "label" in action.old_value:
-                sample.label = action.old_value["label"]
-            if "detail_type" in action.old_value:
-                sample.detail_type = action.old_value["detail_type"]
-            if "bboxes" in action.old_value:
-                sample.bboxes = [BBox.from_dict(b) for b in action.old_value["bboxes"]]
+            self._restore_sample_state(sample, action.old_value)
 
     def _apply_redo(self, action: AnnotationAction) -> None:
         """应用重做 — 将样本恢复到操作后状态"""
@@ -215,12 +210,24 @@ class AnnotationBackend(ABC):
         if sample is None:
             return
         if action.new_value is not None:
-            if "label" in action.new_value:
-                sample.label = action.new_value["label"]
-            if "detail_type" in action.new_value:
-                sample.detail_type = action.new_value["detail_type"]
-            if "bboxes" in action.new_value:
-                sample.bboxes = [BBox.from_dict(b) for b in action.new_value["bboxes"]]
+            self._restore_sample_state(sample, action.new_value)
+
+    def _restore_sample_state(
+        self,
+        sample: AnnotationSample,
+        state: dict,
+    ) -> None:
+        """Restore the mutable sample fields captured in an undo snapshot."""
+        if "label" in state:
+            sample.label = state["label"]
+        if "detail_type" in state:
+            sample.detail_type = state["detail_type"]
+        if "bboxes" in state:
+            sample.bboxes = [BBox.from_dict(b) for b in state["bboxes"]]
+        if "ai_suggestion" in state:
+            sample.ai_suggestion = state["ai_suggestion"]
+        if "ai_confidence" in state:
+            sample.ai_confidence = state["ai_confidence"]
 
     @property
     def can_undo(self) -> bool:

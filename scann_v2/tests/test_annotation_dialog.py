@@ -233,3 +233,80 @@ def test_v2_blink_button_cycles_marked_new_old(qapp, fits_dataset: Path):
     dialog.deleteLater()
     parent.deleteLater()
     qapp.processEvents()
+
+
+def test_v2_label_shortcut_persists_bbox_updates_and_save_reports_success(
+    qapp,
+    fits_dataset: Path,
+):
+    from scann.core.annotation_models import BBox
+    from scann.core.models import AlignResult
+    from scann.gui.dialogs.annotation_dialog import AnnotationDialog
+
+    parent = QWidget()
+    parent._show_message = Mock()
+
+    dialog = AnnotationDialog(parent=parent, config=AppConfig())
+    dialog.set_mode("v2")
+
+    def fake_align(new_data, old_data, method="auto", max_shift=None):
+        return AlignResult(
+            aligned_old=old_data.astype(np.float32),
+            dx=0.0,
+            dy=0.0,
+            success=True,
+        )
+
+    with patch("scann.core.fits_annotation_backend.align", fake_align):
+        dialog.load_dataset(str(fits_dataset))
+
+    sample = dialog._samples[0]
+    dialog._backend.save_annotation(
+        sample.id,
+        "real",
+        bbox=BBox(x=24, y=28, width=20, height=20),
+        detail_type="asteroid",
+    )
+    dialog._update_display()
+    dialog._update_stats()
+    dialog._annotation_viewer.select_bbox(0)
+
+    dialog._on_label_button("N2")
+
+    reloaded_backend = dialog._backend.__class__()
+    reloaded_backend.load_samples(str(fits_dataset))
+    restored = next(s for s in reloaded_backend.samples if s.id == sample.id)
+
+    assert len(restored.bboxes) == 1
+    assert restored.bboxes[0].label == "bogus"
+    assert restored.bboxes[0].detail_type == "noise"
+
+    parent._show_message.reset_mock()
+    dialog._save_annotations()
+    parent._show_message.assert_called()
+    assert "已保存" in parent._show_message.call_args[0][0]
+
+    dialog.close()
+    parent.close()
+    dialog.deleteLater()
+    parent.deleteLater()
+    qapp.processEvents()
+
+
+def test_save_annotations_warns_when_dataset_is_missing(qapp):
+    from scann.gui.dialogs.annotation_dialog import AnnotationDialog
+
+    parent = QWidget()
+    parent._show_message = Mock()
+
+    dialog = AnnotationDialog(parent=parent, config=AppConfig())
+    dialog._save_annotations()
+
+    parent._show_message.assert_called()
+    assert "请先加载标注数据集" in parent._show_message.call_args[0][0]
+
+    dialog.close()
+    parent.close()
+    dialog.deleteLater()
+    parent.deleteLater()
+    qapp.processEvents()

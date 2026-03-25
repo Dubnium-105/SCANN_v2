@@ -369,6 +369,55 @@ class TestFitsPersistence:
         assert len(restored.bboxes) == 1
         assert restored.bboxes[0].confidence == pytest.approx(0.91)
 
+    def test_update_bbox_persists_on_reload(self, fits_backend, fits_dataset: Path):
+        from scann.core.fits_annotation_backend import FitsAnnotationBackend
+
+        sample = fits_backend.samples[0]
+        fits_backend.save_annotation(
+            sample.id,
+            "real",
+            bbox=BBox(x=50, y=60, width=24, height=24),
+            detail_type="asteroid",
+        )
+
+        assert fits_backend.update_bbox(
+            sample.id,
+            0,
+            label="bogus",
+            detail_type="noise",
+        ) is True
+
+        reloaded = FitsAnnotationBackend()
+        reloaded.load_samples(str(fits_dataset))
+        restored = next(s for s in reloaded.samples if s.id == sample.id)
+
+        assert restored.label == "bogus"
+        assert restored.detail_type == "noise"
+        assert len(restored.bboxes) == 1
+        assert restored.bboxes[0].label == "bogus"
+        assert restored.bboxes[0].detail_type == "noise"
+
+    def test_delete_bbox_removes_persisted_annotation(self, fits_backend, fits_dataset: Path):
+        from scann.core.fits_annotation_backend import FitsAnnotationBackend
+
+        sample = fits_backend.samples[0]
+        fits_backend.save_annotation(
+            sample.id,
+            "real",
+            bbox=BBox(x=50, y=60, width=24, height=24),
+            detail_type="asteroid",
+        )
+
+        assert fits_backend.delete_bbox(sample.id, 0) is True
+
+        reloaded = FitsAnnotationBackend()
+        reloaded.load_samples(str(fits_dataset))
+        restored = next(s for s in reloaded.samples if s.id == sample.id)
+
+        assert restored.label is None
+        assert restored.detail_type is None
+        assert restored.bboxes == []
+
 
 # ─── 图像数据测试 ───
 
@@ -461,6 +510,63 @@ class TestFitsUndoRedo:
             bbox=BBox(x=0, y=0, width=10, height=10),
         )
         assert fits_backend.can_undo is True
+
+    def test_undo_redo_persist_bbox_changes(self, fits_backend, fits_dataset: Path):
+        from scann.core.fits_annotation_backend import FitsAnnotationBackend
+
+        sample = fits_backend.samples[0]
+        fits_backend.save_annotation(
+            sample.id,
+            "real",
+            bbox=BBox(x=10, y=20, width=30, height=30),
+            detail_type="asteroid",
+        )
+
+        assert fits_backend.undo() is True
+
+        reloaded = FitsAnnotationBackend()
+        reloaded.load_samples(str(fits_dataset))
+        restored = next(s for s in reloaded.samples if s.id == sample.id)
+        assert restored.bboxes == []
+        assert restored.label is None
+
+        assert fits_backend.redo() is True
+
+        reloaded = FitsAnnotationBackend()
+        reloaded.load_samples(str(fits_dataset))
+        restored = next(s for s in reloaded.samples if s.id == sample.id)
+        assert len(restored.bboxes) == 1
+        assert restored.bboxes[0].detail_type == "asteroid"
+
+    def test_undo_ai_preannotations_persists_reset(self, fits_backend, fits_dataset: Path):
+        from scann.core.fits_annotation_backend import FitsAnnotationBackend
+
+        sample = fits_backend.samples[0]
+        fits_backend.apply_ai_preannotations(
+            sample.id,
+            [
+                BBox(
+                    x=40,
+                    y=60,
+                    width=24,
+                    height=24,
+                    label=None,
+                    confidence=0.91,
+                )
+            ],
+            ai_suggestion="real",
+            ai_confidence=0.91,
+        )
+
+        assert fits_backend.undo() is True
+
+        reloaded = FitsAnnotationBackend()
+        reloaded.load_samples(str(fits_dataset))
+        restored = next(s for s in reloaded.samples if s.id == sample.id)
+
+        assert restored.ai_suggestion is None
+        assert restored.ai_confidence is None
+        assert restored.bboxes == []
 
 
 # ─── 统计测试 ───

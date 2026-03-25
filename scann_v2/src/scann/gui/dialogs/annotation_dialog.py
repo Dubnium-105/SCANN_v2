@@ -859,16 +859,24 @@ class AnnotationDialog(QDialog):
                 sample = self._samples[self._current_index]
                 if idx < len(sample.bboxes):
                     # 通过后端保存修改，确保数据和持久化同步
-                    sample.bboxes[idx].label = label
-                    sample.bboxes[idx].detail_type = detail_type
-                    # 保存当前选中的框索引
                     selected_idx = self._annotation_viewer.selected_bbox_index
-                    # 重新加载以保持同步（因为修改的是同一个对象引用）
-                    self._update_display()
-                    self._update_stats()
-                    # 恢复选中状态，确保可以连续选择标签
-                    if selected_idx >= 0:
-                        self._annotation_viewer.select_bbox(selected_idx)
+                    updated = False
+                    if isinstance(self._backend, FitsAnnotationBackend):
+                        updated = self._backend.update_bbox(
+                            sample.id,
+                            idx,
+                            label=label,
+                            detail_type=detail_type,
+                        )
+                    else:
+                        sample.bboxes[idx].label = label
+                        sample.bboxes[idx].detail_type = detail_type
+                        updated = True
+                    if updated:
+                        self._update_display()
+                        self._update_stats()
+                        if 0 <= selected_idx < len(sample.bboxes):
+                            self._annotation_viewer.select_bbox(selected_idx)
 
     # ─── 绘制事件 ───
 
@@ -908,9 +916,19 @@ class AnnotationDialog(QDialog):
             return
         sample = self._samples[self._current_index]
         if 0 <= index < len(sample.bboxes):
-            sample.bboxes.pop(index)
-            self._update_display()
-            self._update_stats()
+            deleted = False
+            if isinstance(self._backend, FitsAnnotationBackend):
+                deleted = self._backend.delete_bbox(sample.id, index)
+            else:
+                sample.bboxes.pop(index)
+                deleted = True
+
+            if deleted:
+                next_index = min(index, len(sample.bboxes) - 1) if sample.bboxes else -1
+                self._update_display()
+                self._update_stats()
+                if next_index >= 0:
+                    self._annotation_viewer.select_bbox(next_index)
 
     def _on_point_clicked(self, px: int, py: int) -> None:
         """点标模式: 标记点击位置"""
@@ -1247,7 +1265,23 @@ class AnnotationDialog(QDialog):
 
     def _save_annotations(self) -> None:
         """保存标注 (v2 FITS 模式自动持久化，此处为显式保存)"""
-        pass  # FitsAnnotationBackend 自动持久化到 SQLite（兼容 legacy JSON）
+        if self._backend is None or not self._dataset_path:
+            self._show_status_message("请先加载标注数据集", level="WARNING")
+            return
+
+        if isinstance(self._backend, FitsAnnotationBackend):
+            saved_count = self._backend.persist_all()
+            self._show_status_message(
+                f"已保存 {saved_count} 个样本的标注",
+                level="INFO",
+            )
+            return
+
+        if isinstance(self._backend, TripletAnnotationBackend):
+            self._show_status_message("当前模式会在每次操作后立即保存，无需额外保存")
+            return
+
+        self._show_status_message("标注已保存")
 
     def _on_ai_prelabel(self) -> None:
         """批量运行 v2 AI 预标注。"""
