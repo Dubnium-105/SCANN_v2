@@ -111,36 +111,26 @@
 
 ### Native Annotation 任务锁缺少独立释放/续租接口
 
+- 状态: 已完成
 - 模块: `native_annotation`
 - 文件:
   - `scann_v2/src/scann/native_annotation/routes.py`
   - `scann_v2/src/scann/native_annotation/task_lock_service.py`
-- 现状:
-  - 有 claim。
-  - 有服务层 release。
-  - 路由层只有“保存标注时顺带 release”，没有独立 unlock/heartbeat/renew API。
-- 风险:
-  - 标注时间过长时可能依赖超时回收。
-  - 用户主动离开任务时无法显式释放。
-- 建议:
-  - 在开始修复前，先确认产品预期。
-  - 如果前端存在长时间标注场景，应补 heartbeat 或 renew。
-  - 如果支持“跳过当前任务”或“退出任务”，建议补独立 release 接口。
+  - `scann_v2/tests/test_task_lock_routes.py`
+  - `scann_v2/tests/test_task_locking.py`
+- 完成说明:
+  - `TaskLockService` 已新增 `refresh_task()`，用于显式续租当前任务锁。
+  - 路由层已新增 `/api/tasks/{task_id}/heartbeat` 和 `/api/tasks/{task_id}/release`。
+  - 新接口会校验锁归属；非持有者调用时返回明确冲突错误，而不是静默失败。
+  - 现有依赖 `TestClient` 的测试在缺少 `httpx` 的环境中会自动跳过，避免测试收集阶段直接失败。
+- 验收结果:
+  - 用户可以在不提交标注的情况下主动释放任务。
+  - 长时间标注场景可以通过 heartbeat 延长锁有效期。
+  - 非持有者无法误释放或误续租其他人的任务。
 
 ---
 
-## 建议开工顺序
+## 当前状态
 
-1. `ExclusionService` 轨道传播接入
-2. `AnnotationDialog._save_annotations()` 补成有行为的显式保存入口
-3. 决定“计划任务”是下线还是最小实现
-4. 补 `TripletPreviewPanel` 的 AI 建议可视化
-5. 评估 `native_annotation` 任务锁是否需要补 release/heartbeat
-
-## 开工前检查
-
-- [ ] 确认 `mpcorb.py` 对外可复用接口，避免重复实现轨道传播
-- [ ] 先补测试再改核心逻辑，尤其是 `ExclusionService`
-- [ ] 决定“计划任务”入口的产品策略: 下线 or 实现
-- [ ] 明确 v1/v2 标注保存语义，统一 `Ctrl+S` 行为
-- [ ] 若任务锁要增强，先补接口契约和前端使用时序
+- 本轮清单中的 1-5 项均已完成。
+- 如需继续推进，下一步更适合转向回归收尾和体验完善，而不是继续处理 backlog 中的占位项。

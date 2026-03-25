@@ -40,6 +40,18 @@ class TaskClaimResponse(TaskSession):
     lock_expires_at: str
 
 
+class TaskLockHeartbeatResponse(BaseModel):
+    task_id: str
+    client_id: str
+    lock_expires_at: str
+
+
+class TaskReleaseResponse(BaseModel):
+    task_id: str
+    client_id: str
+    released: bool
+
+
 def get_dataset_root() -> Path:
     return Path(os.getenv("SCANN_NATIVE_DATASET_ROOT", "dataset")).resolve()
 
@@ -71,6 +83,23 @@ def get_task_lock_service() -> TaskLockService:
 
 def get_annotation_service() -> AnnotationService:
     return AnnotationService(dataset_root=get_dataset_root())
+
+
+def _require_task_lock_owner(
+    task_id: str,
+    client_id: str,
+    lock_service: TaskLockService,
+) -> str:
+    normalized_client_id = client_id.strip()
+    if not normalized_client_id:
+        raise HTTPException(status_code=400, detail="client_id cannot be empty")
+
+    lock = lock_service.get_task_lock(task_id)
+    if lock is None:
+        raise HTTPException(status_code=404, detail="Task lock not found")
+    if lock.client_id != normalized_client_id:
+        raise HTTPException(status_code=409, detail="Task locked by another client")
+    return normalized_client_id
 
 
 @api_router.get("/health")
@@ -122,7 +151,10 @@ def claim_next_task(
     _ = current_user
     dataset_service = get_dataset_service()
     lock_service = get_task_lock_service()
-    task = lock_service.claim_next_task(client_id=client_id, tasks=dataset_service.list_tasks())
+    try:
+        task = lock_service.claim_next_task(client_id=client_id, tasks=dataset_service.list_tasks())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if task is None:
         raise HTTPException(status_code=404, detail="No available task")
 
@@ -134,6 +166,54 @@ def claim_next_task(
         **task.model_dump(),
         client_id=lock.client_id,
         lock_expires_at=lock.expires_at.isoformat(timespec="seconds"),
+    )
+
+
+@api_router.post("/tasks/{task_id}/heartbeat", response_model=TaskLockHeartbeatResponse)
+def heartbeat_task_lock(
+    task_id: str,
+    client_id: str = Query(..., min_length=1),
+    current_user: AuthUser = Depends(get_current_user),
+) -> TaskLockHeartbeatResponse:
+    _ = current_user
+    lock_service = get_task_lock_service()
+    normalized_client_id = _require_task_lock_owner(
+        task_id=task_id,
+        client_id=client_id,
+        lock_service=lock_service,
+    )
+    refreshed_lock = lock_service.refresh_task(task_id=task_id, client_id=normalized_client_id)
+    if refreshed_lock is None:
+        raise HTTPException(status_code=404, detail="Task lock not found")
+
+    return TaskLockHeartbeatResponse(
+        task_id=task_id,
+        client_id=refreshed_lock.client_id,
+        lock_expires_at=refreshed_lock.expires_at.isoformat(timespec="seconds"),
+    )
+
+
+@api_router.post("/tasks/{task_id}/release", response_model=TaskReleaseResponse)
+def release_task_lock(
+    task_id: str,
+    client_id: str = Query(..., min_length=1),
+    current_user: AuthUser = Depends(get_current_user),
+) -> TaskReleaseResponse:
+    _ = current_user
+    lock_service = get_task_lock_service()
+    normalized_client_id = _require_task_lock_owner(
+        task_id=task_id,
+        client_id=client_id,
+        lock_service=lock_service,
+    )
+    released = lock_service.release_task(task_id=task_id, client_id=normalized_client_id)
+    if not released:
+        raise HTTPException(status_code=404, detail="Task lock not found")
+
+    return TaskReleaseResponse(
+        task_id=task_id,
+        client_id=normalized_client_id,
+        released=True,
     )
 
 

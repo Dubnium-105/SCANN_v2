@@ -28,6 +28,13 @@ class TaskLockService:
     def _now() -> datetime:
         return datetime.now(timezone.utc)
 
+    @staticmethod
+    def _normalize_client_id(client_id: str) -> str:
+        normalized_client_id = client_id.strip()
+        if not normalized_client_id:
+            raise ValueError("client_id cannot be empty")
+        return normalized_client_id
+
     def _cleanup_expired_locks(self) -> None:
         now = self._now()
         expired_task_ids = [
@@ -48,9 +55,7 @@ class TaskLockService:
         )
 
     def claim_next_task(self, client_id: str, tasks: list[TaskSession]) -> Optional[TaskSession]:
-        normalized_client_id = client_id.strip()
-        if not normalized_client_id:
-            raise ValueError("client_id cannot be empty")
+        normalized_client_id = self._normalize_client_id(client_id)
 
         self._cleanup_expired_locks()
 
@@ -78,6 +83,19 @@ class TaskLockService:
             return task
 
         return None
+
+    def refresh_task(self, task_id: str, client_id: str) -> Optional[TaskLock]:
+        normalized_client_id = self._normalize_client_id(client_id)
+        self._cleanup_expired_locks()
+
+        lock = self._locks_by_task.get(task_id)
+        if lock is None or lock.client_id != normalized_client_id:
+            return None
+
+        refreshed_lock = self._build_lock(task_id=task_id, client_id=normalized_client_id)
+        self._locks_by_task[task_id] = refreshed_lock
+        self._task_by_client[normalized_client_id] = task_id
+        return refreshed_lock
 
     def release_task(self, task_id: str, client_id: Optional[str] = None) -> bool:
         self._cleanup_expired_locks()
