@@ -37,7 +37,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r ../docker/backend/requirements.txt
-          pip install pytest pytest-mock
+          pip install httpx pytest pytest-mock
 
       - name: Compile native annotation backend
         run: python -m py_compile src/scann/native_annotation/*.py
@@ -90,7 +90,9 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Validate Docker Compose
-        run: docker compose -f docker/docker-compose.yml --env-file docker/.env.example config > /tmp/scann-compose.yaml
+        run: |
+          if [ ! -f docker/.env ]; then cp docker/.env.example docker/.env; fi
+          docker compose -f docker/docker-compose.yml --env-file docker/.env.example config > /tmp/scann-compose.yaml
 
       - name: Build backend image
         run: docker build -f docker/backend/Dockerfile -t scann-backend:ci .
