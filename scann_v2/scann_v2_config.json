@@ -59,8 +59,8 @@
   "auto_save_annotations": false,
   "auto_collapse_sidebar": true,
   "confirm_before_close": true,
-  "stretch_black_point": 862.0,
-  "stretch_white_point": 18257.0,
+  "stretch_black_point": 0.0,
+  "stretch_white_point": 65535.0,
   "stretch_mode": "线性",
   "show_markers": true,
   "show_mpcorb": true,
@@ -78,13 +78,13 @@
   "ann_bbox_width": 2,
   "ann_invert": false,
   "ann_splitter_sizes": [
-    2425,
-    119
+    2115,
+    429
   ],
   "ann_window_width": 2560,
   "ann_window_height": 1377,
-  "ann_stretch_black": 0.0,
-  "ann_stretch_white": 65535.0,
+  "ann_stretch_black": 2545.886364,
+  "ann_stretch_white": 4447.022727,
   "ann_stretch_mode": "线性",
-  "ann_histogram_visible": false
+  "ann_histogram_visible": true
 }

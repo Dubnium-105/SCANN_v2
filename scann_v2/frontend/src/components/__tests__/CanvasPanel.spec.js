@@ -37,9 +37,8 @@ function createFitsBuffer(values = [0, 0.5, 0.75, 1]) {
   return merged.buffer
 }
 
-function mockImageFetch() {
+function mockImageFetch(pathValues = {}) {
   const calls = []
-  const fitsBuffer = createFitsBuffer()
   globalThis.fetch = vi.fn((url, options) => {
     calls.push({ url, options })
     if (url === '/api/tasks') {
@@ -57,6 +56,14 @@ function mockImageFetch() {
     }
 
     if (String(url).startsWith('/api/fits/')) {
+      const decodedUrl = decodeURIComponent(String(url))
+      let fitsBuffer = createFitsBuffer()
+      for (const [fragment, values] of Object.entries(pathValues)) {
+        if (decodedUrl.includes(fragment)) {
+          fitsBuffer = createFitsBuffer(values)
+          break
+        }
+      }
       return Promise.resolve({
         ok: true,
         arrayBuffer: async () => fitsBuffer,
@@ -226,7 +233,6 @@ describe('CanvasPanel', () => {
 
     const initial = debug()
     expect(initial).toContain('0,0,0,255')
-    expect(initial).toContain('255,255,255,255')
 
     await wrapper.get('[data-testid="stretch-min-slider"]').setValue('0.5')
     await flushPromises()
@@ -237,6 +243,44 @@ describe('CanvasPanel', () => {
     await flushPromises()
     const afterInvert = debug()
     expect(afterInvert.startsWith('255,255,255,255')).toBe(true)
+  })
+
+  it('auto-applies brightness-matched stretch per task view and can sync other views from current min/max', async () => {
+    mockImageFetch({
+      'new/PGC 17069.fts': [0, 1, 2, 3],
+      'old/PGC 17069.fts': [10, 11, 12, 13],
+      'new_marked/PGC 17069.fts': [100, 101, 102, 103],
+    })
+
+    const wrapper = mount(CanvasPanel, {
+      global: {
+        stubs: globalStubs,
+      },
+    })
+
+    await flushPromises()
+
+    await wrapper.get('[data-testid="switch-view-old"]').trigger('click')
+    await flushPromises()
+    const initialOldMin = Number(wrapper.get('[data-testid="stretch-min-slider"]').element.value)
+    const initialOldMax = Number(wrapper.get('[data-testid="stretch-max-slider"]').element.value)
+    expect(initialOldMin).not.toBe(10)
+    expect(initialOldMax).not.toBe(13)
+
+    await wrapper.get('[data-testid="switch-view-new"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="stretch-min-slider"]').setValue('1.2')
+    await wrapper.get('[data-testid="stretch-max-slider"]').setValue('1.8')
+    await flushPromises()
+    await wrapper.get('[data-testid="match-group-stretch"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="switch-view-old"]').trigger('click')
+    await flushPromises()
+    const oldMin = Number(wrapper.get('[data-testid="stretch-min-slider"]').element.value)
+    const oldMax = Number(wrapper.get('[data-testid="stretch-max-slider"]').element.value)
+    expect(oldMin).not.toBe(initialOldMin)
+    expect(oldMax).not.toBe(initialOldMax)
   })
 
   it('renders point and polygon annotations after switching tools', async () => {

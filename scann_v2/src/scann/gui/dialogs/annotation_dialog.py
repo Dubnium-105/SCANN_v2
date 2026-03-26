@@ -46,6 +46,11 @@ from scann.core.annotation_models import (
     BBox,
 )
 from scann.core.candidate_detector import DetectionParams
+from scann.core.brightness_match import (
+    compute_brightness_match_interval,
+    ensure_valid_cut_range,
+    infer_match_positions_from_target_interval,
+)
 from scann.core.models import AppConfig
 from scann.gui.widgets.annotation_list import AnnotationListWidget
 from scann.gui.widgets.annotation_stats import AnnotationStatsPanel
@@ -57,6 +62,15 @@ from scann.gui.widgets.overlay_label import OverlayLabel
 from scann.core.image_processor import histogram_stretch
 from scann.services.detection_pipeline import DetectionPipeline
 from scann.services.blink_service import BlinkService, BlinkState
+
+
+MATCH_MAX_SAMPLES = 200000
+MATCH_HIGH_PERCENTILE = 99.9
+MATCH_HIGHLIGHT_SIGMA = 5.0
+MATCH_BACKGROUND_POSITION = 0.10
+MATCH_HIGHLIGHT_POSITION = 0.98
+MATCH_ADAPTIVE_HIGH_PERCENTILE = False
+V2_VIEWS = ("new", "new_marked", "old")
 
 
 class AnnotationDialog(QDialog):
@@ -94,6 +108,7 @@ class AnnotationDialog(QDialog):
         self._old_image_data: Optional[np.ndarray] = None
         self._current_view: str = "new"  # "new_marked" | "new" | "old"
         self._histogram_panel: Optional[HistogramPanel] = None
+        self._stretch_state_by_view: dict[str, dict[str, float]] = {}
         self._current_sample: Optional[AnnotationSample] = None  # 当前样本用于获取文件信息
         self._blink_service = BlinkService(
             sequence=(BlinkState.NEW, BlinkState.MARKED, BlinkState.OLD)
@@ -454,6 +469,7 @@ class AnnotationDialog(QDialog):
         )
         self._histogram_panel.setVisible(False)
         self._histogram_panel.stretch_changed.connect(self._on_stretch_changed)
+        self._histogram_panel.apply_match_requested.connect(self._on_match_current_stretch_to_other_views)
 
     def _on_toggle_histogram(self) -> None:
         """切换直方图面板显示"""
@@ -532,22 +548,170 @@ class AnnotationDialog(QDialog):
         self._annotation_viewer.toggle_invert()
         self._btn_invert.setChecked(self._annotation_viewer._inverted)
 
+    def _get_view_image_data(self, view: str) -> Optional[np.ndarray]:
+        if view == "new_marked":
+            return self._new_marked_image_data
+        if view == "old":
+            return self._old_image_data
+        return self._new_image_data
+
+    def _build_stretch_state(self, data: np.ndarray, black: float, white: float) -> dict[str, float]:
+        finite = data[np.isfinite(data)]
+        if finite.size == 0:
+            return {
+                "range_min": 0.0,
+                "range_max": 1.0,
+                "black_point": 0.0,
+                "white_point": 1.0,
+            }
+
+        safe_black, safe_white = ensure_valid_cut_range(float(black), float(white), finite)
+        return {
+            "range_min": float(np.min(finite)),
+            "range_max": float(np.max(finite)),
+            "black_point": safe_black,
+            "white_point": safe_white,
+        }
+
+    def _compute_default_match_stretch_state(self, data: np.ndarray) -> dict[str, float]:
+        try:
+            interval = compute_brightness_match_interval(
+                data,
+                max_samples=MATCH_MAX_SAMPLES,
+                high_percentile=MATCH_HIGH_PERCENTILE,
+                highlight_sigma=MATCH_HIGHLIGHT_SIGMA,
+                background_position=MATCH_BACKGROUND_POSITION,
+                highlight_position=MATCH_HIGHLIGHT_POSITION,
+                adaptive_high_percentile=MATCH_ADAPTIVE_HIGH_PERCENTILE,
+            )
+            return self._build_stretch_state(data, interval.display_min, interval.display_max)
+        except Exception:
+            finite = data[np.isfinite(data)]
+            if finite.size == 0:
+                return {
+                    "range_min": 0.0,
+                    "range_max": 1.0,
+                    "black_point": 0.0,
+                    "white_point": 1.0,
+                }
+            return self._build_stretch_state(data, float(np.min(finite)), float(np.max(finite)))
+
+    def _rebuild_group_stretch_states(self) -> None:
+        self._stretch_state_by_view = {}
+        for view in V2_VIEWS:
+            data = self._get_view_image_data(view)
+            if data is not None:
+                self._stretch_state_by_view[view] = self._compute_default_match_stretch_state(data)
+
+    def _sync_histogram_panel_to_current_view(self) -> None:
+        if self._histogram_panel is None:
+            return
+
+        data = self._get_view_image_data(self._current_view)
+        if data is None:
+            return
+
+        state = self._stretch_state_by_view.get(self._current_view)
+        if state is None:
+            state = self._compute_default_match_stretch_state(data)
+            self._stretch_state_by_view[self._current_view] = state
+
+        self._histogram_panel.set_image_data(
+            data,
+            black_point=state["black_point"],
+            white_point=state["white_point"],
+        )
+
+    def _apply_current_view_stretch(self) -> None:
+        data = self._get_view_image_data(self._current_view)
+        if data is None:
+            return
+
+        state = self._stretch_state_by_view.get(self._current_view)
+        if state is None:
+            state = self._compute_default_match_stretch_state(data)
+            self._stretch_state_by_view[self._current_view] = state
+
+        stretched = histogram_stretch(
+            data,
+            black_point=state["black_point"],
+            white_point=state["white_point"],
+        )
+        self._annotation_viewer.set_display_data(stretched)
+
     def _on_stretch_changed(self, black: float, white: float) -> None:
         """直方图拉伸参数变化"""
         # 确定当前显示的图像
-        if self._current_view == "new_marked":
-            data = self._new_marked_image_data
-        elif self._current_view == "new":
-            data = self._new_image_data
-        else:
-            data = self._old_image_data
+        data = self._get_view_image_data(self._current_view)
         if data is None:
             return
 
         # 使用 histogram_stretch 执行线性拉伸
-        stretched = histogram_stretch(data, black_point=black, white_point=white)
+        self._stretch_state_by_view[self._current_view] = self._build_stretch_state(data, black, white)
+        stretched = histogram_stretch(
+            data,
+            black_point=self._stretch_state_by_view[self._current_view]["black_point"],
+            white_point=self._stretch_state_by_view[self._current_view]["white_point"],
+        )
         # 使用新的 set_display_data 方法直接显示拉伸后的数据
         self._annotation_viewer.set_display_data(stretched)
+
+    def _on_match_current_stretch_to_other_views(self) -> None:
+        data = self._get_view_image_data(self._current_view)
+        if data is None:
+            return
+
+        state = self._stretch_state_by_view.get(self._current_view)
+        if state is None:
+            return
+
+        try:
+            inferred = infer_match_positions_from_target_interval(
+                data,
+                target_min=state["black_point"],
+                target_max=state["white_point"],
+                max_samples=MATCH_MAX_SAMPLES,
+                high_percentile=MATCH_HIGH_PERCENTILE,
+                highlight_sigma=MATCH_HIGHLIGHT_SIGMA,
+                adaptive_high_percentile=MATCH_ADAPTIVE_HIGH_PERCENTILE,
+            )
+        except Exception as exc:
+            self._show_status_message(f"亮度匹配失败: {exc}", level="WARNING")
+            return
+
+        updated_views: list[str] = []
+        for view in V2_VIEWS:
+            if view == self._current_view:
+                continue
+            other_data = self._get_view_image_data(view)
+            if other_data is None:
+                continue
+            try:
+                interval = compute_brightness_match_interval(
+                    other_data,
+                    max_samples=MATCH_MAX_SAMPLES,
+                    high_percentile=MATCH_HIGH_PERCENTILE,
+                    highlight_sigma=MATCH_HIGHLIGHT_SIGMA,
+                    background_position=inferred.background_position,
+                    highlight_position=inferred.highlight_position,
+                    adaptive_high_percentile=MATCH_ADAPTIVE_HIGH_PERCENTILE,
+                )
+            except Exception:
+                continue
+            self._stretch_state_by_view[view] = self._build_stretch_state(
+                other_data,
+                interval.display_min,
+                interval.display_max,
+            )
+            updated_views.append(view)
+
+        self._sync_histogram_panel_to_current_view()
+        self._apply_current_view_stretch()
+        if updated_views:
+            self._show_status_message(
+                f"已将当前亮度匹配同步到: {', '.join(updated_views)}",
+                level="INFO",
+            )
 
     def _create_ops_bar(self) -> QHBoxLayout:
         """创建操作栏"""
@@ -620,6 +784,7 @@ class AnnotationDialog(QDialog):
             "1": self._on_show_new,
             "2": self._on_show_old,
             "I": self._on_invert_toggle,
+            "M": self._on_match_current_stretch_to_other_views,
         }
         for key, func in shortcuts.items():
             action = QAction(self)
@@ -1066,11 +1231,10 @@ class AnnotationDialog(QDialog):
                 sample.metadata["has_new_marked"] = bool(paths.get("new_marked", ""))
 
             # 根据当前视图显示对应的图像
+            self._rebuild_group_stretch_states()
             self._refresh_current_image()
 
             # 更新直方图数据（使用新图）
-            if self._histogram_panel is not None and self._new_image_data is not None:
-                self._histogram_panel.set_image_data(self._new_image_data)
 
         except Exception:
             pass
@@ -1126,6 +1290,9 @@ class AnnotationDialog(QDialog):
                 filename = Path(new_path).name
                 has_old = sample.metadata.get("has_old", False)
                 self._overlay_state.set_file_name(filename, match_found=has_old)
+
+        self._sync_histogram_panel_to_current_view()
+        self._apply_current_view_stretch()
 
     def _update_stats(self) -> None:
         """更新统计面板"""
@@ -1194,8 +1361,8 @@ class AnnotationDialog(QDialog):
             if mode_idx >= 0:
                 self._histogram_panel.combo_mode.setCurrentIndex(mode_idx)
             # 黑白点 (需要在加载图片后才能生效，先记录到 spin)
-            self._histogram_panel.spin_black.setValue(int(cfg.ann_stretch_black))
-            self._histogram_panel.spin_white.setValue(int(cfg.ann_stretch_white))
+            self._histogram_panel.spin_black.setValue(float(cfg.ann_stretch_black))
+            self._histogram_panel.spin_white.setValue(float(cfg.ann_stretch_white))
             # 面板可见性
             if cfg.ann_histogram_visible:
                 self._histogram_panel.show()

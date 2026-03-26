@@ -235,6 +235,89 @@ def test_v2_blink_button_cycles_marked_new_old(qapp, fits_dataset: Path):
     qapp.processEvents()
 
 
+def test_v2_load_applies_brightness_match_and_histogram_follows_current_view(qapp, fits_dataset: Path):
+    from scann.gui.dialogs.annotation_dialog import AnnotationDialog
+    from scann.core.models import AlignResult
+
+    parent = QWidget()
+    dialog = AnnotationDialog(parent=parent, config=AppConfig())
+    dialog.set_mode("v2")
+
+    def fake_align(new_data, old_data, method="auto", max_shift=None):
+        return AlignResult(
+            aligned_old=old_data.astype(np.float32),
+            dx=0.0,
+            dy=0.0,
+            success=True,
+        )
+
+    with patch("scann.core.fits_annotation_backend.align", fake_align):
+        dialog.load_dataset(str(fits_dataset))
+
+    assert set(dialog._stretch_state_by_view) >= {"new", "new_marked", "old"}
+    new_state = dialog._stretch_state_by_view["new"]
+    assert new_state["black_point"] < new_state["white_point"]
+    assert dialog._histogram_panel is not None
+    assert dialog._histogram_panel.black_point == pytest.approx(new_state["black_point"])
+    assert dialog._histogram_panel.white_point == pytest.approx(new_state["white_point"])
+
+    dialog._btn_show_old.click()
+    old_state = dialog._stretch_state_by_view["old"]
+    assert dialog._histogram_panel.black_point == pytest.approx(old_state["black_point"])
+    assert dialog._histogram_panel.white_point == pytest.approx(old_state["white_point"])
+
+    dialog.close()
+    parent.close()
+    dialog.deleteLater()
+    parent.deleteLater()
+    qapp.processEvents()
+
+
+def test_v2_match_current_stretch_updates_other_views(qapp, fits_dataset: Path):
+    from scann.gui.dialogs.annotation_dialog import AnnotationDialog
+    from scann.core.models import AlignResult
+
+    parent = QWidget()
+    parent._show_message = Mock()
+    dialog = AnnotationDialog(parent=parent, config=AppConfig())
+    dialog.set_mode("v2")
+
+    def fake_align(new_data, old_data, method="auto", max_shift=None):
+        return AlignResult(
+            aligned_old=old_data.astype(np.float32),
+            dx=0.0,
+            dy=0.0,
+            success=True,
+        )
+
+    with patch("scann.core.fits_annotation_backend.align", fake_align):
+        dialog.load_dataset(str(fits_dataset))
+
+    before_old = dict(dialog._stretch_state_by_view["old"])
+    before_marked = dict(dialog._stretch_state_by_view["new_marked"])
+
+    dialog._on_stretch_changed(980.0, 1040.0)
+    dialog._on_match_current_stretch_to_other_views()
+
+    after_old = dialog._stretch_state_by_view["old"]
+    after_marked = dialog._stretch_state_by_view["new_marked"]
+    assert (after_old["black_point"], after_old["white_point"]) != (
+        before_old["black_point"],
+        before_old["white_point"],
+    )
+    assert (after_marked["black_point"], after_marked["white_point"]) != (
+        before_marked["black_point"],
+        before_marked["white_point"],
+    )
+    parent._show_message.assert_called()
+
+    dialog.close()
+    parent.close()
+    dialog.deleteLater()
+    parent.deleteLater()
+    qapp.processEvents()
+
+
 def test_v2_label_shortcut_persists_bbox_updates_and_save_reports_success(
     qapp,
     fits_dataset: Path,

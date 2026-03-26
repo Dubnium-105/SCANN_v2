@@ -179,6 +179,15 @@
                   @input="onStretchMaxInput"
                 >
               </div>
+              <button
+                data-testid="match-group-stretch"
+                class="w-full text-xs px-2 py-1 rounded border border-sky-700 text-sky-200"
+                :disabled="!activeTask || !activeFitsNode"
+                @click="onMatchGroupStretch"
+              >
+                匹配另外两图 (M)
+              </button>
+              <p class="text-[10px] text-slate-500">快捷键：M 将当前图亮度同步到同任务组另外两图</p>
               <label class="text-[11px] text-slate-300 inline-flex items-center gap-2">
                 <input
                   data-testid="invert-toggle"
@@ -568,7 +577,14 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { useBlinkControl } from '../composables/useBlinkControl'
 import { useFitsImagePool } from '../composables/useFitsImagePool'
-import { calculatePixelRange, renderStretchToRgba } from '../fits/stretchRenderer'
+import { renderStretchToRgba } from '../fits/stretchRenderer'
+import {
+  buildBrightnessMatchViewStatesByView,
+  buildFullRangeViewStatesByView,
+  buildViewStretchState,
+  DEFAULT_BRIGHTNESS_MATCH_OPTIONS,
+  matchViewStatesFromSourceState,
+} from '../fits/brightnessMatch'
 import { fetchAnnotationHistory, fetchAnnotationRevision } from '../services/annotationHistoryApi'
 import { submitAnnotations } from '../services/annotationApi'
 import { fetchTasks } from '../services/taskApi'
@@ -725,6 +741,102 @@ function setCurrentView(view) {
   currentView.value = view
 }
 
+function getNodesByView() {
+  return fitsNodes.value.reduce((accumulator, node) => {
+    accumulator[node.view] = node
+    return accumulator
+  }, {})
+}
+
+function buildPreset(viewStates) {
+  return {
+    viewStates: { ...viewStates },
+  }
+}
+
+function saveTaskStretchPreset(taskId, preset) {
+  if (!taskId) {
+    return
+  }
+  taskAutoStretchById.value = {
+    ...taskAutoStretchById.value,
+    [taskId]: preset,
+  }
+}
+
+function ensureTaskStretchPreset(taskId) {
+  if (!taskId) {
+    return null
+  }
+
+  let preset = taskAutoStretchById.value[taskId]
+  if (preset) {
+    return preset
+  }
+
+  const nodesByView = getNodesByView()
+  preset = buildPreset(
+    autoStretchEnabled.value
+      ? buildBrightnessMatchViewStatesByView(nodesByView, DEFAULT_BRIGHTNESS_MATCH_OPTIONS)
+      : buildFullRangeViewStatesByView(nodesByView),
+  )
+  saveTaskStretchPreset(taskId, preset)
+  return preset
+}
+
+function syncStretchControlsFromState(state) {
+  if (!state) {
+    stretchRangeMin.value = 0
+    stretchRangeMax.value = 1
+    stretchMin.value = 0
+    stretchMax.value = 1
+    return
+  }
+
+  stretchRangeMin.value = Number(state.rangeMin)
+  stretchRangeMax.value = Number(state.rangeMax)
+  stretchMin.value = Number(state.stretchMin)
+  stretchMax.value = Number(state.stretchMax)
+}
+
+function syncStretchControlsForActiveView() {
+  const taskId = String(activeTask.value?.task_id || '')
+  const node = activeFitsNode.value
+  if (!taskId || !node?.pixels) {
+    syncStretchControlsFromState(buildViewStretchState(node, undefined, undefined))
+    return
+  }
+
+  const preset = ensureTaskStretchPreset(taskId)
+  const existingState = preset?.viewStates?.[currentView.value]
+  const state = existingState || buildViewStretchState(node, undefined, undefined)
+
+  if (!existingState && preset) {
+    saveTaskStretchPreset(taskId, buildPreset({
+      ...preset.viewStates,
+      [currentView.value]: state,
+    }))
+  }
+
+  syncStretchControlsFromState(state)
+}
+
+function persistCurrentViewStretch(nextMin, nextMax) {
+  const taskId = String(activeTask.value?.task_id || '')
+  const node = activeFitsNode.value
+  if (!taskId || !node?.pixels) {
+    return
+  }
+
+  const preset = ensureTaskStretchPreset(taskId)
+  const nextState = buildViewStretchState(node, nextMin, nextMax)
+  saveTaskStretchPreset(taskId, buildPreset({
+    ...preset?.viewStates,
+    [currentView.value]: nextState,
+  }))
+  syncStretchControlsFromState(nextState)
+}
+
 const activeFitsNode = computed(
   () => fitsNodes.value.find((node) => node.view === currentView.value) ?? null,
 )
@@ -854,7 +966,10 @@ async function loadTaskAtIndex(index) {
 
   const task = taskList.value[index]
   activeTask.value = task
+  setCurrentView('new')
   await preloadTaskFits(task)
+  ensureTaskStretchPreset(task.task_id)
+  syncStretchControlsForActiveView()
 
   currentTaskIndex.value = index
   resetAnnotationStates()
@@ -955,7 +1070,7 @@ function onStretchMinInput(event) {
   if (!Number.isFinite(value)) {
     return
   }
-  stretchMin.value = Math.min(value, stretchMax.value)
+  persistCurrentViewStretch(Math.min(value, stretchMax.value), stretchMax.value)
 }
 
 function onStretchMaxInput(event) {
@@ -963,107 +1078,58 @@ function onStretchMaxInput(event) {
   if (!Number.isFinite(value)) {
     return
   }
-  stretchMax.value = Math.max(value, stretchMin.value)
+  persistCurrentViewStretch(stretchMin.value, Math.max(value, stretchMin.value))
 }
 
 function onAutoStretchToggle(event) {
   autoStretchEnabled.value = Boolean(event?.target?.checked)
+  const taskId = String(activeTask.value?.task_id || '')
+  if (!taskId) {
+    syncStretchControlsForActiveView()
+    return
+  }
+
+  const nodesByView = getNodesByView()
+  const viewStates = autoStretchEnabled.value
+    ? buildBrightnessMatchViewStatesByView(nodesByView, DEFAULT_BRIGHTNESS_MATCH_OPTIONS)
+    : buildFullRangeViewStatesByView(nodesByView)
+  saveTaskStretchPreset(taskId, buildPreset(viewStates))
+  syncStretchControlsForActiveView()
 }
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value))
 }
 
-function quantile(sortedValues, ratio) {
-  if (!Array.isArray(sortedValues) || sortedValues.length === 0) {
-    return 0
-  }
-  const index = clamp(Math.floor((sortedValues.length - 1) * ratio), 0, sortedValues.length - 1)
-  return sortedValues[index]
-}
-
-function buildHistogramAutoStretch(pixels) {
-  const range = calculatePixelRange(pixels)
-  const allFinite = []
-  const maxSamples = 50000
-  const step = Math.max(1, Math.floor(pixels.length / maxSamples))
-  for (let i = 0; i < pixels.length; i += step) {
-    const value = Number(pixels[i])
-    if (Number.isFinite(value)) {
-      allFinite.push(value)
-    }
-  }
-
-  if (allFinite.length < 8) {
-    return {
-      rangeMin: range.min,
-      rangeMax: range.max,
-      stretchMin: range.min,
-      stretchMax: range.max,
-    }
-  }
-
-  allFinite.sort((a, b) => a - b)
-  const low = quantile(allFinite, 0.003)
-  const high = quantile(allFinite, 0.997)
-
-  if (!Number.isFinite(low) || !Number.isFinite(high) || high <= low) {
-    return {
-      rangeMin: range.min,
-      rangeMax: range.max,
-      stretchMin: range.min,
-      stretchMax: range.max,
-    }
-  }
-
-  return {
-    rangeMin: range.min,
-    rangeMax: range.max,
-    stretchMin: clamp(low, range.min, range.max),
-    stretchMax: clamp(high, range.min, range.max),
-  }
-}
-
 function applyStretchForNode(node) {
   if (!node?.pixels || node.pixels.length === 0) {
     return
   }
-
-  if (!autoStretchEnabled.value) {
-    const range = calculatePixelRange(node.pixels)
-    stretchRangeMin.value = range.min
-    stretchRangeMax.value = range.max
-    stretchMin.value = range.min
-    stretchMax.value = range.max
-    syncStageSizeToHost()
-    return
-  }
-
-  const taskId = String(activeTask.value?.task_id || '')
-  if (!taskId) {
-    const range = calculatePixelRange(node.pixels)
-    stretchRangeMin.value = range.min
-    stretchRangeMax.value = range.max
-    stretchMin.value = range.min
-    stretchMax.value = range.max
-    syncStageSizeToHost()
-    return
-  }
-
-  let preset = taskAutoStretchById.value[taskId]
-  if (!preset) {
-    preset = buildHistogramAutoStretch(node.pixels)
-    taskAutoStretchById.value = {
-      ...taskAutoStretchById.value,
-      [taskId]: preset,
-    }
-  }
-
-  stretchRangeMin.value = preset.rangeMin
-  stretchRangeMax.value = preset.rangeMax
-  stretchMin.value = clamp(preset.stretchMin, preset.rangeMin, preset.rangeMax)
-  stretchMax.value = clamp(preset.stretchMax, preset.rangeMin, preset.rangeMax)
+  syncStretchControlsForActiveView()
   syncStageSizeToHost()
+}
+
+function onMatchGroupStretch() {
+  const taskId = String(activeTask.value?.task_id || '')
+  const node = activeFitsNode.value
+  if (!taskId || !node?.pixels) {
+    return
+  }
+
+  const preset = ensureTaskStretchPreset(taskId)
+  const sourceState = preset?.viewStates?.[currentView.value] || buildViewStretchState(node, stretchMin.value, stretchMax.value)
+  const nodesByView = getNodesByView()
+  const matchedStates = matchViewStatesFromSourceState(
+    nodesByView,
+    currentView.value,
+    sourceState,
+    DEFAULT_BRIGHTNESS_MATCH_OPTIONS,
+  )
+  saveTaskStretchPreset(taskId, buildPreset({
+    ...preset?.viewStates,
+    ...matchedStates,
+  }))
+  syncStretchControlsForActiveView()
 }
 
 function onInvertChange(event) {
@@ -1605,6 +1671,11 @@ watch(
 )
 
 function onKeyDown(event) {
+  const tagName = String(event?.target?.tagName || '').toUpperCase()
+  if (tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT') {
+    return
+  }
+
   if (event.key === 'Escape' && taskCatalogVisible.value) {
     event.preventDefault()
     closeTaskCatalog()
@@ -1620,6 +1691,12 @@ function onKeyDown(event) {
   if (event.key === 'e' || event.key === 'E') {
     event.preventDefault()
     goToNextTask()
+    return
+  }
+
+  if (event.key === 'm' || event.key === 'M') {
+    event.preventDefault()
+    onMatchGroupStretch()
     return
   }
 
