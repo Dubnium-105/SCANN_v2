@@ -29,6 +29,7 @@ from .auth_service import (
 from .dataset_service import DatasetService, TaskSession
 from .fits_engine import FITSEngine
 from .task_lock_service import TaskLockService
+from scann.services.dataset_preprocess_service import DatasetPreprocessService
 
 api_router = APIRouter(prefix="/api", tags=["api"])
 _fits_engines: Dict[str, FITSEngine] = {}
@@ -52,12 +53,25 @@ class TaskReleaseResponse(BaseModel):
     released: bool
 
 
+class DatasetPreprocessResponse(BaseModel):
+    dataset_root: str
+    standardized_files: int
+    reused_aligned_pairs: int
+    generated_aligned_pairs: int
+    generated_marked_crops: int
+    task_count: int
+
+
 def get_dataset_root() -> Path:
     return Path(os.getenv("SCANN_NATIVE_DATASET_ROOT", "dataset")).resolve()
 
 
 def get_dataset_service() -> DatasetService:
     return DatasetService(dataset_root=get_dataset_root())
+
+
+def get_dataset_preprocess_service() -> DatasetPreprocessService:
+    return DatasetPreprocessService()
 
 
 def get_fits_engine() -> FITSEngine:
@@ -141,6 +155,23 @@ def list_tasks(current_user: AuthUser = Depends(get_current_user)) -> list[TaskS
     _ = current_user
     service = get_dataset_service()
     return service.list_tasks()
+
+
+@api_router.post("/dataset/preprocess", response_model=DatasetPreprocessResponse)
+def preprocess_dataset(
+    current_user: AuthUser = Depends(get_current_user),
+) -> DatasetPreprocessResponse:
+    _ = current_user
+    dataset_root = get_dataset_root()
+    report = get_dataset_preprocess_service().prepare_dataset(dataset_root)
+    return DatasetPreprocessResponse(
+        dataset_root=str(dataset_root),
+        standardized_files=report.standardized_files,
+        reused_aligned_pairs=report.reused_aligned_pairs,
+        generated_aligned_pairs=report.generated_aligned_pairs,
+        generated_marked_crops=report.generated_marked_crops,
+        task_count=report.task_count,
+    )
 
 
 @api_router.get("/tasks/next", response_model=TaskClaimResponse)

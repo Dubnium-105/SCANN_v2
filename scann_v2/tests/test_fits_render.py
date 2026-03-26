@@ -7,6 +7,16 @@ from fastapi.testclient import TestClient
 from scann.native_annotation.app import app
 
 
+def _auth_headers(client: TestClient) -> dict[str, str]:
+    response = client.post(
+        "/api/login",
+        json={"username": "annotator", "password": "scann123"},
+    )
+    assert response.status_code == 200
+    token = response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
 def test_api_render_returns_png(tmp_path, monkeypatch) -> None:
     dataset_root = tmp_path / "dataset"
     new_dir = dataset_root / "new"
@@ -18,8 +28,9 @@ def test_api_render_returns_png(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setenv("SCANN_NATIVE_DATASET_ROOT", str(dataset_root))
     client = TestClient(app)
+    headers = _auth_headers(client)
 
-    response = client.get("/api/render/new/test_target.fts")
+    response = client.get("/api/render/new/test_target.fts", headers=headers)
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("image/png")

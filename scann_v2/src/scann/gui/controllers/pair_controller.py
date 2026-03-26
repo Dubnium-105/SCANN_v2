@@ -184,6 +184,12 @@ class PairController:
             self._window._new_fits_header = image_pair.new_image.header
             self._window._old_fits_header = image_pair.old_image.header
             self._window._current_pair_using_aligned = bool(image_pair.aligned)
+            if image_pair.aligned and self._window._old_image_data is not None:
+                bounds = self._pair_service.calc_nonzero_valid_bounds(self._window._old_image_data)
+                if bounds is not None and self._window._new_image_data is not None:
+                    x0, x1, y0, y1 = bounds
+                    self._window._new_image_data = self._window._new_image_data[y0:y1, x0:x1]
+                    self._window._old_image_data = self._window._old_image_data[y0:y1, x0:x1]
 
             # 注意：已对齐的图像（__aligned_crop.fts）已经是裁剪后的结果，
             # 不需要再次调用 calc_nonzero_valid_bounds 进行裁剪，

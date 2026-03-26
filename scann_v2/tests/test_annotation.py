@@ -42,16 +42,19 @@ def test_api_annotations_save_to_positive_and_negative(tmp_path, monkeypatch) ->
     assert resp_positive.status_code == 200
     assert resp_negative.status_code == 200
 
-    positive_file = dataset_root / "positive" / "PGC 17069.json"
-    negative_file = dataset_root / "negative" / "PGC 17069.json"
+    annotations_file = dataset_root / "annotations.json"
+    db_file = dataset_root / "scann_native.db"
 
-    assert positive_file.exists()
-    assert negative_file.exists()
+    assert annotations_file.exists()
+    assert db_file.exists()
+    assert resp_positive.json()["saved_path"] == "annotations.json"
+    assert resp_negative.json()["saved_path"] == "annotations.json"
 
-    positive_doc = json.loads(positive_file.read_text(encoding="utf-8"))
-    negative_doc = json.loads(negative_file.read_text(encoding="utf-8"))
+    annotations_doc = json.loads(annotations_file.read_text(encoding="utf-8"))
+    images = annotations_doc.get("images", [])
+    assert len(images) == 1
 
-    assert positive_doc["bucket"] == "positive"
-    assert negative_doc["bucket"] == "negative"
-    assert len(positive_doc["annotations"]) == 2
-    assert len(negative_doc["annotations"]) == 2
+    saved_image = images[0]
+    assert saved_image["id"] == "PGC 17069"
+    assert saved_image["source_view"] == "new"
+    assert len(saved_image["annotations"]) == 2

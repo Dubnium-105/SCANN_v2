@@ -29,6 +29,7 @@ from scann.core.fits_annotation_storage import FitsAnnotationStorage
 from scann.core.fits_io import read_fits, write_fits
 from scann.core.image_aligner import align
 from scann.data.file_manager import match_new_old_pairs
+from scann.services.dataset_preprocess_service import DatasetPreprocessService
 from scann.services.pair_service import PairService
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,7 @@ class FitsAnnotationBackend(AnnotationBackend):
         # 内部映射: sample_id → {new_path, old_path, new_marked_path}
         self._image_paths: dict[str, dict[str, str]] = {}
         self._pair_service = PairService()
+        self._dataset_preprocess_service = DatasetPreprocessService(pair_service=self._pair_service)
 
     # ─── 抽象方法实现 ───
 
@@ -66,9 +68,15 @@ class FitsAnnotationBackend(AnnotationBackend):
         self._samples.clear()
         self._image_paths.clear()
 
-        self._standardize_dataset_by_date_obs(root)
-        aligned_pairs = self._collect_aligned_pairs(root)
-        marked_files = self._collect_marked_files(root / "new_marked")
+        self._dataset_preprocess_service = DatasetPreprocessService(
+            pair_service=self._pair_service,
+            align_fn=align,
+            read_fits_fn=read_fits,
+            write_fits_fn=write_fits,
+        )
+        self._dataset_preprocess_service.prepare_dataset(root)
+        aligned_pairs = self._dataset_preprocess_service.collect_aligned_pairs(root)
+        marked_files = self._dataset_preprocess_service.collect_marked_files(root / "new_marked")
 
         # 加载已有标注（优先 SQLite，兼容 legacy JSON）
         self._annotation_storage = FitsAnnotationStorage(root)
@@ -439,7 +447,7 @@ class FitsAnnotationBackend(AnnotationBackend):
         if sample_id in existing_annotations:
             return existing_annotations[sample_id]
 
-        legacy_id = self._strip_datetime_prefix(sample_id)
+        legacy_id = DatasetPreprocessService.strip_datetime_prefix(sample_id)
         if legacy_id in existing_annotations:
             return existing_annotations[legacy_id]
         return None
@@ -835,6 +843,42 @@ class FitsAnnotationBackend(AnnotationBackend):
             if stem.startswith(prefix):
                 return stem[len(prefix):]
         return stem
+
+    def _standardize_dataset_by_date_obs(self, root: Path) -> None:
+        self._dataset_preprocess_service.standardize_dataset_by_date_obs(root)
+        self._dataset_preprocess_service.ensure_aligned_crop_files(root)
+
+    @staticmethod
+    def _extract_datetime_prefix(stem: str) -> Optional[str]:
+        return DatasetPreprocessService.extract_datetime_prefix(stem)
+
+    @staticmethod
+    def _strip_datetime_prefix(sample_id: str) -> str:
+        return DatasetPreprocessService.strip_datetime_prefix(sample_id)
+
+    def _ensure_aligned_crop_files(self, root: Path) -> None:
+        self._dataset_preprocess_service.ensure_aligned_crop_files(root)
+
+    def _collect_aligned_pairs(
+        self,
+        root: Path,
+    ) -> list[tuple[str, Optional[Path], Optional[Path]]]:
+        return self._dataset_preprocess_service.collect_aligned_pairs(root)
+
+    def _collect_marked_files(self, folder: Path) -> dict[str, Path]:
+        return self._dataset_preprocess_service.collect_marked_files(folder)
+
+    @staticmethod
+    def _parse_crop_bounds_from_marker(marker_path: Path) -> tuple[int, int, int, int] | None:
+        return DatasetPreprocessService.parse_crop_bounds_from_marker(marker_path)
+
+    @staticmethod
+    def _strip_aligned_crop_suffix(stem: str) -> str:
+        return DatasetPreprocessService.strip_aligned_crop_suffix(stem)
+
+    @staticmethod
+    def _normalize_pair_stem(stem: str) -> str:
+        return DatasetPreprocessService.normalize_pair_stem(stem)
 
     @staticmethod
     def _snapshot_sample_state(sample: AnnotationSample) -> dict:
