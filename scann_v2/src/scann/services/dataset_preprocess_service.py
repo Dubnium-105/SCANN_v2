@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -44,11 +46,13 @@ class DatasetPreprocessService:
         align_fn: Callable[..., object] = align,
         read_fits_fn: Callable[[str | Path], object] = read_fits,
         write_fits_fn: Callable[[str | Path, np.ndarray, object], None] = write_fits,
+        max_workers: Optional[int] = None,
     ) -> None:
         self._pair_service = pair_service or PairService()
         self._align = align_fn
         self._read_fits = read_fits_fn
         self._write_fits = write_fits_fn
+        self._max_workers = max_workers
 
     def prepare_dataset(self, root: Path) -> DatasetPreprocessReport:
         dataset_root = Path(root)
@@ -68,7 +72,7 @@ class DatasetPreprocessService:
     def standardize_dataset_by_date_obs(self, root: Path) -> int:
         raw_root = root / "dataset_raw"
         folder_names = ("new", "old", "new_marked")
-        standardized_files = 0
+        jobs: list[tuple[Path, Path, Path]] = []
 
         for folder_name in folder_names:
             work_dir = root / folder_name
@@ -83,19 +87,9 @@ class DatasetPreprocessService:
                     continue
                 if (raw_dir / file_path.name).exists():
                     continue
+                jobs.append((file_path, raw_dir, work_dir))
 
-                backup_path = self._move_to_raw_folder(file_path, raw_dir)
-                date_token = self._extract_date_obs_token(backup_path)
-                normalized_name = self._build_standardized_filename(
-                    src_path=backup_path,
-                    date_token=date_token,
-                    dst_dir=work_dir,
-                )
-                normalized_path = work_dir / normalized_name
-                shutil.copy2(backup_path, normalized_path)
-                standardized_files += 1
-
-        return standardized_files
+        return sum(self._run_jobs(jobs, self._standardize_single_file))
 
     def ensure_aligned_crop_files(self, root: Path) -> tuple[int, int, int]:
         new_dir = root / "new"
@@ -103,36 +97,14 @@ class DatasetPreprocessService:
         if not new_dir.is_dir() or not old_dir.is_dir():
             return 0, 0, 0
 
-        reused_aligned_pairs = 0
-        generated_aligned_pairs = 0
-        generated_marked_crops = 0
-
         pairs, _only_new, _only_old = match_new_old_pairs(str(new_dir), str(old_dir))
-        for pair in pairs:
-            new_aligned_path, old_aligned_path, new_marker_path, old_marker_path = (
-                self._pair_service.aligned_artifact_paths(pair)
-            )
-            if new_aligned_path.is_file() and old_aligned_path.is_file():
-                reused_aligned_pairs += 1
-                if not new_marker_path.exists() or not old_marker_path.exists():
-                    marker_text = "aligned=1\n"
-                    new_marker_path.write_text(marker_text, encoding="utf-8")
-                    old_marker_path.write_text(marker_text, encoding="utf-8")
-                if self._ensure_marked_aligned_crop_file(root, pair, new_aligned_path, new_marker_path):
-                    generated_marked_crops += 1
-                continue
-
-            if self._align_pair_to_crop(
-                pair,
-                new_aligned_path,
-                old_aligned_path,
-                new_marker_path,
-                old_marker_path,
-            ):
-                generated_aligned_pairs += 1
-                if self._ensure_marked_aligned_crop_file(root, pair, new_aligned_path, new_marker_path):
-                    generated_marked_crops += 1
-
+        results = self._run_jobs(
+            pairs,
+            lambda pair: self._ensure_aligned_pair(root, pair),
+        )
+        reused_aligned_pairs = sum(item[0] for item in results)
+        generated_aligned_pairs = sum(item[1] for item in results)
+        generated_marked_crops = sum(item[2] for item in results)
         return reused_aligned_pairs, generated_aligned_pairs, generated_marked_crops
 
     def collect_preprocessed_tasks(self, root: Path) -> list[PreparedTaskPaths]:
@@ -300,6 +272,59 @@ class DatasetPreprocessService:
             if not dedup_path.exists():
                 return dedup_name
             index += 1
+
+    def _standardize_single_file(self, job: tuple[Path, Path, Path]) -> int:
+        file_path, raw_dir, work_dir = job
+        if not file_path.exists():
+            return 0
+        if (raw_dir / file_path.name).exists():
+            return 0
+
+        backup_path = self._move_to_raw_folder(file_path, raw_dir)
+        date_token = self._extract_date_obs_token(backup_path)
+        normalized_name = self._build_standardized_filename(
+            src_path=backup_path,
+            date_token=date_token,
+            dst_dir=work_dir,
+        )
+        normalized_path = work_dir / normalized_name
+        shutil.copy2(backup_path, normalized_path)
+        return 1
+
+    def _ensure_aligned_pair(
+        self,
+        root: Path,
+        pair: FitsImagePair,
+    ) -> tuple[int, int, int]:
+        new_aligned_path, old_aligned_path, new_marker_path, old_marker_path = (
+            self._pair_service.aligned_artifact_paths(pair)
+        )
+        if new_aligned_path.is_file() and old_aligned_path.is_file():
+            if not new_marker_path.exists() or not old_marker_path.exists():
+                marker_text = "aligned=1\n"
+                new_marker_path.write_text(marker_text, encoding="utf-8")
+                old_marker_path.write_text(marker_text, encoding="utf-8")
+            generated_marked_crop = int(
+                self._ensure_marked_aligned_crop_file(root, pair, new_aligned_path, new_marker_path)
+            )
+            return 1, 0, generated_marked_crop
+
+        generated_aligned_pair = int(
+            self._align_pair_to_crop(
+                pair,
+                new_aligned_path,
+                old_aligned_path,
+                new_marker_path,
+                old_marker_path,
+            )
+        )
+        if not generated_aligned_pair:
+            return 0, 0, 0
+
+        generated_marked_crop = int(
+            self._ensure_marked_aligned_crop_file(root, pair, new_aligned_path, new_marker_path)
+        )
+        return 0, 1, generated_marked_crop
 
     def _align_pair_to_crop(
         self,
@@ -474,3 +499,35 @@ class DatasetPreprocessService:
             pairs.append((sample_id, new_path, old_files[old_stem]))
 
         return pairs
+
+    def _resolve_max_workers(self, job_count: int) -> int:
+        if job_count <= 1:
+            return 1
+        if self._max_workers is not None:
+            return max(1, min(job_count, self._max_workers))
+
+        env_value = os.getenv("SCANN_DATASET_PREPROCESS_MAX_WORKERS", "").strip()
+        if env_value:
+            try:
+                configured = int(env_value)
+            except ValueError:
+                configured = 0
+            if configured > 0:
+                return max(1, min(job_count, configured))
+
+        default_workers = min(32, (os.cpu_count() or 1) + 4)
+        return max(1, min(job_count, default_workers))
+
+    def _run_jobs(self, jobs: list, worker: Callable) -> list:
+        if not jobs:
+            return []
+
+        max_workers = self._resolve_max_workers(len(jobs))
+        if max_workers <= 1:
+            return [worker(job) for job in jobs]
+
+        with ThreadPoolExecutor(
+            max_workers=max_workers,
+            thread_name_prefix="scann-preprocess",
+        ) as executor:
+            return list(executor.map(worker, jobs))

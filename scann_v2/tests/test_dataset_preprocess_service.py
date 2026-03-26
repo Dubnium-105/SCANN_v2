@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -86,3 +87,30 @@ def test_prepare_dataset_is_idempotent_after_first_run(raw_dataset: Path) -> Non
     assert second.generated_marked_crops == 0
     assert second.reused_aligned_pairs == 2
     assert second.task_count == 2
+
+
+def test_prepare_dataset_aligns_pairs_in_parallel_when_multiple_workers_enabled(raw_dataset: Path) -> None:
+    barrier = threading.Barrier(2, timeout=5)
+    seen_threads: set[int] = set()
+    seen_threads_lock = threading.Lock()
+
+    def _parallel_align(new_data, old_data, method="auto", max_shift=None):
+        with seen_threads_lock:
+            seen_threads.add(threading.get_ident())
+        barrier.wait()
+        return AlignResult(
+            aligned_old=old_data.astype(np.float32),
+            dx=0.0,
+            dy=0.0,
+            success=True,
+        )
+
+    service = DatasetPreprocessService(
+        align_fn=_parallel_align,
+        max_workers=2,
+    )
+
+    report = service.prepare_dataset(raw_dataset)
+
+    assert report.generated_aligned_pairs == 2
+    assert len(seen_threads) == 2
