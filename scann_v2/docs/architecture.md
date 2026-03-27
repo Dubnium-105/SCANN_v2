@@ -1,346 +1,119 @@
-# SCANN v2 架构设计文档
+# SCANN v2 架构概览
 
-## 1. 概述
+本文档只描述当前仍在维护的结构，不再保留历史重构计划或阶段性草稿。
 
-SCANN v2 (Star/Source Classification and Analysis Neural Network) 是一个天文图像分析工具，
-用于从新旧天文图像中检测移动天体（如小行星、彗星）和暂现源（如超新星）。
+## 1. 系统组成
 
-### 1.1 与 v1 的主要区别
+SCANN v2 目前由三部分组成：
 
-| 特性 | v1 | v2 |
-|------|----|----|
-| 工作模式 | 三联图 JPG（差异图+新图+参考图） | 新旧 FITS 文件夹直接对比 |
-| 文件格式 | JPG/PNG | FITS（含 Header） |
-| 图像对齐 | 无 | 以新图为参考，仅移动旧图 |
-| AI 模式 | 小裁剪图分类 | 全图检测 + 方框/十字标记 |
-| 显存需求 | 无限制 | ≤ 8GB |
-| 叠加功能 | 无 | MPCORB 已知小行星叠加 |
-| 外部查询 | 无 | VSX/MPC/SIMBAD/TNS |
-| 归算报告 | 无 | MPC 80列格式 |
+1. 桌面应用
+   - 位于 `src/scann/`
+   - 以 PyQt5 为界面层
+   - 提供 FITS 浏览、闪烁比对、图像处理、候选体检测、人工标注、外部查询和报告相关能力
+2. 原生 FITS 标注平台
+   - 后端位于 `src/scann/native_annotation/`
+   - 前端位于 `frontend/`
+   - 提供任务分配、在线标注、修订历史、回滚和数据集预处理能力
+3. 运行与发布层
+   - 位于 `docker/`
+   - 负责容器镜像构建、Linux 部署和 GitHub Actions 流水线
 
-### 1.2 设计原则
+## 2. 代码目录
 
-- **分层架构**: Core → Service → GUI，严格单向依赖
-- **TDD 驱动**: 测试先行，Core 层 100% 可测试
-- **FITS 优先**: 所有操作基于 FITS 数据和头信息
-- **显存友好**: AI 推理控制在 8GB 以内
-- **图像为王**: 所有 UI 控件为图像让路，侧边栏可折叠
-- **渐进式披露**: 首屏仅核心功能，高级功能通过菜单按需展开
-- **状态可见性**: 当前显示状态（新图/旧图/反色/闪烁）始终有明确视觉反馈
-
-## 2. 系统架构
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                         GUI Layer (PyQt5)                            │
-│  MainWindow │ Composition │ Controllers │ Presenters │ Widgets │ Dialogs │
-│  ┌─────────────────────────────────────────────────────────────────┐ │
-│  │ Composition: MainWindowBuilder │ MainWindowWiring              │ │
-│  │ Controllers: ImageSession │ Pair │ Detection │ Query │ Model  │ │
-│  │             Training │ Preferences │ FileActions │ Help       │ │
-│  │ Presenters: CandidatePresenter │ StatusPresenter               │ │
-│  ├─────────────────────────────────────────────────────────────────┤ │
-│  │ Widgets:                                                        │ │
-│  │  OverlayLabel │ SuspectTable │ HistogramPanel │ BlinkSpeedSlider│ │
-│  │  CollapsibleSidebar │ MpcorbOverlay │ CoordinateLabel           │ │
-│  │  NoScrollSpinBox                                                │ │
-│  ├─────────────────────────────────────────────────────────────────┤ │
-│  │ Dialogs:                                                        │ │
-│  │  SettingsDialog │ TrainingDialog │ BatchProcessDialog           │ │
-│  │  MpcReportDialog │ QueryResultPopup │ ShortcutHelpDialog        │ │
-│  └─────────────────────────────────────────────────────────────────┘ │
-├──────────────────────────────────────────────────────────────────────┤
-│                         Service Layer                                │
-│  BlinkService │ DetectionService │ QueryService │ ExclusionService   │
-│  SchedulerService                                                    │
-├──────────────────────────────────────────────────────────────────────┤
-│                          Core Layer                                  │
-│  FitsIO │ ImageProcessor │ Aligner │ CandidateDetector │ Astrometry  │
-│  Mpcorb │ ObservationReport │ Config                                 │
-├──────────────────────────────────────────────────────────────────────┤
-│                          AI Layer                                    │
-│  SCANNDetector │ InferenceEngine │ Trainer │ FitsDataset             │
-│  TargetMarker                                                        │
-├──────────────────────────────────────────────────────────────────────┤
-│                         Data Layer                                   │
-│  Database │ FileManager │ Config                                     │
-└──────────────────────────────────────────────────────────────────────┘
+```text
+src/scann/
+|-- ai/                 # 模型、推理和训练相关代码
+|-- core/               # 纯业务能力：FITS IO、对齐、图像处理、MPC 相关逻辑等
+|-- data/               # 本地文件和数据库访问
+|-- gui/                # PyQt5 桌面界面、控制器、组件和对话框
+|-- native_annotation/  # FastAPI 标注后端
+|-- services/           # 桌面应用编排层与任务服务
+|-- app.py              # 桌面应用入口
+`-- logger_config.py    # 日志配置
 ```
 
-## 3. 模块设计
+## 3. 模块边界
 
-### 3.1 Core Layer (`src/scann/core/`)
+### `core/`
 
-纯业务逻辑，零 GUI 依赖，100% 单元可测试。
+`core/` 放与界面无关、可测试的底层能力，例如：
 
-#### fits_io.py - FITS 文件操作
-- `read_fits(path) -> FitsImage`: 读取 FITS 文件，返回数据+头信息
-- `write_fits(path, data, header, bit_depth)`: 保存为整数 FITS（16/32bit）
-- `read_header(path) -> dict`: 仅读取文件头
-- `get_observation_datetime(header) -> datetime`: 从头信息提取观测时间
-- **约束**: 保存时绝不修改 FITS 文件头
+- `fits_io.py`：FITS 读写
+- `image_aligner.py`：新旧图像对齐
+- `image_processor.py`：显示或预处理相关图像操作
+- `candidate_detector.py`：候选体检测基础逻辑
+- `astrometry.py`、`mpcorb.py`、`observation_report.py`：天体位置与报告相关能力
+- `fits_annotation_backend.py`、`fits_annotation_storage.py`：桌面标注数据结构与存储辅助
 
-#### image_processor.py - 图像处理
-- `histogram_stretch(data, black_point, white_point) -> ndarray`: 直方图拉伸（仅显示）
-- `invert(data) -> ndarray`: 反色（仅显示）
-- `denoise(data, method) -> ndarray`: 去噪点
-- `pseudo_flat_field(data, kernel_size) -> ndarray`: 伪平场
+### `services/`
 
-#### image_aligner.py - 图像对齐
-- `align(new_image, old_image) -> AlignResult`: 以新图为参考，仅移动旧图
-- `batch_align(new_images, old_images) -> list[AlignResult]`: 批量对齐
-- **约束**: 绝不移动新图
+`services/` 负责把多个底层能力串成完整流程，例如：
 
-#### candidate_detector.py - 候选体检测
-- `detect_candidates(new_data, old_data, params) -> list[Candidate]`: 检测可疑目标
-- `compute_features(candidate, new_data, old_data) -> CandidateFeatures`: 特征计算
+- `pair_service.py`：新旧图像配对
+- `blink_service.py`：闪烁比对
+- `detection_pipeline.py`：检测主流程
+- `detection_service.py`：桌面检测服务入口
+- `exclusion_service.py`：已知天体排除
+- `query_service.py`：外部天文服务查询
+- `dataset_preprocess_service.py`：供原生标注平台复用的数据集标准化和预处理
 
-#### mpcorb.py - MPCORB 处理
-- `load_mpcorb(path) -> list[Asteroid]`: 加载 MPCORB 文件
-- `compute_positions(asteroids, datetime, observatory) -> list[SkyPosition]`: 计算位置
-- `filter_by_magnitude(asteroids, limit_mag) -> list[Asteroid]`: 按极限星等过滤
+### `gui/`
 
-#### astrometry.py - 天文坐标
-- `pixel_to_wcs(x, y, header) -> (ra, dec)`: 像素坐标→天球坐标
-- `wcs_to_pixel(ra, dec, header) -> (x, y)`: 天球坐标→像素坐标
-- `plate_solve(image, params) -> WCS`: 天文定位
+`gui/` 只处理桌面应用的展示与交互：
 
-#### observation_report.py - 观测报告
-- `generate_mpc_report(observations, observatory_code) -> str`: 生成 MPC 80列报告
-- `format_80col_line(obs) -> str`: 格式化单行
+- `main_window.py` 与 `composition/`：主窗口和装配逻辑
+- `controllers/`：配对、检测、训练、查询、标注、帮助等控制器
+- `widgets/`：图像查看器、表格、标注组件、工具栏等
+- `dialogs/`：设置、训练、MPC 报告、快捷键帮助等对话框
+- `presenters/`：面向 UI 的状态整理
 
-#### config.py - 配置管理
-- `AppConfig`: 完整配置数据类
-- `TelescopeConfig`: 望远镜/相机参数（像素大小、焦距、旋转角等）
-- `load_config() / save_config()`: 持久化
+### `native_annotation/`
 
-### 3.2 AI Layer (`src/scann/ai/`)
+该目录是独立的 FastAPI 服务，不依赖 PyQt。
 
-#### model.py - 模型定义
-- `SCANNDetector`: 全图目标检测模型（控制显存 ≤ 8GB）
-- `SCANNClassifier`: 兼容 v1 的裁剪图分类器
+核心职责：
 
-#### inference.py - 推理引擎
-- `InferenceEngine`: GPU 推理管理
-  - `detect_dense_full_image(new_image, old_image, score_threshold, top_k, iou_threshold) -> list[Detection]`: ViT dense 全图检测
-  - `classify_patches(patches) -> list[float]`: 裁剪图分类
-  - CUDA 多线程并行计算
+- 身份认证
+- 任务列表与任务锁
+- FITS 原图与渲染图提供
+- 标注保存、历史查询、回滚
+- 数据集预处理触发
 
-#### trainer.py - 训练管线
-- `Trainer`: 完整训练流程
-  - `train(config) -> TrainResult`: 支持 `classification | detection` 双任务训练
-  - `evaluate(model, dataset) -> Metrics`: 评估
+## 4. 关键业务流
 
-#### dataset.py - 数据集
-- `FitsDataset`: FITS 训练数据集
-- `TargetAnnotation`: 目标标注（像素位置 + 类别）
-- dense 检测模式下输出 `input + heatmap_target + bbox_target`
+### 桌面检测流
 
-#### target_marker.py - 目标标记
-- `mark_target(image, position, marker_type) -> MarkedImage`: 在图上标记
-- `save_marked_fits(image, targets, original_header, save_path)`: 保存标记图
+1. `data/file_manager.py` 与 `services/pair_service.py` 扫描并配对新旧 FITS
+2. `core/image_aligner.py` 以新图为参考对齐旧图
+3. `services/detection_pipeline.py` 运行检测
+4. 检测模式支持 `patch`、`full_image`、`hybrid`
+5. `services/exclusion_service.py` 与 `services/query_service.py` 用于排除已知目标或补充查询信息
+6. `gui/` 层负责候选体展示、标记和导出
 
-### 3.3 Data Layer (`src/scann/data/`)
+### 原生标注流
 
-#### database.py - 数据库
-- `CandidateDatabase`: SQLite 候选体数据库（异步写入）
-- `LinkageDatabase`: FITS 联动数据库
+1. `services/dataset_preprocess_service.py` 统一原始文件命名并生成对齐产物
+2. `native_annotation/dataset_service.py` 生成任务列表
+3. `native_annotation/task_lock_service.py` 控制任务占用和心跳续租
+4. `native_annotation/fits_engine.py` 提供 FITS 二进制与 PNG 渲染
+5. `native_annotation/annotation_service.py` 将标注状态写入 SQLite，并保留 revision 历史
+6. `frontend/` 前端负责登录、标注画布、面板和历史交互
 
-#### file_manager.py - 文件管理
-- `scan_fits_folder(path) -> list[FitsFileInfo]`: 扫描 FITS 文件夹
-- `match_new_old_pairs(new_folder, old_folder) -> list[ImagePair]`: 新旧图配对
-- `organize_training_data(...)`: 训练数据组织
+## 5. 数据与存储
 
-#### downloader.py - 下载引擎（继承 v1）
+当前仓库里有两套与标注相关的存储面：
 
-### 3.4 Service Layer (`src/scann/services/`)
+- 桌面应用侧：`core/` 中的标注后端与存储辅助
+- 原生标注平台侧：`native_annotation/annotation_service.py`
 
-协调多个 Core 模块完成复杂业务流程。
+原生标注平台目前的持久化重点是：
 
-#### blink_service.py - 闪烁服务
-- `BlinkService`: 管理闪烁状态和速度
-  - `start(speed_ms)` / `stop()` / `tick() -> which_image`
+- `scann_native.db`：SQLite 主存储
+- `annotation_revisions/`：按任务保存的 revision 日志
+- `annotations.json`：兼容和快照用途的数据文件
 
-#### detection_service.py - 检测管线
-- `DetectionPipeline`: 完整检测流程
-  1. 对齐 → 2. 按 `detection_mode` 分流 (`patch | full_image | hybrid`) → 3. 排除已知 → 4. 排序输出
-  2. `hybrid` 模式支持 `full_image` 与 `patch` 双向主从顺序，full-image 失败/低置信可自动回退
+## 6. 维护约定
 
-#### query_service.py - 外部查询
-- `query_vsx(ra, dec)` / `query_mpc(ra, dec)` / `query_simbad(ra, dec)` / `query_tns(ra, dec)`
-- `check_artificial_satellite(ra, dec, datetime)`
-
-#### exclusion_service.py - 已知排除
-- `ExclusionService`: 综合 MPCORB + 外部查询排除已知天体
-
-#### scheduler_service.py - 计划任务
-- `SchedulerService`: 定时爬取 HMT 目录、自动下载、自动检测
-
-### 3.5 GUI Layer (`src/scann/gui/`)
-
-> 详见 [UI/UX 设计文档](ui_ux_design.md)
-
-#### main_window.py - 主窗口骨架
-- 持有 `ui_parts`、presenter、controller 与运行态状态
-- 负责启动装配、少量窗口级视图动作和生命周期 glue
-- 不再直接承担菜单、中央布局、状态栏、快捷键的大段构建逻辑
-
-#### composition/ - GUI 组装层
-- `main_window_builder.py`: 创建菜单栏、中央区域、状态栏、histogram dock，并返回结构化 `ui_parts`
-- `main_window_wiring.py`: 负责 QAction 连接、控件 signal 装配和窗口级快捷键注册
-
-#### controllers/ - GUI 事件控制层
-- `ImageSessionController` / `PairController` / `DetectionController` / `QueryController`
-- `ModelController` / `TrainingController` / `PreferencesController`
-- `FileActionsController` / `AnnotationController` / `HelpController`
-- 职责是把 Qt 事件转成 service 调用，并把结果回写给 view / presenter
-
-#### presenters/ - GUI 展示层
-- `CandidatePresenter`: 负责候选体表格与图像 marker 刷新
-- `StatusPresenter`: 负责状态栏消息和日志输出
-
-#### 主要窗口内容
-- **菜单栏**: 文件 | 处理 | AI | 查询 | 视图 | 设置 | 帮助
-- **可折叠侧边栏** (240px, Ctrl+B 切换):
-  - 文件夹按钮 (新图/旧图)
-  - 批量对齐/检测按钮 + 进度条
-  - 图像配对列表 (`QListWidget`)
-  - 可疑目标表格 (`SuspectTableWidget`)
-- **图像区域** (弹性填充，≥ 75% 窗口面积):
-  - 浮层状态标签 (NEW/OLD/INV, `OverlayLabel`)
-  - FITS 图像查看器 (`FitsImageViewer`)
-- **控制栏** (40px):
-  - 新图/旧图切换、闪烁 toggle、闪烁速度滑块、反色 toggle
-  - 直方图拉伸按钮
-  - 标记真/假/下一个
-- **状态栏**: 当前图类型 | 像素坐标 | 天球坐标 | 缩放百分比
-
-#### image_viewer.py - FITS 图像查看器
-- `FitsImageViewer(QGraphicsView)`:
-  - 中键拖拽（新旧图同步移动，共享 viewport 变换矩阵）
-  - 滚轮缩放 (锚点在鼠标位置)
-  - 方框/十字线候选体标记绘制
-  - 左键选点 → `point_clicked` 信号
-  - 右键 → `right_click` 信号 → 上下文查询菜单
-  - MPCORB 已知小行星叠加层
-
-#### widgets/ - 自定义组件
-- `no_scroll_spinbox.py`: 禁用滚轮的 SpinBox / DoubleSpinBox
-- `coordinate_label.py`: 可选择复制的坐标标签
-- `overlay_label.py` (**新增**): 半透明浮层状态标签 (NEW/OLD/INV)
-- `suspect_table.py` (**新增**): 带 AI 评分排序/筛选/右键菜单的可疑目标表格
-- `histogram_panel.py` (**新增**): 实时直方图 + 黑白点滑块 (仅调显示)
-- `blink_speed_slider.py` (**新增**): 带数值显示的闪烁速度控制 (50~2000ms)
-- `collapsible_sidebar.py` (**新增**): 可折叠/展开的侧面板
-- `mpcorb_overlay.py` (**新增**): 图像上的已知小行星叠加绘制层
-- `annotation_viewer.py` (**新增**): 标注专用图像查看器，支持边界框绘制/编辑
-- `triplet_preview.py` (**新增**): 三联图放大并排显示面板
-- `annotation_stats.py` (**新增**): 标注进度/类别统计面板
-- `annotation_list.py` (**新增**): v2标注框列表 + 属性编辑
-- `draw_toolbar.py` (**新增**): 绘制工具栏 (框选/点标/移动/缩放)
-
-#### dialogs/ - 对话框 (**新增目录**)
-- `settings_dialog.py`: 分页设置 (望远镜/天文台/检测/AI/保存/高级)
-- `training_dialog.py`: AI 训练配置 + 进度监控 + Loss 曲线
-- `annotation_dialog.py` (**新增**): 标注工具对话框，双模式(v1三联图/v2 FITS)，策略模式后端
-- `batch_process_dialog.py`: 批量降噪/伪平场，另存为 FITS
-- `mpc_report_dialog.py`: MPC 80 列报告预览/复制/导出
-- `query_result_popup.py`: 外部查询结果浮窗
-- `shortcut_help_dialog.py`: 快捷键列表
-
-## 4. 快捷键设计
-
-### 4.1 核心快捷键 (单键，窗口焦点内)
-
-| 快捷键 | 功能 | 作用域 | 条件 |
-|--------|------|--------|------|
-| R | 切换闪烁 | 窗口内 | 已加载图像 |
-| I | 切换反色 | 窗口内 | 已加载图像 |
-| Y | 标记为真 | 窗口内 | 有选中候选 |
-| N | 标记为假 | 窗口内 | 有选中候选 |
-| 1 | 显示新图 | 窗口内 | 已加载图像 |
-| 2 | 显示旧图 | 窗口内 | 已加载图像 |
-| F | 适配窗口 | 图像区域 | — |
-| Space | 下一个候选 | 窗口内 | 有候选列表 |
-| 滚轮 | 放大缩小 | 图像区域 | — |
-| 中键拖拽 | 拖动图片 | 图像区域 | — |
-
-### 4.2 扩展快捷键 (组合键)
-
-| 快捷键 | 功能 |
-|--------|------|
-| Ctrl+O | 打开新图文件夹 |
-| Ctrl+Shift+O | 打开旧图文件夹 |
-| Ctrl+B | 切换侧边栏 |
-| Ctrl+, | 打开设置 |
-| Ctrl+S | 保存当前图像 |
-| Ctrl+E | 导出 MPC 报告 |
-| Ctrl+L | 打开标注工具 |
-| ← / → | 上/下一组图像配对 |
-
-### 4.3 快捷键约束
-- 所有快捷键使用 `Qt.WindowShortcut`，非全局
-- 单字母快捷键在文本输入框获得焦点时自动失效
-
-## 5. 数据流
-
-```
-FITS文件夹(新) ─┐
-                 ├──→ 配对 → 对齐 → 候选检测 → AI评分 → 已知排除 → 可疑列表
-FITS文件夹(旧) ─┘                                        ↑
-                                                    MPCORB + 外部查询
-
-可疑列表 ──→ 人工复核 (Y/N) ──→ MPC 80列报告
-```
-
-### 标注数据流
-
-```
-三联图文件夹 (v1) ──→ TripletAnnotationBackend ──┐
-FITS 图像目录 (v2) ──→ FitsAnnotationBackend    ──┤
-                                                           ├─→ AnnotationDialog
-                       AI 模型 ──→ 预标注 ──────────┘
-                                                               │
-                                                           用户标注
-                                                               │
-                                                   ┌───────┼───────┐
-                                                   │              │       │
-                                             positive/   annotations.json  COCO/YOLO
-                                             negative/   (v2格式)          (导出)
-                                             (v1格式)
-```
-
-## 6. GUI 信号-槽连接
-
-```
-文件夹按钮.clicked  → FileManager.scan → file_list 更新 → 加载配对 → ImageViewer
-btn_blink.clicked   → BlinkService.toggle → QTimer start/stop → 切换 NEW/OLD
-btn_detect.clicked  → DetectionPipeline (工作线程) → SuspectTableWidget 更新
-suspect_list.clicked → ImageViewer.centerOn(candidate) + draw_markers
-ImageViewer.right_click → QMenu → QueryService.query_xxx → QueryResultPopup
-```
-
-## 7. 约束
-
-- **显存**: AI 推理 ≤ 8GB
-- **FITS 头**: 任何保存操作不得修改原始 FITS 文件头
-- **保存格式**: 整数（16/32bit 可选），不使用浮点
-- **快捷键**: 非全局，仅窗口焦点内有效
-- **滚轮**: 所有数字输入框禁用滚轮调整
-- **图像优先**: 图像区域占窗口 ≥ 75%，侧边栏可折叠
-- **暗色主题**: 背景 `#1E1E1E`，图像区域 `#141414`
-- **最小窗口**: 1024×768，宽度 < 1200px 时侧边栏自动折叠
-
-## 8. ViT 全图检测运行说明（当前实现）
-
-- **模式切换**: `scann_v2_config.json` 中 `detection_mode` 支持 `patch | full_image | hybrid`，默认 `patch`
-- **hybrid 参数**:
-  - `hybrid_primary_mode`: `full_image | patch`
-  - `hybrid_low_confidence`: 低置信回退阈值（0~1）
-- **dense 解码参数**:
-  - `score_threshold`: 候选置信阈值
-  - `top_k`: heatmap 取点上限
-  - `iou_threshold`: NMS 阈值
-- **已知限制**:
-  - 超大分辨率图像在 `full_image` 模式下显存/时延波动较大，推荐优先使用 `hybrid`
-  - 当前以单类 real 候选检测为主，多类别检测头不在当前版本范围
+- 长期有效的结构说明放在当前文档
+- 一次性的实施计划、检查单、backlog 和阶段总结不再进入 `docs/`
+- 这类内容应优先进入 issue、PR 描述或外部项目管理工具
