@@ -19,7 +19,7 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/install/bin:${PATH}" \
-    PYTHONPATH="/app/scann_v2/src"
+    PYTHONPATH="/install/lib/python3.11/site-packages:/app/scann_v2/src"
 
 WORKDIR /app
 
