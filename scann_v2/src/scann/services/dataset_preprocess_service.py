@@ -11,6 +11,7 @@ from typing import Callable, Optional
 
 import numpy as np
 
+from scann.core.brightness_match import brightness_match_anchors
 from scann.core.fits_io import read_fits, write_fits
 from scann.core.image_aligner import align
 from scann.data.file_manager import FitsImagePair, match_new_old_pairs
@@ -19,6 +20,11 @@ from scann.services.pair_service import PairService
 logger = logging.getLogger(__name__)
 
 _FITS_EXTS = {".fits", ".fit", ".fts"}
+_BRIGHTNESS_MATCH_DONE_MARKER = ".scann_brightness_match.done"
+_MATCH_MAX_SAMPLES = 200000
+_MATCH_HIGH_PERCENTILE = 99.9
+_MATCH_HIGHLIGHT_SIGMA = 5.0
+_MATCH_ADAPTIVE_HIGH_PERCENTILE = False
 
 
 @dataclass(frozen=True)
@@ -32,6 +38,7 @@ class PreparedTaskPaths:
 @dataclass(frozen=True)
 class DatasetPreprocessReport:
     standardized_files: int = 0
+    brightness_matched_files: int = 0
     reused_aligned_pairs: int = 0
     generated_aligned_pairs: int = 0
     generated_marked_crops: int = 0
@@ -57,12 +64,14 @@ class DatasetPreprocessService:
     def prepare_dataset(self, root: Path) -> DatasetPreprocessReport:
         dataset_root = Path(root)
         standardized_files = self.standardize_dataset_by_date_obs(dataset_root)
+        brightness_matched_files = self.apply_initial_brightness_match(dataset_root)
         reused_aligned_pairs, generated_aligned_pairs, generated_marked_crops = (
             self.ensure_aligned_crop_files(dataset_root)
         )
         task_count = len(self.collect_preprocessed_tasks(dataset_root))
         return DatasetPreprocessReport(
             standardized_files=standardized_files,
+            brightness_matched_files=brightness_matched_files,
             reused_aligned_pairs=reused_aligned_pairs,
             generated_aligned_pairs=generated_aligned_pairs,
             generated_marked_crops=generated_marked_crops,
@@ -106,6 +115,27 @@ class DatasetPreprocessService:
         generated_aligned_pairs = sum(item[1] for item in results)
         generated_marked_crops = sum(item[2] for item in results)
         return reused_aligned_pairs, generated_aligned_pairs, generated_marked_crops
+
+    def apply_initial_brightness_match(self, root: Path) -> int:
+        marker_path = root / _BRIGHTNESS_MATCH_DONE_MARKER
+        if marker_path.exists():
+            return 0
+
+        new_dir = root / "new"
+        old_dir = root / "old"
+        if not new_dir.is_dir() or not old_dir.is_dir():
+            return 0
+
+        pairs, _only_new, _only_old = match_new_old_pairs(str(new_dir), str(old_dir))
+        if not pairs:
+            return 0
+
+        matched_files = sum(self._run_jobs(pairs, self._apply_brightness_match_to_pair))
+        marker_path.write_text(
+            f"matched_files={matched_files}\n",
+            encoding="utf-8",
+        )
+        return matched_files
 
     def collect_preprocessed_tasks(self, root: Path) -> list[PreparedTaskPaths]:
         marked_files = self.collect_marked_files(root / "new_marked")
@@ -290,6 +320,55 @@ class DatasetPreprocessService:
         normalized_path = work_dir / normalized_name
         shutil.copy2(backup_path, normalized_path)
         return 1
+
+    def _apply_brightness_match_to_pair(self, pair: FitsImagePair) -> int:
+        try:
+            new_fits = self._read_fits(pair.new_path)
+            old_fits = self._read_fits(pair.old_path)
+        except Exception as exc:
+            logger.warning("亮度匹配读取失败: %s (%s)", pair.name, exc)
+            return 0
+
+        try:
+            new_data = np.asarray(new_fits.data, dtype=np.float32)
+            old_data = np.asarray(old_fits.data, dtype=np.float32)
+            matched_old = self._match_data_to_reference(new_data, old_data)
+        except Exception as exc:
+            logger.warning("亮度匹配失败: %s (%s)", pair.name, exc)
+            return 0
+
+        if not np.allclose(old_data, matched_old, rtol=1e-5, atol=1e-3, equal_nan=True):
+            self._write_fits(pair.old_path, matched_old, old_fits.header)
+            return 1
+        return 0
+
+    def _match_data_to_reference(self, reference_data: np.ndarray, source_data: np.ndarray) -> np.ndarray:
+        ref_background, ref_highlight, *_ = brightness_match_anchors(
+            reference_data,
+            max_samples=_MATCH_MAX_SAMPLES,
+            high_percentile=_MATCH_HIGH_PERCENTILE,
+            highlight_sigma=_MATCH_HIGHLIGHT_SIGMA,
+            adaptive_high_percentile=_MATCH_ADAPTIVE_HIGH_PERCENTILE,
+        )
+        src_background, src_highlight, *_ = brightness_match_anchors(
+            source_data,
+            max_samples=_MATCH_MAX_SAMPLES,
+            high_percentile=_MATCH_HIGH_PERCENTILE,
+            highlight_sigma=_MATCH_HIGHLIGHT_SIGMA,
+            adaptive_high_percentile=_MATCH_ADAPTIVE_HIGH_PERCENTILE,
+        )
+
+        source_span = float(src_highlight - src_background)
+        reference_span = float(ref_highlight - ref_background)
+        if not np.isfinite(source_span) or source_span <= 0:
+            raise ValueError("source anchors are degenerate")
+        if not np.isfinite(reference_span) or reference_span <= 0:
+            raise ValueError("reference anchors are degenerate")
+
+        scale = reference_span / source_span
+        offset = ref_background - (scale * src_background)
+        matched = np.asarray(source_data, dtype=np.float32) * np.float32(scale) + np.float32(offset)
+        return matched.astype(np.float32, copy=False)
 
     def _ensure_aligned_pair(
         self,
