@@ -60,6 +60,7 @@ class DummyImageViewer:
 class DummyHistogramPanel:
     def __init__(self) -> None:
         self.stretch_changed = DummySignal()
+        self.apply_match_requested = DummySignal()
 
 
 class WiringWindow(QMainWindow):
@@ -170,6 +171,7 @@ class WiringWindow(QMainWindow):
             "_on_mouse_moved",
             "_on_zoom_changed",
             "_on_stretch_changed",
+            "_on_match_current_stretch_to_other_views",
             "_on_prev_pair",
             "_on_next_pair",
         ]
@@ -222,6 +224,7 @@ def test_connect_signals_wires_queries_view_and_widget_events(qapp):
         window.file_list.currentRowChanged.emit(3)
         window.image_viewer.mouse_moved.emit(10, 20)
         window.histogram_panel.stretch_changed.emit(0.1, 0.9)
+        window.histogram_panel.apply_match_requested.emit()
 
         assert window._on_menu_query.call_args_list == [(("vsx",), {}), (("satellite",), {})]
         window._update_markers.assert_called_once_with()
@@ -231,6 +234,7 @@ def test_connect_signals_wires_queries_view_and_widget_events(qapp):
         window._on_pair_selected.assert_called_once_with(3)
         window._on_mouse_moved.assert_called_once_with(10, 20)
         window._on_stretch_changed.assert_called_once_with(0.1, 0.9)
+        window._on_match_current_stretch_to_other_views.assert_called_once_with()
     finally:
         window.close()
 
@@ -242,7 +246,7 @@ def test_init_shortcuts_registers_window_scoped_actions(qapp):
     try:
         wiring.init_shortcuts()
 
-        assert len(window._shortcut_actions) == 11
+        assert len(window._shortcut_actions) == 12
 
         actions_by_shortcut = {
             action.shortcut().toString(): action for action in window._shortcut_actions
@@ -252,6 +256,7 @@ def test_init_shortcuts_registers_window_scoped_actions(qapp):
             "I",
             "Y",
             "N",
+            "M",
             "3",
             "1",
             "2",
@@ -266,10 +271,12 @@ def test_init_shortcuts_registers_window_scoped_actions(qapp):
 
         actions_by_shortcut["R"].trigger()
         actions_by_shortcut["F"].trigger()
+        actions_by_shortcut["M"].trigger()
         actions_by_shortcut["Left"].trigger()
 
         window._on_blink_toggle.assert_called_once_with()
         window.image_viewer.fit_in_view.assert_called_once_with()
+        window._on_match_current_stretch_to_other_views.assert_called_once_with()
         window._on_prev_pair.assert_called_once_with()
     finally:
         window.close()

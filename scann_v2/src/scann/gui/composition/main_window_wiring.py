@@ -98,6 +98,7 @@ class MainWindowWiring:
         window.image_viewer.zoom_changed.connect(window._on_zoom_changed)
 
         window.histogram_panel.stretch_changed.connect(window._on_stretch_changed)
+        window.histogram_panel.apply_match_requested.connect(window._on_match_current_stretch_to_other_views)
 
     def init_shortcuts(self) -> None:
         window = self._window
@@ -110,6 +111,7 @@ class MainWindowWiring:
             "I": window._on_invert_toggle,
             "Y": window._on_mark_real,
             "N": window._on_mark_bogus,
+            "M": window._on_match_current_stretch_to_other_views,
             "3": window._on_show_new_marked,
             "1": window._on_show_new,
             "2": window._on_show_old,

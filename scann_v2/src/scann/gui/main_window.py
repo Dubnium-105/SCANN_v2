@@ -176,6 +176,7 @@ class MainWindow(QMainWindow):
         self._new_image_data: Optional[np.ndarray] = None
         self._new_marked_image_data: Optional[np.ndarray] = None
         self._old_image_data: Optional[np.ndarray] = None
+        self._stretch_state_by_view: dict[str, dict[str, float]] = {}
 
         # ── 文件管理 ──
         self._new_folder: str = ""
@@ -402,6 +403,10 @@ class MainWindow(QMainWindow):
     def _on_stretch_changed(self, black: float, white: float) -> None:
         """直方图拉伸参数变化 (仅影响显示)"""
         self.image_session_controller.stretch_changed(black, white)
+
+    def _on_match_current_stretch_to_other_views(self) -> None:
+        """Propagate the current view's brightness match to the other views."""
+        self.image_session_controller.match_current_stretch_to_other_views()
 
     def _on_image_clicked(self, x: int, y: int) -> None:
         """图像左键点击"""

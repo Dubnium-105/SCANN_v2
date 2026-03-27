@@ -18,6 +18,7 @@ def _make_window():
     window._new_image_data = None
     window._new_marked_image_data = None
     window._old_image_data = None
+    window._stretch_state_by_view = {}
     window._new_fits_header = None
     window._old_fits_header = None
     window.image_viewer = Mock()
@@ -30,6 +31,7 @@ def _make_window():
     window.status_pixel_coord = Mock()
     window.status_wcs_coord = Mock()
     window.status_zoom = Mock()
+    window._show_message = Mock()
     window.btn_show_new_marked = Mock()
     window.btn_show_new = Mock()
     window.btn_show_old = Mock()
@@ -57,7 +59,11 @@ class TestImageSessionController:
             controller.show_image("new")
 
         mock_stretch.assert_called_once()
-        window.histogram_panel.set_image_data.assert_called_once_with(window._new_image_data)
+        window.histogram_panel.set_image_data.assert_called_once_with(
+            window._new_image_data,
+            black_point=1.0,
+            white_point=2.0,
+        )
         window.image_viewer.set_image_data.assert_called_once()
         window.overlay_state.setText.assert_called_once_with("NEW")
         window.overlay_state.set_state.assert_called_once_with("new")
@@ -75,7 +81,11 @@ class TestImageSessionController:
             controller.show_image("new_marked")
 
         mock_stretch.assert_called_once()
-        window.histogram_panel.set_image_data.assert_called_once_with(window._new_marked_image_data)
+        window.histogram_panel.set_image_data.assert_called_once_with(
+            window._new_marked_image_data,
+            black_point=1.0,
+            white_point=2.0,
+        )
         window.overlay_state.setText.assert_called_once_with("MARKED")
         window.overlay_state.set_state.assert_called_once_with("marked")
         window.status_image_type.setText.assert_called_once_with("当前: MARKED")
@@ -195,3 +205,71 @@ class TestImageSessionController:
             (BlinkState.NEW, BlinkState.MARKED, BlinkState.OLD)
         )
         window.btn_show_new_marked.setEnabled.assert_called_once_with(True)
+
+    def test_match_current_stretch_to_other_views_calls_infer_and_updates_other_states(self):
+        window = _make_window()
+        controller = ImageSessionController(window)
+        window._new_image_data = np.ones((12, 12), dtype=np.float32) * 100.0
+        window._old_image_data = np.ones((12, 12), dtype=np.float32) * 200.0
+        window._new_marked_image_data = np.ones((12, 12), dtype=np.float32) * 150.0
+        window.blink_service.current_state = BlinkState.NEW
+        window._stretch_state_by_view = {
+            "new": {
+                "range_min": 100.0,
+                "range_max": 100.0,
+                "black_point": 10.0,
+                "white_point": 20.0,
+            }
+        }
+
+        inferred = Mock(background_position=0.2, highlight_position=0.9)
+        interval_old = Mock(display_min=30.0, display_max=60.0)
+        interval_marked = Mock(display_min=40.0, display_max=70.0)
+
+        with patch(
+            "scann.gui.controllers.image_session_controller.infer_match_positions_from_target_interval",
+            return_value=inferred,
+        ) as mock_infer, patch(
+            "scann.gui.controllers.image_session_controller.compute_brightness_match_interval",
+            side_effect=[interval_marked, interval_old],
+        ) as mock_compute, patch(
+            "scann.gui.controllers.image_session_controller.histogram_stretch",
+            return_value=np.zeros((12, 12), dtype=np.float32),
+        ):
+            controller.match_current_stretch_to_other_views()
+
+        mock_infer.assert_called_once()
+        assert mock_compute.call_count == 2
+        assert window._stretch_state_by_view["new_marked"]["black_point"] == 40.0
+        assert window._stretch_state_by_view["old"]["white_point"] == 60.0
+        window._show_message.assert_called_once()
+
+    def test_show_image_uses_cached_view_stretch_state(self):
+        window = _make_window()
+        controller = ImageSessionController(window)
+        window._old_image_data = np.ones((16, 16), dtype=np.float32) * 50.0
+        window._stretch_state_by_view = {
+            "old": {
+                "range_min": 0.0,
+                "range_max": 100.0,
+                "black_point": 12.0,
+                "white_point": 34.0,
+            }
+        }
+
+        with patch(
+            "scann.gui.controllers.image_session_controller.histogram_stretch",
+            return_value=np.zeros((16, 16), dtype=np.float32),
+        ) as mock_stretch:
+            controller.show_image("old")
+
+        window.histogram_panel.set_image_data.assert_called_once_with(
+            window._old_image_data,
+            black_point=12.0,
+            white_point=34.0,
+        )
+        mock_stretch.assert_called_once_with(
+            window._old_image_data,
+            black_point=12.0,
+            white_point=34.0,
+        )
