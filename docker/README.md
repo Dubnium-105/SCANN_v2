@@ -49,8 +49,8 @@ SCANN_NATIVE_TASK_LOCK_TIMEOUT_SECONDS=1200
 
 ```bash
 cd /srv/scann/app
-git clone <your-repo-url> .
-cd docker
+git clone <your-repo-url>
+cd SCANN_v2/docker
 cp .env.example .env
 vim .env
 chmod +x deploy.sh
@@ -60,9 +60,10 @@ chmod +x deploy.sh
 ## 日常更新
 
 ```bash
-cd /srv/scann/app
+cd /srv/scann/app/SCANN_v2
 git pull
 cd docker
+chmod +x deploy.sh
 ./deploy.sh
 ```
 
