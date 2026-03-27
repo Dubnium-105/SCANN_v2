@@ -66,6 +66,7 @@ class WiringWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
 
+        self.btn_show_new_marked = DummyButton()
         self.btn_show_new = DummyButton()
         self.btn_show_old = DummyButton()
         self.btn_blink = DummyButton()
@@ -126,6 +127,7 @@ class WiringWindow(QMainWindow):
 
         method_names = [
             "_on_show_new",
+            "_on_show_new_marked",
             "_on_show_old",
             "_on_blink_toggle",
             "_on_invert_toggle",
@@ -134,6 +136,7 @@ class WiringWindow(QMainWindow):
             "_on_next_candidate",
             "_on_toggle_histogram",
             "_on_blink_speed_changed",
+            "_on_open_dataset",
             "_on_open_new_folder",
             "_on_open_old_folder",
             "_on_save_image",
@@ -183,16 +186,19 @@ def test_connect_signals_wires_controls_and_menus(qapp):
     try:
         wiring.connect_signals()
 
+        window.btn_show_new_marked.clicked.emit()
         window.btn_show_new.clicked.emit()
         window.btn_align.clicked.emit()
+        window.btn_new_folder.clicked.emit()
         window.act_open_new.triggered.emit()
         window.act_save_marked.triggered.emit()
         window.act_exit.triggered.emit()
         window.act_histogram.triggered.emit()
 
+        window._on_show_new_marked.assert_called_once_with()
         window._on_show_new.assert_called_once_with()
         window._on_batch_align.assert_called_once_with()
-        window._on_open_new_folder.assert_called_once_with()
+        assert window._on_open_dataset.call_count == 2
         window._on_save_marked_image.assert_called_once_with()
         window.close.assert_called_once_with()
         window._on_toggle_histogram.assert_called_once_with()
@@ -236,7 +242,7 @@ def test_init_shortcuts_registers_window_scoped_actions(qapp):
     try:
         wiring.init_shortcuts()
 
-        assert len(window._shortcut_actions) == 10
+        assert len(window._shortcut_actions) == 11
 
         actions_by_shortcut = {
             action.shortcut().toString(): action for action in window._shortcut_actions
@@ -246,6 +252,7 @@ def test_init_shortcuts_registers_window_scoped_actions(qapp):
             "I",
             "Y",
             "N",
+            "3",
             "1",
             "2",
             "F",

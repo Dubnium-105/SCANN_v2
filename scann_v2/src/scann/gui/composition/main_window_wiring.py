@@ -24,6 +24,7 @@ class MainWindowWiring:
     def connect_signals(self) -> None:
         window = self._window
 
+        window.btn_show_new_marked.clicked.connect(window._on_show_new_marked)
         window.btn_show_new.clicked.connect(window._on_show_new)
         window.btn_show_old.clicked.connect(window._on_show_old)
         window.btn_blink.clicked.connect(window._on_blink_toggle)
@@ -35,13 +36,13 @@ class MainWindowWiring:
 
         window.blink_speed.speed_changed.connect(window._on_blink_speed_changed)
 
-        window.btn_new_folder.clicked.connect(window._on_open_new_folder)
-        window.btn_old_folder.clicked.connect(window._on_open_old_folder)
+        window.btn_new_folder.clicked.connect(window._on_open_dataset)
+        window.btn_old_folder.clicked.connect(window._on_open_dataset)
         window.btn_align.clicked.connect(window._on_batch_align)
         window.btn_detect.clicked.connect(window._on_batch_detect)
 
-        window.act_open_new.triggered.connect(window._on_open_new_folder)
-        window.act_open_old.triggered.connect(window._on_open_old_folder)
+        window.act_open_new.triggered.connect(window._on_open_dataset)
+        window.act_open_old.triggered.connect(window._on_open_dataset)
         window.act_save.triggered.connect(window._on_save_image)
         window.act_save_marked.triggered.connect(window._on_save_marked_image)
         window.act_exit.triggered.connect(window.close)
@@ -109,6 +110,7 @@ class MainWindowWiring:
             "I": window._on_invert_toggle,
             "Y": window._on_mark_real,
             "N": window._on_mark_bogus,
+            "3": window._on_show_new_marked,
             "1": window._on_show_new,
             "2": window._on_show_old,
             "F": window.image_viewer.fit_in_view,

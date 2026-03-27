@@ -58,6 +58,7 @@ def _make_mock_window():
     )
     from scann.gui.presenters import CandidatePresenter, StatusPresenter
     from scann.services.config_service import ConfigService
+    from scann.services.dataset_preprocess_service import DatasetPreprocessService
     from scann.services.model_service import ModelService
     from scann.services.pair_service import PairService
 
@@ -74,6 +75,7 @@ def _make_mock_window():
     w.blink_service.speed_ms = 500
     w.blink_service.current_state = BlinkState.NEW
     w.blink_service.set_state = Mock()
+    w.blink_service.set_sequence = Mock()
 
     # 定时器
     w.blink_timer = Mock()
@@ -84,6 +86,7 @@ def _make_mock_window():
     w.overlay_blink = Mock()
 
     # 控制栏按钮
+    w.btn_show_new_marked = Mock()
     w.btn_show_new = Mock()
     w.btn_show_old = Mock()
     w.btn_blink = Mock()
@@ -144,11 +147,12 @@ def _make_mock_window():
         match_pairs_fn=main_window.match_new_old_pairs,
         read_fits_fn=main_window.read_fits,
     )
+    w.dataset_preprocess_service = Mock(spec=DatasetPreprocessService)
     w.image_session_controller = ImageSessionController(w)
     w.file_actions_controller = FileActionsController(w)
     w.annotation_controller = AnnotationController(w)
     w.help_controller = HelpController(w)
-    w.pair_controller = PairController(w, w.pair_service)
+    w.pair_controller = PairController(w, w.pair_service, w.dataset_preprocess_service)
     w.model_controller = ModelController(w, w.model_service)
     w.training_controller = TrainingController(w)
     w.detection_controller = DetectionController(w)
@@ -159,11 +163,13 @@ def _make_mock_window():
     w._candidates = []
     w._current_candidate_idx = -1
     w._new_image_data = None
+    w._new_marked_image_data = None
     w._old_image_data = None
 
     # 新增: 文件管理相关数据
     w._new_folder = ""
     w._old_folder = ""
+    w._dataset_root = ""
     w._image_pairs = []
     w._current_pair_idx = -1
     w._new_fits_header = None
@@ -185,6 +191,7 @@ def _make_mock_window():
 # ═══════════════════════════════════════════════
 
 
+@pytest.mark.skip(reason="replaced by unified dataset entry")
 class TestOpenNewFolder:
     """测试打开新图文件夹功能"""
 
@@ -257,6 +264,7 @@ class TestOpenNewFolder:
         w.image_viewer.set_image_data.assert_called()
 
 
+@pytest.mark.skip(reason="replaced by unified dataset entry")
 class TestOpenOldFolder:
     """测试打开旧图文件夹功能"""
 
@@ -309,6 +317,86 @@ class TestOpenOldFolder:
 # ═══════════════════════════════════════════════
 #  功能 2: 线性拉伸显示
 # ═══════════════════════════════════════════════
+
+
+class TestOpenDataset:
+    """测试主界面的数据集入口。"""
+
+    @patch("scann.gui.controllers.pair_controller.QFileDialog.getExistingDirectory")
+    @patch("scann.gui.main_window.read_fits")
+    @patch("scann.gui.main_window.match_new_old_pairs")
+    @patch("scann.gui.main_window.scan_fits_folder")
+    def test_open_dataset_loads_preprocessed_pairs(self, mock_scan, mock_match, mock_read, mock_dialog, tmp_path):
+        from scann.data.file_manager import FitsFileInfo, FitsImagePair
+
+        w = _make_mock_window()
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        dataset_root = project_root / "dataset"
+        (dataset_root / "new").mkdir(parents=True)
+        (dataset_root / "old").mkdir(parents=True)
+        (dataset_root / "new_marked").mkdir(parents=True)
+        mock_dialog.return_value = str(project_root)
+        mock_scan.return_value = [
+            FitsFileInfo(
+                path=dataset_root / "new" / "img_001.fits",
+                stem="img_001",
+                size_bytes=1024,
+                modified_time=0.0,
+            ),
+        ]
+        mock_match.return_value = (
+            [
+                FitsImagePair(
+                    name="img_001",
+                    new_path=dataset_root / "new" / "img_001.fits",
+                    old_path=dataset_root / "old" / "img_001.fits",
+                )
+            ],
+            [],
+            [],
+        )
+        mock_read.return_value = FitsImage(
+            data=np.zeros((64, 64), dtype=np.uint16),
+            header=FitsHeader(raw={"OBJECT": "TestField"}),
+            path=dataset_root / "new" / "img_001.fits",
+        )
+        w.dataset_preprocess_service.prepare_dataset.return_value = Mock(task_count=1)
+
+        w._on_open_dataset()
+
+        assert w._dataset_root == str(dataset_root)
+        assert w._new_folder == str(dataset_root / "new")
+        assert w._old_folder == str(dataset_root / "old")
+        w.dataset_preprocess_service.prepare_dataset.assert_called_once_with(dataset_root)
+        mock_match.assert_called_once_with(str(dataset_root / "new"), str(dataset_root / "old"))
+        assert len(w._image_pairs) == 1
+
+    @patch("scann.gui.controllers.pair_controller.QFileDialog.getExistingDirectory")
+    def test_open_dataset_cancelled(self, mock_dialog):
+        w = _make_mock_window()
+        mock_dialog.return_value = ""
+
+        w._on_open_dataset()
+
+        assert w._dataset_root == ""
+        w.file_list.clear.assert_not_called()
+
+    @patch("scann.gui.controllers.pair_controller.QFileDialog.getExistingDirectory")
+    def test_open_dataset_auto_creates_project_root_dataset_dirs(self, mock_dialog, tmp_path):
+        w = _make_mock_window()
+        project_root = tmp_path / "project_root"
+        project_root.mkdir()
+        mock_dialog.return_value = str(project_root)
+        w.dataset_preprocess_service.prepare_dataset.return_value = Mock(task_count=0)
+
+        w._on_open_dataset()
+
+        dataset_root = project_root / "dataset"
+        assert dataset_root.exists()
+        assert (dataset_root / "new").exists()
+        assert (dataset_root / "old").exists()
+        assert (dataset_root / "new_marked").exists()
 
 
 class TestStretchChanged:

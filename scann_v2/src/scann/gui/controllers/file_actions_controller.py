@@ -18,8 +18,16 @@ class FileActionsController:
     def __init__(self, window: MainWindow) -> None:
         self._window = window
 
+    def _current_image_payload(self):
+        state_name = getattr(self._window.blink_service.current_state, "name", "NEW")
+        if state_name == "MARKED":
+            return self._window._new_marked_image_data, self._window._new_fits_header
+        if state_name == "OLD":
+            return self._window._old_image_data, self._window._old_fits_header
+        return self._window._new_image_data, self._window._new_fits_header
+
     def save_image(self) -> None:
-        data = self._window._new_image_data
+        data, header = self._current_image_payload()
         if data is None:
             self._window._show_message("无图像数据可保存")
             return
@@ -37,7 +45,7 @@ class FileActionsController:
             write_fits(
                 path,
                 data,
-                header=self._window._new_fits_header,
+                header=header,
             )
             self._window._show_message(f"已保存: {path}")
         except Exception as exc:

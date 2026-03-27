@@ -55,6 +55,7 @@ class TestTableContent:
     def test_image_shortcuts_include_blink(self):
         image_group = SHORTCUT_GROUPS[0]
         keys = [k for k, _ in image_group[1]]
+        assert "3" in keys  # 显示带标记新图
         assert "R" in keys  # 切换闪烁
         assert "I" in keys  # 切换反色
 
@@ -88,6 +89,7 @@ class TestGroupContent:
             (0, "F"),       # 图像操作 → 适配窗口
             (0, "1"),       # 图像操作 → 显示新图
             (0, "2"),       # 图像操作 → 显示旧图
+            (0, "3"),       # 图像操作 → 显示带标记新图
             (1, "←"),       # 候选操作 → 上一组配对
             (1, "→"),       # 候选操作 → 下一组配对
             (2, "Ctrl+B"),  # 界面 → 切换侧边栏

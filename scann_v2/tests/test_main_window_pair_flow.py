@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import numpy as np
+import pytest
 
 from scann.core.models import FitsHeader, FitsImage
 from scann.services.blink_service import BlinkState
@@ -14,6 +15,7 @@ def _make_mock_window():
     from scann.gui.main_window import MainWindow
     from scann.gui.controllers import PairController
     from scann.gui.presenters import CandidatePresenter, StatusPresenter
+    from scann.services.dataset_preprocess_service import DatasetPreprocessService
     from scann.services.pair_service import PairService
 
     with patch("scann.gui.main_window.QMainWindow.__init__"):
@@ -24,10 +26,12 @@ def _make_mock_window():
     window.blink_service.is_inverted = False
     window.blink_service.current_state = BlinkState.NEW
     window.blink_service.set_state = Mock()
+    window.blink_service.set_sequence = Mock()
     window.blink_timer = Mock()
     window.overlay_state = Mock()
     window.overlay_inv = Mock()
     window.overlay_blink = Mock()
+    window.btn_show_new_marked = Mock()
     window.btn_show_new = Mock()
     window.btn_show_old = Mock()
     window.btn_blink = Mock()
@@ -59,9 +63,11 @@ def _make_mock_window():
     )
     window._new_folder = ""
     window._old_folder = ""
+    window._dataset_root = ""
     window._image_pairs = []
     window._current_pair_idx = -1
     window._new_image_data = None
+    window._new_marked_image_data = None
     window._old_image_data = None
     window._new_fits_header = None
     window._old_fits_header = None
@@ -74,15 +80,87 @@ def _make_mock_window():
         match_pairs_fn=main_window.match_new_old_pairs,
         read_fits_fn=main_window.read_fits,
     )
-    window.pair_controller = PairController(window, window.pair_service)
+    window.dataset_preprocess_service = Mock(spec=DatasetPreprocessService)
+    window.pair_controller = PairController(
+        window,
+        window.pair_service,
+        window.dataset_preprocess_service,
+    )
     window.set_image_data = Mock()
     return window
 
 
 class TestMainWindowPairFlow:
+    @patch("scann.gui.controllers.pair_controller.QFileDialog.getExistingDirectory")
+    def test_open_dataset_cancelled(self, mock_dialog):
+        window = _make_mock_window()
+        mock_dialog.return_value = ""
+
+        window._on_open_dataset()
+
+        assert getattr(window, "_dataset_root", "") == ""
+        window.file_list.clear.assert_not_called()
+
     @patch("scann.gui.main_window.read_fits")
+    @patch("scann.gui.main_window.match_new_old_pairs")
     @patch("scann.gui.main_window.scan_fits_folder")
     @patch("scann.gui.controllers.pair_controller.QFileDialog.getExistingDirectory")
+    def test_open_dataset_loads_pairs(
+        self,
+        mock_dialog,
+        mock_scan,
+        mock_match,
+        mock_read,
+        tmp_path,
+    ):
+        from scann.data.file_manager import FitsFileInfo, FitsImagePair
+
+        window = _make_mock_window()
+        window.pair_controller.load_pair = Mock()
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        dataset_root = project_root / "dataset"
+        (dataset_root / "new").mkdir(parents=True)
+        (dataset_root / "old").mkdir(parents=True)
+        (dataset_root / "new_marked").mkdir(parents=True)
+        mock_dialog.return_value = str(project_root)
+        mock_scan.return_value = [
+            FitsFileInfo(
+                path=dataset_root / "new" / "img_001.fits",
+                stem="img_001",
+                size_bytes=1024,
+                modified_time=0.0,
+            ),
+        ]
+        mock_match.return_value = (
+            [
+                FitsImagePair(
+                    name="img_001",
+                    new_path=dataset_root / "new" / "img_001.fits",
+                    old_path=dataset_root / "old" / "img_001.fits",
+                )
+            ],
+            [],
+            [],
+        )
+        mock_read.return_value = FitsImage(
+            data=np.ones((16, 16), dtype=np.float32),
+            header=FitsHeader(raw={"OBJECT": "Field"}),
+            path=dataset_root / "new" / "img_001.fits",
+        )
+        window.dataset_preprocess_service.prepare_dataset.return_value = Mock(task_count=1)
+
+        window._on_open_dataset()
+
+        assert window._dataset_root == str(dataset_root)
+        assert window._new_folder == str(dataset_root / "new")
+        assert window._old_folder == str(dataset_root / "old")
+        window.dataset_preprocess_service.prepare_dataset.assert_called_once_with(
+            dataset_root
+        )
+        window.pair_controller.load_pair.assert_called_once_with(0)
+
+    @pytest.mark.skip(reason="replaced by unified dataset entry")
     def test_open_new_folder_resets_state_and_loads_first_image(
         self,
         mock_dialog,
@@ -131,6 +209,7 @@ class TestMainWindowPairFlow:
     @patch("scann.gui.main_window.match_new_old_pairs")
     @patch("scann.gui.main_window.scan_fits_folder")
     @patch("scann.gui.controllers.pair_controller.QFileDialog.getExistingDirectory")
+    @pytest.mark.skip(reason="replaced by unified dataset entry")
     def test_open_old_folder_matches_pairs_and_auto_loads_first_pair(
         self,
         mock_dialog,

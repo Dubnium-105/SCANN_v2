@@ -7,10 +7,12 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import numpy as np
+import pytest
 
 from scann.core.models import FitsHeader, FitsImage, ImagePair
 from scann.data.file_manager import FitsImagePair
 from scann.gui.controllers import PairController
+from scann.services.dataset_preprocess_service import DatasetPreprocessService
 from scann.services.pair_service import PairService
 
 
@@ -31,12 +33,15 @@ def _make_window():
     window._update_markers = Mock()
     window.candidate_presenter = Mock()
     window.set_candidates = Mock()
+    window.set_image_data = Mock()
     window._new_folder = ""
     window._old_folder = ""
+    window._dataset_root = ""
     window._image_pairs = []
     window._current_pair_idx = -1
     window._current_pair_using_aligned = False
     window._new_image_data = None
+    window._new_marked_image_data = None
     window._old_image_data = None
     window._new_fits_header = None
     window._old_fits_header = None
@@ -49,18 +54,21 @@ def _make_window():
 def _make_controller(service: PairService | Mock | None = None):
     window = _make_window()
     service = service or Mock(spec=PairService)
-    controller = PairController(window, service)
-    return controller, window, service
+    if isinstance(service, Mock):
+        service.resolve_marked_image_path.return_value = None
+    preprocess = Mock(spec=DatasetPreprocessService)
+    controller = PairController(window, service, preprocess)
+    return controller, window, service, preprocess
 
 
 class TestPairController:
     def test_holds_pair_service(self):
-        controller, _window, service = _make_controller()
+        controller, _window, service, _preprocess = _make_controller()
 
         assert controller.pair_service is service
 
     def test_pair_navigation_updates_file_list_selection(self):
-        controller, window, _service = _make_controller()
+        controller, window, _service, _preprocess = _make_controller()
         window.file_list.currentRow.return_value = 1
         window.file_list.count.return_value = 4
 
@@ -74,9 +82,20 @@ class TestPairController:
         window.file_list.setCurrentRow.assert_called_once_with(1)
 
     @patch("scann.gui.controllers.pair_controller.QFileDialog.getExistingDirectory")
+    def test_open_dataset_cancelled(self, mock_dialog):
+        controller, window, _service, preprocess = _make_controller(Mock(spec=PairService))
+        mock_dialog.return_value = ""
+
+        controller.open_dataset()
+
+        assert getattr(window, "_dataset_root", "") == ""
+        preprocess.prepare_dataset.assert_not_called()
+        window.file_list.clear.assert_not_called()
+
+    @pytest.mark.skip(reason="replaced by unified dataset entry")
     def test_open_new_folder_scans_and_loads_first_image(self, mock_dialog):
         service = Mock(spec=PairService)
-        controller, window, _service = _make_controller(service)
+        controller, window, _service, preprocess = _make_controller(service)
         mock_dialog.return_value = "/data/new"
         service.scan_new_folder.return_value = [
             SimpleNamespace(path=Path("/data/new/img_001.fits"), stem="img_001"),
@@ -105,12 +124,14 @@ class TestPairController:
         window.set_image_data.assert_called_once_with(
             service.read_image.return_value.data,
             None,
+            None,
         )
 
     @patch("scann.gui.controllers.pair_controller.QFileDialog.getExistingDirectory")
+    @pytest.mark.skip(reason="replaced by unified dataset entry")
     def test_open_old_folder_matches_pairs_and_loads_first_pair(self, mock_dialog):
         service = Mock(spec=PairService)
-        controller, window, _service = _make_controller(service)
+        controller, window, _service, preprocess = _make_controller(service)
         mock_dialog.return_value = "/data/old"
         window._new_folder = "/data/new"
         window._candidates_cache = {0: [Mock()]}
@@ -136,7 +157,7 @@ class TestPairController:
 
     def test_load_pair_uses_service_and_restores_cached_candidates(self):
         service = Mock(spec=PairService)
-        controller, window, _service = _make_controller(service)
+        controller, window, _service, _preprocess = _make_controller(service)
         pair = FitsImagePair(
             name="img_001",
             new_path=Path("/data/new/img_001.fits"),
@@ -169,13 +190,14 @@ class TestPairController:
         window.set_image_data.assert_called_once_with(
             window._new_image_data,
             window._old_image_data,
+            None,
         )
         window.set_candidates.assert_called_once_with(window._candidates_cache[0])
         assert window._new_image_data.shape == (20, 22)
         assert window._old_image_data.shape == (20, 22)
 
     def test_recent_folder_actions_update_config_and_menu(self):
-        controller, window, _service = _make_controller()
+        controller, window, _service, _preprocess = _make_controller()
         action = Mock()
         window.menu_recent.addAction.side_effect = [action]
 

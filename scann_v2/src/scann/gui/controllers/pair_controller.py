@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from PyQt5.QtWidgets import QFileDialog
 
+from scann.services.dataset_preprocess_service import DatasetPreprocessService
 from scann.services.pair_service import PairService
 
 if TYPE_CHECKING:
@@ -14,90 +15,147 @@ if TYPE_CHECKING:
 
 
 class PairController:
-    """集中主窗口中的配对流程事件入口。
+    """集中管理主窗口中的数据集加载、配对切换与图像载入。"""
 
-    当前阶段由控制器负责编排配对扫描、切换和加载流程，
-    窗口对象仍保留 GUI 持有状态，供后续 ImageSessionController 继续收口。
-    """
-
-    def __init__(self, window: MainWindow, pair_service: PairService) -> None:
+    def __init__(
+        self,
+        window: MainWindow,
+        pair_service: PairService,
+        preprocess_service: DatasetPreprocessService | None = None,
+    ) -> None:
         self._window = window
         self._pair_service = pair_service
+        self._preprocess_service = preprocess_service or DatasetPreprocessService(
+            pair_service=pair_service
+        )
 
     @property
     def pair_service(self) -> PairService:
         """暴露配对服务，供其他流程复用。"""
         return self._pair_service
 
-    def open_new_folder(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self._window, "选择新图文件夹")
-        if not folder:
-            return
+    @staticmethod
+    def _resolve_dataset_root(selected_path: str | Path) -> Path:
+        root = Path(selected_path)
+        has_dataset_layout = any((root / name).exists() for name in ("new", "old", "new_marked"))
+        if has_dataset_layout or root.name.lower() == "dataset":
+            return root
+        return root / "dataset"
 
-        files = self._pair_service.scan_new_folder(folder)
-        self._window._new_folder = folder
-        self._window._config.new_folder = folder
+    @staticmethod
+    def _ensure_dataset_dirs(dataset_root: Path) -> list[str]:
+        created: list[str] = []
+        if not dataset_root.exists():
+            dataset_root.mkdir(parents=True, exist_ok=True)
+            created.append("dataset")
 
+        for name in ("new", "old", "new_marked"):
+            folder = dataset_root / name
+            if not folder.exists():
+                folder.mkdir(parents=True, exist_ok=True)
+                created.append(name)
+        return created
+
+    def _reset_loaded_dataset_state(self) -> None:
         self._window.file_list.clear()
         self._window._image_pairs = []
         self._window._current_pair_idx = -1
         self._window._current_pair_using_aligned = False
         self._window._candidates_cache.clear()
 
-        for file_info in files:
-            self._window.file_list.addItem(file_info.stem)
+    def _load_first_new_image(self, files) -> None:
+        if not files:
+            self._window.set_image_data(None, None, None)
+            self._window._new_fits_header = None
+            self._window._old_fits_header = None
+            return
 
-        if files:
-            try:
-                first_image = self._pair_service.read_image(files[0].path)
-                self._window.set_image_data(first_image.data, None)
-                self._window._new_fits_header = first_image.header
-                self._window._old_fits_header = None
-            except Exception as exc:
-                self._window._show_message(f"加载失败: {exc}", 5000, level="ERROR")
-                return
+        first_image = self._pair_service.read_image(files[0].path)
+        marked_image = None
+        marked_path = self._pair_service.resolve_marked_image_path(files[0].path)
+        if marked_path is not None:
+            marked_image = self._pair_service.read_image(marked_path)
+        self._window.set_image_data(
+            first_image.data,
+            None,
+            marked_image.data if marked_image is not None else None,
+        )
+        self._window._new_fits_header = first_image.header
+        self._window._old_fits_header = None
 
-        self._window._show_message(f"已加载新图文件夹: {folder} ({len(files)} 个文件)")
-        self.add_recent_folder(folder)
+    def _refresh_dataset_listing(self, dataset_root: Path) -> tuple[int, int, int]:
+        new_dir = dataset_root / "new"
+        old_dir = dataset_root / "old"
 
-    def open_old_folder(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self._window, "选择旧图文件夹")
+        pairs, only_new, only_old = self._pair_service.match_pairs(new_dir, old_dir)
+        self._window._image_pairs = pairs
+        self._window._current_pair_idx = -1
+        self._window._current_pair_using_aligned = False
+        self._window._candidates_cache.clear()
+
+        self._window.file_list.clear()
+        for pair in pairs:
+            self._window.file_list.addItem(f"✓ {pair.name}")
+        for name in only_new:
+            self._window.file_list.addItem(f"🆕 {name} (仅新图)")
+        for name in only_old:
+            self._window.file_list.addItem(f"📷 {name} (仅旧图)")
+
+        if pairs:
+            self.load_pair(0)
+        else:
+            self._load_first_new_image(self._pair_service.scan_new_folder(new_dir))
+
+        return len(pairs), len(only_new), len(only_old)
+
+    def open_dataset(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self._window, "选择项目根目录或数据集目录")
         if not folder:
             return
+        self.open_dataset_path(folder)
 
-        self._window._old_folder = folder
-        self._window._config.old_folder = folder
-        self.add_recent_folder(folder)
-        old_files = self._pair_service.scan_old_folder(folder)
-
-        if self._window._new_folder:
-            pairs, only_new, only_old = self._pair_service.match_pairs(
-                self._window._new_folder,
-                folder,
-            )
-            self._window._image_pairs = pairs
-            self._window._current_pair_idx = -1
-            self._window._current_pair_using_aligned = False
-            self._window._candidates_cache.clear()
-
-            self._window.file_list.clear()
-            for pair in pairs:
-                self._window.file_list.addItem(f"✅ {pair.name}")
-            for name in only_new:
-                self._window.file_list.addItem(f"🆕 {name} (仅新图)")
-            for name in only_old:
-                self._window.file_list.addItem(f"📁 {name} (仅旧图)")
-
-            if pairs:
-                self.load_pair(0)
-
-            self._window._show_message(
-                f"已配对: {len(pairs)} 对, 仅新图: {len(only_new)}, 仅旧图: {len(only_old)}",
-                5000,
-            )
+    def open_dataset_path(self, folder: str | Path) -> None:
+        selected_root = Path(folder)
+        if not selected_root.exists():
+            self._window._show_message(f"文件夹不存在: {folder}", 5000, level="WARNING")
             return
 
-        self._window._show_message(f"已选择旧图文件夹: {folder} ({len(old_files)} 个文件)")
+        dataset_root = self._resolve_dataset_root(selected_root)
+        created = self._ensure_dataset_dirs(dataset_root)
+
+        self._window._dataset_root = str(dataset_root)
+        self._window._new_folder = str(dataset_root / "new")
+        self._window._old_folder = str(dataset_root / "old")
+        self._window._config.new_folder = self._window._new_folder
+        self._window._config.old_folder = self._window._old_folder
+
+        self._reset_loaded_dataset_state()
+
+        if created:
+            created_desc = ", ".join(created)
+            self._window._show_message(
+                f"已自动创建数据集目录结构: {dataset_root} ({created_desc})",
+                5000,
+            )
+
+        report = self._preprocess_service.prepare_dataset(dataset_root)
+        pair_count, only_new_count, only_old_count = self._refresh_dataset_listing(dataset_root)
+
+        self._window._show_message(
+            "已加载数据集: "
+            f"{dataset_root} · 预处理任务 {report.task_count} · "
+            f"配对 {pair_count} · 仅新图 {only_new_count} · 仅旧图 {only_old_count}",
+            5000,
+        )
+        self.add_recent_folder(str(dataset_root))
+
+    def open_new_folder(self) -> None:
+        """兼容旧入口，重定向到数据集选择。"""
+        self.open_dataset()
+
+    def open_old_folder(self) -> None:
+        """兼容旧入口，重定向到数据集选择。"""
+        self.open_dataset()
 
     def add_recent_folder(self, folder: str) -> None:
         recent_folders = self._window._config.recent_folders
@@ -122,33 +180,7 @@ class PairController:
             )
 
     def open_recent_folder(self, folder: str) -> None:
-        if not Path(folder).exists():
-            self._window._show_message(f"文件夹不存在: {folder}", 5000, level="WARNING")
-            return
-
-        files = self._pair_service.scan_new_folder(folder)
-        self._window._new_folder = folder
-        self._window._config.new_folder = folder
-        self._window.file_list.clear()
-        self._window._image_pairs = []
-        self._window._current_pair_idx = -1
-        self._window._current_pair_using_aligned = False
-        self._window._candidates_cache.clear()
-
-        for file_info in files:
-            self._window.file_list.addItem(file_info.stem)
-
-        if files:
-            try:
-                first_image = self._pair_service.read_image(files[0].path)
-                self._window.set_image_data(first_image.data, None)
-                self._window._new_fits_header = first_image.header
-                self._window._old_fits_header = None
-            except Exception as exc:
-                self._window._show_message(f"加载失败: {exc}", 5000, level="ERROR")
-                return
-
-        self._window._show_message(f"已加载: {folder} ({len(files)} 个文件)")
+        self.open_dataset_path(folder)
 
     def prev_pair(self) -> None:
         current = self._window.file_list.currentRow()
@@ -180,24 +212,32 @@ class PairController:
         try:
             image_pair = self._pair_service.load_pair(pair)
             self._window._new_image_data = image_pair.new_image.data
+            self._window._new_marked_image_data = None
             self._window._old_image_data = image_pair.old_image.data
             self._window._new_fits_header = image_pair.new_image.header
             self._window._old_fits_header = image_pair.old_image.header
             self._window._current_pair_using_aligned = bool(image_pair.aligned)
+            marked_path = self._pair_service.resolve_marked_image_path(pair.new_path)
+            if marked_path is not None:
+                marked_image = self._pair_service.read_image(marked_path)
+                self._window._new_marked_image_data = marked_image.data
             if image_pair.aligned and self._window._old_image_data is not None:
                 bounds = self._pair_service.calc_nonzero_valid_bounds(self._window._old_image_data)
                 if bounds is not None and self._window._new_image_data is not None:
                     x0, x1, y0, y1 = bounds
                     self._window._new_image_data = self._window._new_image_data[y0:y1, x0:x1]
                     self._window._old_image_data = self._window._old_image_data[y0:y1, x0:x1]
-
-            # 注意：已对齐的图像（__aligned_crop.fts）已经是裁剪后的结果，
-            # 不需要再次调用 calc_nonzero_valid_bounds 进行裁剪，
-            # 否则可能导致错误的结果。
+                    if self._window._new_marked_image_data is not None:
+                        marked_shape = self._window._new_marked_image_data.shape[:2]
+                        if marked_shape[0] >= y1 and marked_shape[1] >= x1:
+                            self._window._new_marked_image_data = (
+                                self._window._new_marked_image_data[y0:y1, x0:x1]
+                            )
 
             self._window.set_image_data(
                 self._window._new_image_data,
                 self._window._old_image_data,
+                self._window._new_marked_image_data,
             )
 
             if image_pair.aligned:
@@ -216,6 +256,9 @@ class PairController:
 
     def resolve_pair_image_paths(self, pair) -> tuple[Path, Path, bool]:
         return self._pair_service.resolve_pair_image_paths(pair)
+
+    def resolve_marked_image_path(self, new_image_path: str | Path) -> Path | None:
+        return self._pair_service.resolve_marked_image_path(new_image_path)
 
     def calc_nonzero_valid_bounds(self, image):
         return self._pair_service.calc_nonzero_valid_bounds(image)

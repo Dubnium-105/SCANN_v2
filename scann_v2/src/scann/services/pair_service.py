@@ -56,6 +56,17 @@ class PairService:
         """读取单张 FITS 图像。"""
         return self._read_fits(path)
 
+    def resolve_marked_image_path(self, new_image_path: str | Path) -> Path | None:
+        """根据新图路径推断同名带标记新图。"""
+        new_path = Path(new_image_path)
+        if new_path.parent.name != "new":
+            return None
+
+        marked_path = new_path.parent.parent / "new_marked" / new_path.name
+        if marked_path.is_file():
+            return marked_path
+        return None
+
     def aligned_artifact_paths(self, pair: FitsImagePair) -> tuple[Path, Path, Path, Path]:
         """返回配对图像的对齐裁剪产物路径。"""
         new_path = Path(pair.new_path)

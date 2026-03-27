@@ -116,3 +116,11 @@ class BlinkService:
             state: 要设置的状态 (NEW 或 OLD)
         """
         self._state = state
+
+    def set_sequence(self, sequence: tuple[BlinkState, ...]) -> None:
+        """更新闪烁序列，并在需要时回退到首个状态。"""
+        if not sequence:
+            sequence = (BlinkState.NEW, BlinkState.OLD)
+        self._sequence = sequence
+        if self._state not in self._sequence:
+            self._state = self._sequence[0]

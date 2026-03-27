@@ -31,6 +31,7 @@ def _make_mock_window():
     from scann.gui.main_window import MainWindow
     from scann.gui.controllers import DetectionController, ImageSessionController, PairController
     from scann.gui.presenters import CandidatePresenter, StatusPresenter
+    from scann.services.dataset_preprocess_service import DatasetPreprocessService
     from scann.services.pair_service import PairService
 
     with patch("scann.gui.main_window.QMainWindow.__init__"):
@@ -46,6 +47,7 @@ def _make_mock_window():
     w.blink_service.speed_ms = 500
     w.blink_service.current_state = BlinkState.NEW
     w.blink_service.set_state = Mock()  # 添加 set_state 方法
+    w.blink_service.set_sequence = Mock()
 
     # 定时器
     w.blink_timer = Mock()
@@ -56,6 +58,7 @@ def _make_mock_window():
     w.overlay_blink = Mock()
 
     # 控制栏按钮
+    w.btn_show_new_marked = Mock()
     w.btn_show_new = Mock()
     w.btn_show_old = Mock()
     w.btn_blink = Mock()
@@ -107,7 +110,11 @@ def _make_mock_window():
     w._candidates = []
     w._current_candidate_idx = -1
     w._new_image_data = None
+    w._new_marked_image_data = None
     w._old_image_data = None
+    w._dataset_root = ""
+    w._new_fits_header = None
+    w._old_fits_header = None
 
     # 配置对象 (避免 RuntimeError: super-class __init__ was never called)
     w._config = Mock()
@@ -119,7 +126,8 @@ def _make_mock_window():
         read_fits_fn=main_window.read_fits,
     )
     w.image_session_controller = ImageSessionController(w)
-    w.pair_controller = PairController(w, w.pair_service)
+    w.dataset_preprocess_service = Mock(spec=DatasetPreprocessService)
+    w.pair_controller = PairController(w, w.pair_service, w.dataset_preprocess_service)
     w.detection_controller = DetectionController(w)
 
     return w
@@ -148,6 +156,14 @@ class TestShowImage:
         w.image_viewer.set_image_data.assert_called_once()
         w.overlay_state.setText.assert_called_with("OLD")
         w.overlay_state.set_state.assert_called_with("old")
+
+    def test_show_new_marked(self):
+        w = _make_mock_window()
+        w._new_marked_image_data = np.zeros((64, 64), np.float32)
+        w._show_image("new_marked")
+        w.image_viewer.set_image_data.assert_called_once()
+        w.overlay_state.setText.assert_called_with("MARKED")
+        w.overlay_state.set_state.assert_called_with("marked")
 
     def test_show_new_none_data(self):
         w = _make_mock_window()
@@ -183,6 +199,14 @@ class TestOnShowNewOld:
         w._on_show_old()
         w.btn_show_new.setChecked.assert_called_with(False)
         w.btn_show_old.setChecked.assert_called_with(True)
+
+    def test_on_show_new_marked_sets_buttons(self):
+        w = _make_mock_window()
+        w._new_marked_image_data = np.zeros((32, 32), np.float32)
+        w._on_show_new_marked()
+        w.btn_show_new_marked.setChecked.assert_called_with(True)
+        w.btn_show_new.setChecked.assert_called_with(False)
+        w.btn_show_old.setChecked.assert_called_with(False)
 
 
 # ═══════════════════════════════════════════════
@@ -222,6 +246,13 @@ class TestBlinkMode:
         w.blink_service.tick.return_value = BlinkState.OLD
         w._on_blink_tick()
         w.overlay_state.set_state.assert_called_with("old")
+
+    def test_blink_tick_marked(self):
+        w = _make_mock_window()
+        w._new_marked_image_data = np.zeros((32, 32), np.float32)
+        w.blink_service.tick.return_value = BlinkState.MARKED
+        w._on_blink_tick()
+        w.overlay_state.set_state.assert_called_with("marked")
 
     def test_blink_speed_changed(self):
         w = _make_mock_window()

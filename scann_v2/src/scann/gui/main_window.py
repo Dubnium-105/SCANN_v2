@@ -46,6 +46,7 @@ from scann.gui.composition import MainWindowBuilder, MainWindowWiring
 from scann.gui.presenters import CandidatePresenter, StatusPresenter
 from scann.data.file_manager import scan_fits_folder, match_new_old_pairs
 from scann.services.config_service import ConfigService
+from scann.services.dataset_preprocess_service import DatasetPreprocessService
 from scann.services.model_service import ModelService
 from scann.services.pair_service import PairService
 from scann.services.blink_service import BlinkService
@@ -173,11 +174,13 @@ class MainWindow(QMainWindow):
         self._candidates: list[Candidate] = []
         self._current_candidate_idx: int = -1
         self._new_image_data: Optional[np.ndarray] = None
+        self._new_marked_image_data: Optional[np.ndarray] = None
         self._old_image_data: Optional[np.ndarray] = None
 
         # ── 文件管理 ──
         self._new_folder: str = ""
         self._old_folder: str = ""
+        self._dataset_root: str = ""
         self._image_pairs: list = []  # FitsImagePair 列表
         self._current_pair_idx: int = -1
         self._current_pair_using_aligned: bool = False
@@ -232,7 +235,12 @@ class MainWindow(QMainWindow):
             match_pairs_fn=match_new_old_pairs,
             read_fits_fn=read_fits,
         )
-        self.pair_controller = PairController(self, self.pair_service)
+        self.dataset_preprocess_service = DatasetPreprocessService(pair_service=self.pair_service)
+        self.pair_controller = PairController(
+            self,
+            self.pair_service,
+            self.dataset_preprocess_service,
+        )
         self.model_controller = ModelController(self, self.model_service)
         self.training_controller = TrainingController(self)
         self.detection_controller = DetectionController(self)
@@ -338,6 +346,10 @@ class MainWindow(QMainWindow):
         """显示新图"""
         self.image_session_controller.show_new()
 
+    def _on_show_new_marked(self) -> None:
+        """显示带标记新图。"""
+        self.image_session_controller.show_new_marked()
+
     def _on_show_old(self) -> None:
         """显示旧图"""
         self.image_session_controller.show_old()
@@ -417,9 +429,13 @@ class MainWindow(QMainWindow):
 
     # ── 文件菜单 ──
 
+    def _on_open_dataset(self) -> None:
+        """打开项目根目录或数据集目录。"""
+        self.pair_controller.open_dataset()
+
     def _on_open_new_folder(self) -> None:
         """打开新图文件夹"""
-        self.pair_controller.open_new_folder()
+        self._on_open_dataset()
 
     def _add_recent_folder(self, folder: str) -> None:
         """添加文件夹到最近打开列表"""
@@ -427,7 +443,7 @@ class MainWindow(QMainWindow):
 
     def _on_open_old_folder(self) -> None:
         """打开旧图文件夹"""
-        self.pair_controller.open_old_folder()
+        self._on_open_dataset()
 
     def _on_save_image(self) -> None:
         """保存当前图像"""
@@ -651,10 +667,13 @@ class MainWindow(QMainWindow):
     # ══════════════════════════════════════════════
 
     def set_image_data(
-        self, new_data: Optional[np.ndarray], old_data: Optional[np.ndarray]
+        self,
+        new_data: Optional[np.ndarray],
+        old_data: Optional[np.ndarray],
+        new_marked_data: Optional[np.ndarray] = None,
     ) -> None:
         """设置当前图像配对数据"""
-        self.image_session_controller.set_image_data(new_data, old_data)
+        self.image_session_controller.set_image_data(new_data, old_data, new_marked_data)
 
     def set_candidates(self, candidates: list[Candidate]) -> None:
         """设置检测到的候选体列表"""

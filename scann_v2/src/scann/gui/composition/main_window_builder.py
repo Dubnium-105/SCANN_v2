@@ -87,6 +87,7 @@ class CentralUiParts:
     overlay_state: OverlayLabel
     overlay_inv: OverlayLabel
     overlay_blink: OverlayLabel
+    btn_show_new_marked: QPushButton
     btn_show_new: QPushButton
     btn_show_old: QPushButton
     btn_blink: QPushButton
@@ -151,11 +152,12 @@ class MainWindowBuilder:
 
         file_menu = mb.addMenu("文件(&F)")
 
-        act_open_new = file_menu.addAction("打开新图文件夹")
+        act_open_new = file_menu.addAction("打开数据集目录")
         act_open_new.setShortcut(QKeySequence("Ctrl+O"))
 
-        act_open_old = file_menu.addAction("打开旧图文件夹")
+        act_open_old = file_menu.addAction("打开数据集目录")
         act_open_old.setShortcut(QKeySequence("Ctrl+Shift+O"))
+        act_open_old.setVisible(False)
 
         file_menu.addSeparator()
 
@@ -296,10 +298,10 @@ class MainWindowBuilder:
         sidebar_layout = sidebar.content_layout
 
         btn_layout = QHBoxLayout()
-        btn_new_folder = QPushButton("📂 新图")
+        btn_new_folder = QPushButton("📂 数据集")
         btn_old_folder = QPushButton("📂 旧图")
+        btn_old_folder.hide()
         btn_layout.addWidget(btn_new_folder)
-        btn_layout.addWidget(btn_old_folder)
         sidebar_layout.addLayout(btn_layout)
 
         func_layout = QHBoxLayout()
@@ -355,11 +357,15 @@ class MainWindowBuilder:
         ctrl_layout.setContentsMargins(4, 2, 4, 2)
         ctrl_layout.setSpacing(4)
 
+        btn_show_new_marked = QPushButton("[3] 带标记新图")
         btn_show_new = QPushButton("[1] 新图")
         btn_show_old = QPushButton("[2] 旧图")
+        btn_show_new_marked.setCheckable(True)
         btn_show_new.setCheckable(True)
         btn_show_old.setCheckable(True)
+        btn_show_new_marked.setEnabled(False)
         btn_show_new.setChecked(True)
+        ctrl_layout.addWidget(btn_show_new_marked)
         ctrl_layout.addWidget(btn_show_new)
         ctrl_layout.addWidget(btn_show_old)
 
@@ -432,6 +438,7 @@ class MainWindowBuilder:
             overlay_state=overlay_state,
             overlay_inv=overlay_inv,
             overlay_blink=overlay_blink,
+            btn_show_new_marked=btn_show_new_marked,
             btn_show_new=btn_show_new,
             btn_show_old=btn_show_old,
             btn_blink=btn_blink,
