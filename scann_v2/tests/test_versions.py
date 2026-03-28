@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from scann.core.dataset_storage import DatasetStorage
+from scann.core.fits_annotation_storage import load_v2_annotation_document
 from scann.native_annotation.app import app
 
 
@@ -126,20 +127,13 @@ def test_admin_only_rollback_and_creates_new_revision(tmp_path, monkeypatch) -> 
     assert refreshed_data["revisions"][0]["submitted_by"] == "admin"
     assert refreshed_data["revisions"][0]["rollback_of_revision_id"] == older_revision_id
 
-    db_path = dataset_root / "scann_native.db"
+    db_path = dataset_root / "scann_dataset.db"
     assert db_path.exists()
 
-    with sqlite3.connect(str(db_path)) as connection:
-        revision_count = connection.execute(
-            "SELECT COUNT(1) FROM annotation_revisions WHERE task_id = ?",
-            ("PGC 17069",),
-        ).fetchone()[0]
-        snapshot_row = connection.execute(
-            "SELECT doc_json FROM annotation_dataset_snapshot WHERE id = 1",
-        ).fetchone()
+    storage = DatasetStorage(dataset_root)
+    revisions = storage.list_annotation_revisions("PGC 17069")
+    document = load_v2_annotation_document(dataset_root)
 
-    assert revision_count == 3
-    assert snapshot_row is not None
-    snapshot = json.loads(snapshot_row[0])
-    images = snapshot.get("images", [])
+    assert len(revisions) == 3
+    images = document.get("images", [])
     assert any(item.get("id") == "PGC 17069" for item in images if isinstance(item, dict))

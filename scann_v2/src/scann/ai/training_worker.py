@@ -256,9 +256,10 @@ class TrainingWorker(QThread):
         old_dir = dataset_root / "old"
         ann_path = dataset_root / "annotations.json"
         ann_db_path = dataset_root / "annotations.db"
+        dataset_db_path = dataset_root / "scann_dataset.db"
         if not new_dir.is_dir() or not old_dir.is_dir():
             raise ValueError("v2 数据集目录下必须包含 new 和 old 子目录")
-        if not ann_path.is_file() and not ann_db_path.is_file():
+        if not ann_path.is_file() and not ann_db_path.is_file() and not dataset_db_path.is_file():
             raise ValueError("v2 数据集目录下缺少标注文件（annotations.json 或 annotations.db）")
 
         pairs, _only_new, _only_old = match_new_old_pairs(str(new_dir), str(old_dir))

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict, deque
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ import json
 import numpy as np
 
 from scann.core.brightness_match import brightness_match_anchors
+from scann.core.dataset_storage import DatasetStorage, RawAssetRecord, TaskArtifactRecord, TaskRecord
 from scann.core.fits_io import read_fits, write_fits
 from scann.core.image_aligner import align
 from scann.data.file_manager import FitsImagePair, match_new_old_pairs
@@ -29,6 +31,16 @@ _MATCH_HIGHLIGHT_SIGMA = 5.0
 _MATCH_ADAPTIVE_HIGH_PERCENTILE = False
 _TASK_MANIFEST_FILE = "preprocessed_tasks.json"
 _TASK_MANIFEST_VERSION = "1.0"
+
+
+@dataclass(frozen=True)
+class _PlannedTask:
+    task_id: str
+    field_key: str
+    field_name: str
+    new_raw_path: Path
+    old_raw_path: Optional[Path]
+    new_marked_raw_path: Optional[Path]
 
 
 @dataclass(frozen=True)
@@ -66,11 +78,61 @@ class DatasetPreprocessService:
         self._max_workers = max_workers
 
     @staticmethod
+    def _dataset_storage(root: Path) -> DatasetStorage:
+        storage = DatasetStorage(Path(root))
+        storage.ensure_schema()
+        return storage
+
+    @staticmethod
+    def _ensure_dataset_dirs(root: Path) -> None:
+        dataset_root = Path(root)
+        for folder in (
+            dataset_root / "dataset_raw" / "new",
+            dataset_root / "dataset_raw" / "old",
+            dataset_root / "dataset_raw" / "new_marked",
+            dataset_root / "new",
+            dataset_root / "old",
+            dataset_root / "new_marked",
+        ):
+            folder.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
     def _task_manifest_path(root: Path) -> Path:
         return Path(root) / _TASK_MANIFEST_FILE
 
     @classmethod
     def load_task_manifest(cls, root: Path) -> list[PreparedTaskPaths]:
+        storage = DatasetStorage(Path(root))
+        try:
+            rows = storage.list_prepared_task_paths()
+        except Exception:
+            rows = []
+        if rows:
+            tasks: list[PreparedTaskPaths] = []
+            dataset_root = Path(root)
+            for row in rows:
+                new_rel = row.get("new_path")
+                if not isinstance(new_rel, str) or not new_rel:
+                    continue
+                tasks.append(
+                    PreparedTaskPaths(
+                        task_id=str(row["task_id"]),
+                        new_path=dataset_root / new_rel,
+                        old_path=(
+                            (dataset_root / row["old_path"])
+                            if isinstance(row.get("old_path"), str) and row.get("old_path")
+                            else None
+                        ),
+                        new_marked_path=(
+                            (dataset_root / row["new_marked_path"])
+                            if isinstance(row.get("new_marked_path"), str) and row.get("new_marked_path")
+                            else None
+                        ),
+                    )
+                )
+            if tasks:
+                return tasks
+
         manifest_path = cls._task_manifest_path(root)
         if not manifest_path.is_file():
             return []
@@ -139,8 +201,136 @@ class DatasetPreprocessService:
             encoding="utf-8",
         )
 
+    def _scan_raw_assets(self, root: Path) -> list[RawAssetRecord]:
+        dataset_root = Path(root)
+        assets: list[RawAssetRecord] = []
+        for role in ("new", "old", "new_marked"):
+            raw_dir = dataset_root / "dataset_raw" / role
+            if not raw_dir.is_dir():
+                continue
+            for file_path in sorted(raw_dir.iterdir()):
+                if not file_path.is_file() or file_path.suffix.lower() not in _FITS_EXTS:
+                    continue
+                try:
+                    stat = file_path.stat()
+                except OSError:
+                    continue
+                field_name = DatasetStorage.normalize_field_name(file_path.stem)
+                field_key = DatasetStorage.normalize_field_key(file_path.stem)
+                capture_key = DatasetStorage.normalize_capture_key(file_path.stem)
+                date_obs = self._extract_date_obs_token(file_path)
+                assets.append(
+                    RawAssetRecord(
+                        asset_id=uuid.uuid5(uuid.NAMESPACE_URL, file_path.relative_to(dataset_root).as_posix()).hex,
+                        asset_role=role,
+                        field_key=field_key,
+                        field_name=field_name or file_path.stem,
+                        capture_key=capture_key,
+                        relpath=file_path.relative_to(dataset_root).as_posix(),
+                        file_name=file_path.name,
+                        file_stem=file_path.stem,
+                        suffix=file_path.suffix.lower(),
+                        date_obs=date_obs,
+                        size_bytes=int(stat.st_size),
+                        modified_time=float(stat.st_mtime),
+                        metadata={"raw": True},
+                    )
+                )
+        return assets
+
+    def _migrate_legacy_inputs_to_raw(self, root: Path) -> int:
+        dataset_root = Path(root)
+        raw_root = dataset_root / "dataset_raw"
+        folder_names = ("new", "old", "new_marked")
+        jobs: list[tuple[Path, Path, Path]] = []
+
+        for folder_name in folder_names:
+            work_dir = dataset_root / folder_name
+            if not work_dir.is_dir():
+                continue
+            raw_dir = raw_root / folder_name
+            raw_dir.mkdir(parents=True, exist_ok=True)
+            for file_path in sorted(work_dir.iterdir()):
+                if not self._should_standardize_file(file_path):
+                    continue
+                jobs.append((file_path, raw_dir, work_dir))
+        return sum(self._run_jobs(jobs, self._standardize_single_file))
+
+    @staticmethod
+    def _date_token_from_asset(asset: RawAssetRecord) -> str | None:
+        if not asset.date_obs:
+            return None
+        compact = asset.date_obs.strip()
+        if len(compact) >= 15 and compact[8].lower() == "t":
+            return compact[:15]
+        return compact or None
+
+    def _plan_tasks(self, root: Path) -> list[_PlannedTask]:
+        storage = self._dataset_storage(root)
+        new_assets = storage.list_raw_assets("new")
+        old_assets = storage.list_raw_assets("old")
+        marked_assets = storage.list_raw_assets("new_marked")
+
+        old_by_field: dict[str, RawAssetRecord] = {}
+        for asset in old_assets:
+            old_by_field.setdefault(asset.field_key, asset)
+
+        marked_by_capture: dict[str, Deque[RawAssetRecord]] = defaultdict(deque)
+        marked_by_field: dict[str, Deque[RawAssetRecord]] = defaultdict(deque)
+        for asset in marked_assets:
+            marked_by_capture[asset.capture_key].append(asset)
+            marked_by_field[asset.field_key].append(asset)
+
+        planned: list[_PlannedTask] = []
+        task_rows: list[TaskRecord] = []
+        for asset in new_assets:
+            existing_task = storage.get_task_by_new_asset_id(asset.asset_id)
+            task_id = (
+                existing_task.task_id
+                if existing_task is not None
+                else storage.allocate_task_id(
+                    date_token=self._date_token_from_asset(asset),
+                    field_name=asset.field_name,
+                    capture_key=asset.capture_key,
+                )
+            )
+            old_asset = old_by_field.get(asset.field_key)
+            marked_asset = None
+            capture_queue = marked_by_capture.get(asset.capture_key)
+            if capture_queue:
+                marked_asset = capture_queue.popleft()
+            else:
+                field_queue = marked_by_field.get(asset.field_key)
+                if field_queue:
+                    marked_asset = field_queue.popleft()
+            task_rows.append(
+                TaskRecord(
+                    task_id=task_id,
+                    field_key=asset.field_key,
+                    field_name=asset.field_name,
+                    capture_key=asset.capture_key,
+                    new_asset_id=asset.asset_id,
+                    old_asset_id=old_asset.asset_id if old_asset else None,
+                    new_marked_asset_id=marked_asset.asset_id if marked_asset else None,
+                    preprocess_status="pending",
+                )
+            )
+            planned.append(
+                _PlannedTask(
+                    task_id=task_id,
+                    field_key=asset.field_key,
+                    field_name=asset.field_name,
+                    new_raw_path=Path(root) / asset.relpath,
+                    old_raw_path=(Path(root) / old_asset.relpath) if old_asset else None,
+                    new_marked_raw_path=(Path(root) / marked_asset.relpath) if marked_asset else None,
+                )
+            )
+        storage.sync_tasks(task_rows)
+        return planned
+
     def prepare_dataset(self, root: Path) -> DatasetPreprocessReport:
         dataset_root = Path(root)
+        self._ensure_dataset_dirs(dataset_root)
         standardized_files = self.standardize_dataset_by_date_obs(dataset_root)
         brightness_matched_files = self.apply_initial_brightness_match(dataset_root)
         reused_aligned_pairs, generated_aligned_pairs, generated_marked_crops = (
@@ -159,37 +349,18 @@ class DatasetPreprocessService:
         )
 
     def standardize_dataset_by_date_obs(self, root: Path) -> int:
-        raw_root = root / "dataset_raw"
-        folder_names = ("new", "old", "new_marked")
-        jobs: list[tuple[Path, Path, Path]] = []
-
-        for folder_name in folder_names:
-            work_dir = root / folder_name
-            if not work_dir.is_dir():
-                continue
-
-            raw_dir = raw_root / folder_name
-            raw_dir.mkdir(parents=True, exist_ok=True)
-
-            for file_path in sorted(work_dir.iterdir()):
-                if not self._should_standardize_file(file_path):
-                    continue
-                if (raw_dir / file_path.name).exists():
-                    continue
-                jobs.append((file_path, raw_dir, work_dir))
-
-        return sum(self._run_jobs(jobs, self._standardize_single_file))
+        self._ensure_dataset_dirs(root)
+        migrated = self._migrate_legacy_inputs_to_raw(root)
+        assets = self._scan_raw_assets(root)
+        self._dataset_storage(root).upsert_raw_assets(assets)
+        self._plan_tasks(root)
+        return migrated if migrated > 0 else len(assets)
 
     def ensure_aligned_crop_files(self, root: Path) -> tuple[int, int, int]:
-        new_dir = root / "new"
-        old_dir = root / "old"
-        if not new_dir.is_dir() or not old_dir.is_dir():
-            return 0, 0, 0
-
-        pairs, _only_new, _only_old = match_new_old_pairs(str(new_dir), str(old_dir))
+        planned_tasks = self._plan_tasks(root)
         results = self._run_jobs(
-            pairs,
-            lambda pair: self._ensure_aligned_pair(root, pair),
+            planned_tasks,
+            lambda task: self._ensure_planned_task(root, task),
         )
         reused_aligned_pairs = sum(item[0] for item in results)
         generated_aligned_pairs = sum(item[1] for item in results)
@@ -197,40 +368,25 @@ class DatasetPreprocessService:
         return reused_aligned_pairs, generated_aligned_pairs, generated_marked_crops
 
     def apply_initial_brightness_match(self, root: Path) -> int:
-        marker_path = root / _BRIGHTNESS_MATCH_DONE_MARKER
-        if marker_path.exists():
-            return 0
-
-        new_dir = root / "new"
-        old_dir = root / "old"
-        if not new_dir.is_dir() or not old_dir.is_dir():
-            return 0
-
-        pairs, _only_new, _only_old = match_new_old_pairs(str(new_dir), str(old_dir))
-        if not pairs:
-            return 0
-
-        matched_files = sum(self._run_jobs(pairs, self._apply_brightness_match_to_pair))
-        marker_path.write_text(
-            f"matched_files={matched_files}\n",
-            encoding="utf-8",
-        )
-        return matched_files
+        return 0
 
     def collect_preprocessed_tasks(self, root: Path) -> list[PreparedTaskPaths]:
-        manifest_tasks = self.load_task_manifest(root)
-        if manifest_tasks:
-            return manifest_tasks
-
-        marked_files = self.collect_marked_files(root / "new_marked")
+        rows = self._dataset_storage(root).list_prepared_task_paths()
         tasks: list[PreparedTaskPaths] = []
-        for task_id, new_path, old_path in self.collect_aligned_pairs(root):
+        for row in rows:
+            new_rel = row.get("new_path")
+            if not isinstance(new_rel, str) or not new_rel:
+                continue
             tasks.append(
                 PreparedTaskPaths(
-                    task_id=task_id,
-                    new_path=new_path,
-                    old_path=old_path,
-                    new_marked_path=marked_files.get(task_id),
+                    task_id=str(row["task_id"]),
+                    new_path=Path(root) / new_rel,
+                    old_path=(Path(root) / row["old_path"]) if isinstance(row.get("old_path"), str) and row.get("old_path") else None,
+                    new_marked_path=(
+                        (Path(root) / row["new_marked_path"])
+                        if isinstance(row.get("new_marked_path"), str) and row.get("new_marked_path")
+                        else None
+                    ),
                 )
             )
         if tasks:
@@ -241,18 +397,10 @@ class DatasetPreprocessService:
         self,
         root: Path,
     ) -> list[tuple[str, Optional[Path], Optional[Path]]]:
-        new_dir = root / "new"
-        old_dir = root / "old"
-
-        if new_dir.is_dir() or old_dir.is_dir():
-            new_files = self._collect_aligned_files(new_dir)
-            old_files = self._collect_aligned_files(old_dir)
-            if not new_files and not old_files:
-                return []
-            return self._pair_aligned_files(new_files, old_files)
-
-        new_files = self._collect_aligned_files(root)
-        return [(sample_id, path, None) for sample_id, path in sorted(new_files.items())]
+        return [
+            (task.task_id, task.new_path, task.old_path)
+            for task in self.collect_preprocessed_tasks(root)
+        ]
 
     def collect_marked_files(self, folder: Path) -> dict[str, Path]:
         if not folder.is_dir():
@@ -455,6 +603,213 @@ class DatasetPreprocessService:
         offset = ref_background - (scale * src_background)
         matched = np.asarray(source_data, dtype=np.float32) * np.float32(scale) + np.float32(offset)
         return matched.astype(np.float32, copy=False)
+
+    @staticmethod
+    def _task_artifact_paths(root: Path, task_id: str) -> tuple[Path, Path, Path, Path, Path | None]:
+        dataset_root = Path(root)
+        new_aligned_path = dataset_root / "new" / f"{task_id}__aligned_crop.fts"
+        old_aligned_path = dataset_root / "old" / f"{task_id}__aligned_crop.fts"
+        new_marker_path = dataset_root / "new" / f"{task_id}__aligned.marker"
+        old_marker_path = dataset_root / "old" / f"{task_id}__aligned.marker"
+        marked_aligned_path = dataset_root / "new_marked" / f"{task_id}__aligned_crop.fts"
+        return new_aligned_path, old_aligned_path, new_marker_path, old_marker_path, marked_aligned_path
+
+    def _ensure_planned_task(
+        self,
+        root: Path,
+        task: _PlannedTask,
+    ) -> tuple[int, int, int]:
+        storage = self._dataset_storage(root)
+        if task.old_raw_path is None or not task.old_raw_path.is_file():
+            storage.update_task_preprocess_state(task.task_id, preprocess_status="missing_old")
+            return 0, 0, 0
+
+        new_aligned_path, old_aligned_path, new_marker_path, old_marker_path, marked_aligned_path = (
+            self._task_artifact_paths(root, task.task_id)
+        )
+        if new_aligned_path.is_file() and old_aligned_path.is_file():
+            generated_marked_crop = 0
+            if task.new_marked_raw_path is not None and marked_aligned_path is not None:
+                generated_marked_crop = int(
+                    self._ensure_marked_task_crop(
+                        task,
+                        new_aligned_path=new_aligned_path,
+                        new_marker_path=new_marker_path,
+                        marked_aligned_path=marked_aligned_path,
+                    )
+                )
+            storage.upsert_task_artifact(
+                TaskArtifactRecord(task_id=task.task_id, artifact_role="aligned_new", relpath=new_aligned_path.relative_to(root).as_posix())
+            )
+            storage.upsert_task_artifact(
+                TaskArtifactRecord(task_id=task.task_id, artifact_role="aligned_old", relpath=old_aligned_path.relative_to(root).as_posix())
+            )
+            if generated_marked_crop:
+                storage.upsert_task_artifact(
+                    TaskArtifactRecord(
+                        task_id=task.task_id,
+                        artifact_role="aligned_new_marked",
+                        relpath=marked_aligned_path.relative_to(root).as_posix(),
+                    )
+                )
+            storage.update_task_preprocess_state(task.task_id, preprocess_status="ready")
+            return 1, 0, generated_marked_crop
+
+        generated_aligned_pair = int(
+            self._align_planned_task_to_crop(
+                root=root,
+                task=task,
+                new_aligned_path=new_aligned_path,
+                old_aligned_path=old_aligned_path,
+                new_marker_path=new_marker_path,
+                old_marker_path=old_marker_path,
+            )
+        )
+        if not generated_aligned_pair:
+            storage.update_task_preprocess_state(task.task_id, preprocess_status="align_failed")
+            return 0, 0, 0
+
+        storage.upsert_task_artifact(
+            TaskArtifactRecord(task_id=task.task_id, artifact_role="aligned_new", relpath=new_aligned_path.relative_to(root).as_posix())
+        )
+        storage.upsert_task_artifact(
+            TaskArtifactRecord(task_id=task.task_id, artifact_role="aligned_old", relpath=old_aligned_path.relative_to(root).as_posix())
+        )
+
+        generated_marked_crop = 0
+        if task.new_marked_raw_path is not None and marked_aligned_path is not None:
+            generated_marked_crop = int(
+                self._ensure_marked_task_crop(
+                    task,
+                    new_aligned_path=new_aligned_path,
+                    new_marker_path=new_marker_path,
+                    marked_aligned_path=marked_aligned_path,
+                )
+            )
+            if generated_marked_crop:
+                storage.upsert_task_artifact(
+                    TaskArtifactRecord(
+                        task_id=task.task_id,
+                        artifact_role="aligned_new_marked",
+                        relpath=marked_aligned_path.relative_to(root).as_posix(),
+                    )
+                )
+        storage.update_task_preprocess_state(task.task_id, preprocess_status="ready")
+        return 0, 1, generated_marked_crop
+
+    def _align_planned_task_to_crop(
+        self,
+        *,
+        root: Path,
+        task: _PlannedTask,
+        new_aligned_path: Path,
+        old_aligned_path: Path,
+        new_marker_path: Path,
+        old_marker_path: Path,
+    ) -> bool:
+        try:
+            new_fits = self._read_fits(task.new_raw_path)
+            old_fits = self._read_fits(task.old_raw_path)
+        except Exception as exc:
+            logger.warning("标注集对齐读取失败: %s (%s)", task.task_id, exc)
+            return False
+
+        new_data = np.nan_to_num(new_fits.data.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+        old_data = np.nan_to_num(old_fits.data.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+        try:
+            old_data_for_align = self._match_data_to_reference(new_data, old_data)
+        except Exception:
+            old_data_for_align = old_data
+
+        h, w = new_data.shape[:2]
+        fallback_max_shift = max(100, int(min(h, w) * 0.45))
+        result = self._align(
+            new_data,
+            old_data_for_align,
+            method="auto",
+            max_shift=fallback_max_shift,
+        )
+        if not getattr(result, "success", False) or getattr(result, "aligned_old", None) is None:
+            logger.warning("标注集对齐失败: %s (%s)", task.task_id, getattr(result, "error_message", ""))
+            return False
+
+        crop_bounds = self._pair_service.calc_overlap_crop_bounds(
+            w=w,
+            h=h,
+            dx=result.dx,
+            dy=result.dy,
+            aligned_old=result.aligned_old,
+            new_image=new_data,
+        )
+        if crop_bounds is None:
+            logger.warning("标注集对齐后无有效重叠区域: %s", task.task_id)
+            return False
+
+        x0, x1, y0, y1 = crop_bounds
+        cropped_new = new_data[y0:y1, x0:x1]
+        cropped_old = result.aligned_old[y0:y1, x0:x1]
+        self._write_fits(new_aligned_path, cropped_new, new_fits.header)
+        self._write_fits(old_aligned_path, cropped_old, old_fits.header)
+        marker_text = (
+            "aligned=1\n"
+            f"dx={result.dx:.6f}\n"
+            f"dy={result.dy:.6f}\n"
+            f"crop={x0},{x1},{y0},{y1}\n"
+        )
+        new_marker_path.write_text(marker_text, encoding="utf-8")
+        old_marker_path.write_text(marker_text, encoding="utf-8")
+        self._dataset_storage(root).update_task_preprocess_state(
+            task.task_id,
+            preprocess_status="ready",
+            crop_bounds=crop_bounds,
+            align_dx=float(result.dx),
+            align_dy=float(result.dy),
+        )
+        return True
+
+    def _ensure_marked_task_crop(
+        self,
+        task: _PlannedTask,
+        *,
+        new_aligned_path: Path,
+        new_marker_path: Path,
+        marked_aligned_path: Path,
+    ) -> bool:
+        if task.new_marked_raw_path is None or not task.new_marked_raw_path.is_file():
+            return False
+        if marked_aligned_path.exists():
+            return False
+
+        crop_bounds = self.parse_crop_bounds_from_marker(new_marker_path)
+        try:
+            marked_fits = self._read_fits(task.new_marked_raw_path)
+            marked_data = np.nan_to_num(
+                marked_fits.data.astype(np.float32),
+                nan=0.0,
+                posinf=0.0,
+                neginf=0.0,
+            )
+            if crop_bounds is not None:
+                x0, x1, y0, y1 = crop_bounds
+                if 0 <= x0 < x1 <= marked_data.shape[1] and 0 <= y0 < y1 <= marked_data.shape[0]:
+                    cropped = marked_data[y0:y1, x0:x1]
+                else:
+                    cropped = marked_data
+            else:
+                cropped = marked_data
+
+            if new_aligned_path.exists() and (cropped.shape != self._read_fits(new_aligned_path).data.shape):
+                aligned_shape = self._read_fits(new_aligned_path).data.shape
+                ah, aw = aligned_shape[:2]
+                h, w = cropped.shape[:2]
+                y0 = max(0, (h - ah) // 2)
+                x0 = max(0, (w - aw) // 2)
+                cropped = cropped[y0:y0 + ah, x0:x0 + aw]
+            self._write_fits(marked_aligned_path, cropped, marked_fits.header)
+            return True
+        except Exception as exc:
+            logger.warning("带标记新图裁剪生成失败: %s (%s)", task.task_id, exc)
+            return False
 
     def _ensure_aligned_pair(
         self,

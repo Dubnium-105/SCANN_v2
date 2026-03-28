@@ -90,7 +90,10 @@ def get_task_lock_service() -> TaskLockService:
     lock_service = _task_lock_services.get(key)
     if lock_service is None:
         timeout_seconds = int(os.getenv("SCANN_NATIVE_TASK_LOCK_TIMEOUT_SECONDS", "1200"))
-        lock_service = TaskLockService(lock_timeout_seconds=timeout_seconds)
+        lock_service = TaskLockService(
+            lock_timeout_seconds=timeout_seconds,
+            dataset_root=dataset_root,
+        )
         _task_lock_services[key] = lock_service
     return lock_service
 

@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from scann.native_annotation.app import app
+from scann.core.fits_annotation_storage import load_v2_annotation_document
+
+
+def _touch(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"SIMPLE FITS PLACEHOLDER")
 
 
 def _payload(bucket: str) -> dict:
@@ -31,6 +38,8 @@ def _auth_headers(client: TestClient) -> dict[str, str]:
 
 def test_api_annotations_save_to_positive_and_negative(tmp_path, monkeypatch) -> None:
     dataset_root = tmp_path / "dataset"
+    _touch(dataset_root / "new" / "PGC 17069.fts")
+    _touch(dataset_root / "old" / "PGC 17069.fts")
     monkeypatch.setenv("SCANN_NATIVE_DATASET_ROOT", str(dataset_root))
 
     client = TestClient(app)
@@ -42,15 +51,13 @@ def test_api_annotations_save_to_positive_and_negative(tmp_path, monkeypatch) ->
     assert resp_positive.status_code == 200
     assert resp_negative.status_code == 200
 
-    annotations_file = dataset_root / "annotations.json"
-    db_file = dataset_root / "scann_native.db"
+    dataset_db_file = dataset_root / "scann_dataset.db"
 
-    assert annotations_file.exists()
-    assert db_file.exists()
-    assert resp_positive.json()["saved_path"] == "annotations.json"
-    assert resp_negative.json()["saved_path"] == "annotations.json"
+    assert dataset_db_file.exists()
+    assert resp_positive.json()["saved_path"] == "scann_dataset.db"
+    assert resp_negative.json()["saved_path"] == "scann_dataset.db"
 
-    annotations_doc = json.loads(annotations_file.read_text(encoding="utf-8"))
+    annotations_doc = load_v2_annotation_document(dataset_root)
     images = annotations_doc.get("images", [])
     assert len(images) == 1
 

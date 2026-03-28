@@ -504,11 +504,16 @@ class FitsDenseDetectionDataset:
         self.new_dir = self.dataset_root / "new"
         self.old_dir = self.dataset_root / "old"
         self.annotation_file = Path(annotation_file) if annotation_file else (self.dataset_root / "annotations.json")
+        self.dataset_db_file = self.dataset_root / "scann_dataset.db"
         self.patch_size = max(1, int(patch_size))
 
         if not self.new_dir.is_dir() or not self.old_dir.is_dir():
             raise ValueError("v2 dense 数据集目录下必须包含 new 和 old 子目录")
-        if not self.annotation_file.is_file() and not (self.dataset_root / "annotations.db").is_file():
+        if (
+            not self.annotation_file.is_file()
+            and not (self.dataset_root / "annotations.db").is_file()
+            and not self.dataset_db_file.is_file()
+        ):
             raise ValueError("v2 dense 数据集缺少标注文件（annotations.json 或 annotations.db）")
 
         self.samples = self._load_samples()

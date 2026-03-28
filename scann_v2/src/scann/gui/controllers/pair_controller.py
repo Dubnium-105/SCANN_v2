@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 
 from PyQt5.QtWidgets import QFileDialog
 
+from scann.core.dataset_storage import DatasetStorage
+from scann.data.file_manager import FitsImagePair
 from scann.services.dataset_preprocess_service import DatasetPreprocessService
 from scann.services.pair_service import PairService
 
@@ -49,7 +51,7 @@ class PairController:
             dataset_root.mkdir(parents=True, exist_ok=True)
             created.append("dataset")
 
-        for name in ("new", "old", "new_marked"):
+        for name in ("new", "old", "new_marked", "dataset_raw/new", "dataset_raw/old", "dataset_raw/new_marked"):
             folder = dataset_root / name
             if not folder.exists():
                 folder.mkdir(parents=True, exist_ok=True)
@@ -84,10 +86,18 @@ class PairController:
         self._window._old_fits_header = None
 
     def _refresh_dataset_listing(self, dataset_root: Path) -> tuple[int, int, int]:
-        new_dir = dataset_root / "new"
-        old_dir = dataset_root / "old"
-
-        pairs, only_new, only_old = self._pair_service.match_pairs(new_dir, old_dir)
+        prepared_tasks = self._preprocess_service.collect_preprocessed_tasks(dataset_root)
+        pairs = [
+            FitsImagePair(
+                name=task.task_id,
+                new_path=task.new_path,
+                old_path=task.old_path,
+            )
+            for task in prepared_tasks
+            if task.old_path is not None
+        ]
+        only_new = [task.task_id for task in prepared_tasks if task.old_path is None]
+        only_old: list[str] = []
         self._window._image_pairs = pairs
         self._window._current_pair_idx = -1
         self._window._current_pair_using_aligned = False
@@ -104,7 +114,9 @@ class PairController:
         if pairs:
             self.load_pair(0)
         else:
-            self._load_first_new_image(self._pair_service.scan_new_folder(new_dir))
+            self._window.set_image_data(None, None, None)
+            self._window._new_fits_header = None
+            self._window._old_fits_header = None
 
         return len(pairs), len(only_new), len(only_old)
 
@@ -203,6 +215,9 @@ class PairController:
             return
 
         pair = self._window._image_pairs[index]
+        dataset_root = Path(self._window._dataset_root) if self._window._dataset_root else None
+        if dataset_root is not None:
+            DatasetStorage(dataset_root).mark_task_viewed(pair.name)
         self._window._current_pair_idx = index
         self._window._candidates = []
         self._window._current_candidate_idx = -1

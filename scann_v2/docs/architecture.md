@@ -1,10 +1,14 @@
 # SCANN v2 架构概览
 
-本文档只描述当前仍在维护的结构，不再保留历史重构计划或阶段性草稿。
+本文档只描述当前仍在维护的结构，不再保留历史重构计划或阶段性草案。
+
+与数据集预处理和数据库细节直接相关的说明请看：
+
+- `dataset_pipeline.md`
 
 ## 1. 系统组成
 
-SCANN v2 目前由三部分组成：
+SCANN v2 当前由三部分组成：
 
 1. 桌面应用
    - 位于 `src/scann/`
@@ -16,18 +20,18 @@ SCANN v2 目前由三部分组成：
    - 提供任务分配、在线标注、修订历史、回滚和数据集预处理能力
 3. 运行与发布层
    - 位于 `docker/`
-   - 负责容器镜像构建、Linux 部署和 GitHub Actions 流水线
+   - 负责容器构建、Linux 部署和 GitHub Actions 流水线
 
 ## 2. 代码目录
 
 ```text
 src/scann/
 |-- ai/                 # 模型、推理和训练相关代码
-|-- core/               # 纯业务能力：FITS IO、对齐、图像处理、MPC 相关逻辑等
-|-- data/               # 本地文件和数据库访问
+|-- core/               # 底层能力：FITS IO、对齐、图像处理、统一数据存储
+|-- data/               # 本地文件与数据访问辅助
 |-- gui/                # PyQt5 桌面界面、控制器、组件和对话框
 |-- native_annotation/  # FastAPI 标注后端
-|-- services/           # 桌面应用编排层与任务服务
+|-- services/           # 桌面和标注平台复用的编排服务
 |-- app.py              # 桌面应用入口
 `-- logger_config.py    # 日志配置
 ```
@@ -40,32 +44,28 @@ src/scann/
 
 - `fits_io.py`：FITS 读写
 - `image_aligner.py`：新旧图像对齐
-- `image_processor.py`：显示或预处理相关图像操作
-- `candidate_detector.py`：候选体检测基础逻辑
-- `astrometry.py`、`mpcorb.py`、`observation_report.py`：天体位置与报告相关能力
-- `fits_annotation_backend.py`、`fits_annotation_storage.py`：桌面标注数据结构与存储辅助
+- `image_processor.py`：图像显示与基础处理
+- `candidate_detector.py`：候选体检测逻辑
+- `fits_annotation_backend.py` / `fits_annotation_storage.py`：桌面标注数据访问
+- `dataset_storage.py`：统一数据集数据库封装
 
 ### `services/`
 
-`services/` 负责把多个底层能力串成完整流程，例如：
+`services/` 负责把底层能力串成完整业务流，例如：
 
-- `pair_service.py`：新旧图像配对
+- `pair_service.py`：图像配对与路径解析
 - `blink_service.py`：闪烁比对
 - `detection_pipeline.py`：检测主流程
-- `detection_service.py`：桌面检测服务入口
-- `exclusion_service.py`：已知天体排除
-- `query_service.py`：外部天文服务查询
-- `dataset_preprocess_service.py`：供原生标注平台复用的数据集标准化和预处理
+- `query_service.py`：外部服务查询
+- `dataset_preprocess_service.py`：数据集扫描、任务规划、对齐裁剪、任务清单汇总
 
 ### `gui/`
 
-`gui/` 只处理桌面应用的展示与交互：
+`gui/` 只处理桌面应用的展示和交互：
 
-- `main_window.py` 与 `composition/`：主窗口和装配逻辑
-- `controllers/`：配对、检测、训练、查询、标注、帮助等控制器
-- `widgets/`：图像查看器、表格、标注组件、工具栏等
-- `dialogs/`：设置、训练、MPC 报告、快捷键帮助等对话框
-- `presenters/`：面向 UI 的状态整理
+- `controllers/`：配对、检测、训练、查询、标注等控制器
+- `widgets/`：图像查看器、表格、工具栏等控件
+- `dialogs/`：设置、训练、报告等对话框
 
 ### `native_annotation/`
 
@@ -75,45 +75,67 @@ src/scann/
 
 - 身份认证
 - 任务列表与任务锁
-- FITS 原图与渲染图提供
+- FITS 原图与 PNG 渲染输出
 - 标注保存、历史查询、回滚
-- 数据集预处理触发
+- 触发数据集预处理
 
 ## 4. 关键业务流
 
-### 桌面检测流
+### 4.1 桌面检测流
 
-1. `data/file_manager.py` 与 `services/pair_service.py` 扫描并配对新旧 FITS
+1. `data/file_manager.py` 与 `services/pair_service.py` 扫描并配对图像
 2. `core/image_aligner.py` 以新图为参考对齐旧图
 3. `services/detection_pipeline.py` 运行检测
-4. 检测模式支持 `patch`、`full_image`、`hybrid`
-5. `services/exclusion_service.py` 与 `services/query_service.py` 用于排除已知目标或补充查询信息
-6. `gui/` 层负责候选体展示、标记和导出
+4. `services/query_service.py` 等服务补充查询和筛除逻辑
+5. `gui/` 层负责候选体展示、标记和导出
 
-### 原生标注流
+### 4.2 数据集预处理流
 
-1. `services/dataset_preprocess_service.py` 统一原始文件命名并生成对齐产物
-2. `native_annotation/dataset_service.py` 生成任务列表
-3. `native_annotation/task_lock_service.py` 控制任务占用和心跳续租
-4. `native_annotation/fits_engine.py` 提供 FITS 二进制与 PNG 渲染
-5. `native_annotation/annotation_service.py` 将标注状态写入 SQLite，并保留 revision 历史
-6. `frontend/` 前端负责登录、标注画布、面板和历史交互
+1. 用户将原始文件放入 `dataset_raw/new`、`dataset_raw/old`、`dataset_raw/new_marked`
+2. `services/dataset_preprocess_service.py` 扫描原始文件并写入 `raw_assets`
+3. 服务以 `new` 为驱动生成 `tasks`
+4. 多个任务可以共享同一个 `old_asset_id`
+5. 预处理生成对齐裁剪产物并写入 `task_artifacts`
+6. 兼容清单 `preprocessed_tasks.json` 由数据库导出
 
-## 5. 数据与存储
+### 4.3 在线标注流
 
-当前仓库里有两套与标注相关的存储面：
+1. `native_annotation/dataset_service.py` 从数据库返回任务列表
+2. `native_annotation/task_lock_service.py` 通过数据库维护领取状态
+3. `native_annotation/fits_engine.py` 提供图像内容
+4. `native_annotation/annotation_service.py` 写当前标注和修订历史
+5. `frontend/` 提供登录、标注画布、检查面板和历史交互
 
-- 桌面应用侧：`core/` 中的标注后端与存储辅助
-- 原生标注平台侧：`native_annotation/annotation_service.py`
+## 5. 数据层设计
 
-原生标注平台目前的持久化重点是：
+当前与标注和任务相关的数据层已经统一到数据集数据库：
 
-- `scann_native.db`：SQLite 主存储
-- `annotation_revisions/`：按任务保存的 revision 日志
-- `annotations.json`：兼容和快照用途的数据文件
+- `scann_dataset.db`
+
+主要表包括：
+
+- `raw_assets`
+- `tasks`
+- `task_artifacts`
+- `task_annotation_boxes_current`
+- `annotation_revisions`
+- `annotation_revision_boxes`
+
+这一层的意义是：
+
+- 用数据库取代“重新扫目录 + 按文件名猜任务”
+- 允许多个任务复用同一张旧图
+- 让桌面端、在线端、训练端共享同一份任务与路径真相
+
+兼容输出仍然存在：
+
+- `preprocessed_tasks.json`
+- `annotations.json`
+
+但它们已经不是主存储。
 
 ## 6. 维护约定
 
 - 长期有效的结构说明放在当前文档
-- 一次性的实施计划、检查单、backlog 和阶段总结不再进入 `docs/`
-- 这类内容应优先进入 issue、PR 描述或外部项目管理工具
+- 一次性的实现计划、检查单、backlog 和阶段总结不再进入 `docs/`
+- 若任务流或数据库设计变化，应优先同步 `dataset_pipeline.md`

@@ -1,6 +1,10 @@
 # 原生 FITS 标注平台
 
-本文档描述当前仓库中的原生 FITS 标注平台，而不是早期设计草稿。
+本文档描述当前仓库中的原生 FITS 标注平台实现，而不是早期设计草案。
+
+更详细的数据集预处理和数据库设计请看：
+
+- `dataset_pipeline.md`
 
 ## 1. 组成
 
@@ -25,7 +29,7 @@
 - `dataset_service.py`
   - 列出可标注任务
 - `task_lock_service.py`
-  - 任务认领、心跳续租、释放
+  - 任务领取、心跳续租、释放
 - `fits_engine.py`
   - 返回 FITS 原文件或渲染后的 PNG
 - `annotation_service.py`
@@ -52,59 +56,91 @@
 - `/api/annotations/{task_id}/rollback/{revision_id}`
 - `/api/dataset/preprocess`
 
-## 4. 数据集约定
+## 4. 数据集与预处理
 
-平台运行时依赖一个数据集根目录。代码默认从环境变量
-`SCANN_NATIVE_DATASET_ROOT` 读取该路径。
+平台运行时依赖一个数据集根目录。代码默认从环境变量 `SCANN_NATIVE_DATASET_ROOT` 读取该路径。
 
-当前预处理和任务生成围绕这些目录工作：
+当前推荐的输入目录是：
+
+- `dataset_raw/new/`
+- `dataset_raw/old/`
+- `dataset_raw/new_marked/`
+
+预处理后的输出目录是：
 
 - `new/`
 - `old/`
 - `new_marked/`
-- `dataset_raw/`：预处理时保存标准化前的原始文件
 
-预处理入口在 `scann.services.dataset_preprocess_service.DatasetPreprocessService`，
-会负责：
+预处理入口在 `scann.services.dataset_preprocess_service.DatasetPreprocessService`，负责：
 
-- 根据时间信息标准化文件名
-- 复用或生成对齐后的成对文件
-- 生成已标记裁剪图
-- 汇总可分配任务
+- 扫描 `dataset_raw/*` 原始文件
+- 根据 `field_key` 和 `capture_key` 生成任务
+- 复用单旧图到多个任务，而不是复制旧图文件
+- 生成对齐裁剪产物
+- 将产物路径和任务状态写入数据库
 
-## 5. 标注存储
+如果用户仍把文件直接放进 `new/old/new_marked`，系统会做兼容迁移，但这不是主流程。
 
-当前实现不是单纯的 JSON 文件方案，而是以 SQLite 为主：
+## 5. 数据库存储
 
-- `scann_native.db`
-  - revision 主表
-  - 当前任务状态
-  - 数据集快照
-- `annotation_revisions/`
-  - 每个任务的 JSONL 历史日志
+当前原生标注平台不再以 `scann_native.db + annotations.json` 作为主存储。
+
+主存储现在是数据集级数据库：
+
+- `scann_dataset.db`
+
+数据库中统一保存：
+
+- 原始资产登记
+- 任务主表
+- 任务产物路径
+- 当前标注
+- 修订历史
+- 任务锁
+- 本地查看、本地标注、在线标注状态
+
+对应实现：
+
+- `src/scann/core/dataset_storage.py`
+
+其中：
+
+- `task_lock_service.py` 使用数据库字段维护领取状态
+- `annotation_service.py` 将在线标注和修订历史写入同一个数据集库
+- `dataset_service.py` 从数据库产物列表生成任务会话
+
+兼容文件：
+
+- `preprocessed_tasks.json`
 - `annotations.json`
-  - 兼容与快照用途
 
-这意味着仓库中早期关于“未来如何升级存储”的设计文档已经不再是主参考。
+它们现在只用于兼容和导出，不再是系统内部真相来源。
 
-## 6. 前端职责
+## 6. 在线标注链路
 
-前端位于 `frontend/src/`，当前核心模块包括：
+当前在线标注链路如下：
 
-- `views/AnnotationView.vue`
-  - 标注主页面
-- `components/CanvasPanel.vue`
-  - 画布显示与交互
-- `components/HeaderBar.vue`
-  - 顶部操作区域
-- `components/InspectorPanel.vue`
-  - 侧边检查面板
-- `services/*.js`
-  - 认证、FITS 读取、标注、历史、任务接口封装
-- `composables/`
-  - 图像加载、闪烁控制、缓存池等复用逻辑
+1. `/api/dataset/preprocess` 触发预处理
+2. `DatasetPreprocessService` 扫描原始输入、生成任务与产物
+3. `/api/tasks` 返回已准备好的任务列表
+4. `/api/tasks/next` 通过数据库领取任务
+5. 前端通过 `/api/render/*` 或 `/api/fits/*` 获取图像
+6. `/api/annotations/{task_id}` 保存当前标注并追加 revision
+7. `/api/annotations/{task_id}/history*` 查询历史与差异
+8. `/api/annotations/{task_id}/rollback/*` 通过追加 rollback revision 实现回滚
 
-## 7. 本地启动
+## 7. 本地查看与桌面端复用
+
+桌面端与在线标注现在共享同一套任务和路径事实来源：
+
+- 桌面端浏览任务时，从数据库中的预处理结果读取对齐产物
+- 桌面端标注通过 `FitsAnnotationStorage` 写当前标注
+- 训练和在线标注也优先读取数据库导出的精确路径
+
+这避免了不同入口各自扫目录、再按文件名猜任务的漂移问题。
+
+## 8. 本地启动
 
 ### 后端
 
@@ -125,7 +161,9 @@ npm ci
 npm run dev
 ```
 
-## 8. 文档维护说明
+## 9. 文档维护说明
 
-原生标注平台此前有多份设计稿、TDD 计划和存储升级草稿。随着代码落地，
-这些文档已经被删去，后续请以当前实现和本说明为准。
+如果原生标注平台的任务流、数据库结构或预处理约定发生变化，应优先更新：
+
+- `dataset_pipeline.md`
+- 本文档中的概览说明
