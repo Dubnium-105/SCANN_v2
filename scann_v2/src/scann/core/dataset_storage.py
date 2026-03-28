@@ -679,15 +679,29 @@ class DatasetStorage:
                 ORDER BY t.task_id
                 """
             ).fetchall()
-        return [
-            {
-                "task_id": str(row["task_id"]),
-                "new_path": str(row["new_path"]) if row["new_path"] is not None else None,
-                "old_path": str(row["old_path"]) if row["old_path"] is not None else None,
-                "new_marked_path": str(row["new_marked_path"]) if row["new_marked_path"] is not None else None,
-            }
-            for row in rows
-        ]
+        prepared: list[dict[str, str | None]] = []
+        for row in rows:
+            new_rel = str(row["new_path"]) if row["new_path"] is not None else None
+            if not new_rel or not (self.dataset_root / new_rel).is_file():
+                continue
+
+            old_rel = str(row["old_path"]) if row["old_path"] is not None else None
+            if old_rel and not (self.dataset_root / old_rel).is_file():
+                old_rel = None
+
+            marked_rel = str(row["new_marked_path"]) if row["new_marked_path"] is not None else None
+            if marked_rel and not (self.dataset_root / marked_rel).is_file():
+                marked_rel = None
+
+            prepared.append(
+                {
+                    "task_id": str(row["task_id"]),
+                    "new_path": new_rel,
+                    "old_path": old_rel,
+                    "new_marked_path": marked_rel,
+                }
+            )
+        return prepared
 
     def mark_task_viewed(self, task_id: str, viewed_at: str | None = None) -> None:
         now = viewed_at or _utc_now_iso()

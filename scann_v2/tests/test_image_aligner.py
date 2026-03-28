@@ -1,10 +1,13 @@
 """图像对齐裁剪测试 - 验证L型无效区域裁剪功能"""
 
+from pathlib import Path
+
 import cv2
 import numpy as np
 import pytest
 
-from scann.core.image_aligner import _align_ecc, _align_phase_correlation, align
+from scann.core.image_aligner import _align_ecc, _align_phase_correlation, _align_siril, _is_quality_improved, align
+from scann.core.models import AlignResult
 from scann.services.pair_service import PairService
 
 
@@ -301,3 +304,122 @@ class TestImageAlignAlgorithms:
         assert default_result.success == auto_result.success
         assert default_result.dx == pytest.approx(auto_result.dx, abs=1e-6)
         assert default_result.dy == pytest.approx(auto_result.dy, abs=1e-6)
+
+    def test_quality_gate_rejects_weak_improvement(self):
+        assert not _is_quality_improved(0.0243, 0.0277)
+        assert _is_quality_improved(0.0243, 0.0819)
+
+    def test_align_auto_falls_back_to_siril(self, monkeypatch):
+        new_image = np.zeros((32, 32), dtype=np.float32)
+        old_image = np.zeros((32, 32), dtype=np.float32)
+        expected = np.ones((32, 32), dtype=np.float32)
+
+        monkeypatch.setattr(
+            "scann.core.image_aligner._align_phase_correlation",
+            lambda *_args, **_kwargs: AlignResult(
+                aligned_old=None,
+                success=False,
+                error_message="phase failed",
+            ),
+        )
+        monkeypatch.setattr(
+            "scann.core.image_aligner._align_ecc",
+            lambda *_args, **_kwargs: AlignResult(
+                aligned_old=None,
+                success=False,
+                error_message="ecc failed",
+            ),
+        )
+        monkeypatch.setattr(
+            "scann.core.image_aligner._align_feature_matching",
+            lambda *_args, **_kwargs: AlignResult(
+                aligned_old=None,
+                success=False,
+                error_message="feature failed",
+            ),
+        )
+        monkeypatch.setattr(
+            "scann.core.image_aligner._align_siril",
+            lambda *_args, **_kwargs: AlignResult(
+                aligned_old=expected,
+                dx=1.5,
+                dy=-2.0,
+                success=True,
+            ),
+        )
+
+        result = align(new_image, old_image, method="auto", max_shift=32)
+
+        assert result.success
+        assert result.aligned_old is not None
+        np.testing.assert_array_equal(result.aligned_old, expected)
+        assert result.dx == pytest.approx(1.5)
+        assert result.dy == pytest.approx(-2.0)
+
+    def test_siril_rejects_unreasonable_shift(self, monkeypatch, tmp_path):
+        new_image = np.ones((32, 32), dtype=np.float32)
+        old_image = np.ones((32, 32), dtype=np.float32)
+        aligned_image = np.ones((32, 32), dtype=np.float32)
+        aligned_output = tmp_path / "r_pair_00002.fit"
+        aligned_output.write_bytes(b"fake")
+
+        monkeypatch.setattr("scann.core.image_aligner._find_siril_executable", lambda: "siril-cli")
+
+        class _FakeTempDir:
+            def __enter__(self):
+                return str(tmp_path)
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        monkeypatch.setattr(
+            "scann.core.image_aligner.tempfile.TemporaryDirectory",
+            lambda **_kwargs: _FakeTempDir(),
+        )
+
+        class _FakePrimaryHDU:
+            def __init__(self, data):
+                self.data = data
+
+            def writeto(self, path, overwrite=False):
+                Path(path).write_bytes(b"input")
+
+        class _FakeOpen:
+            def __enter__(self):
+                return [type("HDU", (), {"data": aligned_image})()]
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        fake_fits = type(
+            "FakeFitsModule",
+            (),
+            {
+                "PrimaryHDU": _FakePrimaryHDU,
+                "open": staticmethod(lambda *_args, **_kwargs: _FakeOpen()),
+            },
+        )()
+
+        monkeypatch.setitem(__import__("sys").modules, "astropy", type("Astropy", (), {})())
+        monkeypatch.setitem(
+            __import__("sys").modules,
+            "astropy.io",
+            type("AstropyIO", (), {"fits": fake_fits})(),
+        )
+        monkeypatch.setitem(__import__("sys").modules, "astropy.io.fits", fake_fits)
+        def _fake_run(*_args, **_kwargs):
+            aligned_output.write_bytes(b"fake")
+            return type("Proc", (), {"returncode": 0, "stdout": b"", "stderr": b""})()
+
+        monkeypatch.setattr("scann.core.image_aligner.subprocess.run", _fake_run)
+        monkeypatch.setattr(
+            "scann.core.image_aligner._estimate_translation",
+            lambda reference, moving: (-120.0, 85.0) if reference is new_image else (0.0, 0.0),
+        )
+
+        result = _align_siril(new_image, old_image, max_shift=32)
+
+        assert not result.success
+        assert result.aligned_old is None
+        assert result.dx == pytest.approx(-120.0)
+        assert result.dy == pytest.approx(85.0)

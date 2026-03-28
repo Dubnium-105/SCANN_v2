@@ -7,11 +7,22 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Optional, Tuple
 
 import numpy as np
 
 from scann.core.models import FitsHeader, SkyPosition
+
+
+def _build_wcs(header: FitsHeader):
+    from astropy.wcs import FITSFixedWarning, WCS
+
+    # FITS 头里常见的 RADECSYS / MJD-OBS / DATE-OBS 修正告警会在频繁鼠标移动时刷屏，
+    # 这里将其视为兼容性噪声，不影响正常坐标转换时直接忽略。
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FITSFixedWarning)
+        return WCS(header.raw)
 
 
 def pixel_to_wcs(
@@ -29,10 +40,8 @@ def pixel_to_wcs(
     Returns:
         天球坐标 (RA, Dec), 无 WCS 信息则返回 None
     """
-    from astropy.wcs import WCS
-
     try:
-        wcs = WCS(header.raw)
+        wcs = _build_wcs(header)
         result = wcs.pixel_to_world(x, y)
         return SkyPosition(
             ra=float(result.ra.deg),
@@ -57,12 +66,11 @@ def wcs_to_pixel(
     Returns:
         (x, y) 像素坐标, 无 WCS 信息则返回 None
     """
-    from astropy.wcs import WCS
     from astropy.coordinates import SkyCoord
     import astropy.units as u
 
     try:
-        wcs = WCS(header.raw)
+        wcs = _build_wcs(header)
         coord = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
         px, py = wcs.world_to_pixel(coord)
         return (float(px), float(py))

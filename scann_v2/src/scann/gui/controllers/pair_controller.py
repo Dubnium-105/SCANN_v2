@@ -313,5 +313,30 @@ class PairController:
     def resolve_pair_image_paths(self, pair) -> tuple[Path, Path, bool]:
         return self._pair_service.resolve_pair_image_paths(pair)
 
+    def calc_nonzero_valid_bounds(
+        self,
+        image,
+    ) -> tuple[int, int, int, int] | None:
+        return self._pair_service.calc_nonzero_valid_bounds(image)
+
+    def calc_overlap_crop_bounds(
+        self,
+        *,
+        w: int,
+        h: int,
+        dx: float,
+        dy: float,
+        aligned_old=None,
+        new_image=None,
+    ) -> tuple[int, int, int, int] | None:
+        return self._pair_service.calc_overlap_crop_bounds(
+            w=w,
+            h=h,
+            dx=dx,
+            dy=dy,
+            aligned_old=aligned_old,
+            new_image=new_image,
+        )
+
     def resolve_marked_image_path(self, new_image_path: str | Path) -> Path | None:
         return self._pair_service.resolve_marked_image_path(new_image_path)

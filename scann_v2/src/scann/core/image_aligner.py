@@ -46,6 +46,10 @@ def align(
             if feature_result.success:
                 return feature_result
 
+            siril_result = _align_siril(new_image, old_image, max_shift)
+            if siril_result.success:
+                return siril_result
+
             return AlignResult(
                 aligned_old=None,
                 success=False,
@@ -187,10 +191,15 @@ def _alignment_quality(
     return _zncc(ref_crop, mov_crop), _zncc(ref_crop, aligned_crop)
 
 
-def _is_quality_improved(before: float, after: float, min_delta: float = 5e-4) -> bool:
+def _is_quality_improved(
+    before: float,
+    after: float,
+    min_delta: float = 5e-4,
+    min_after: float = 5e-2,
+) -> bool:
     if not np.isfinite(before) or not np.isfinite(after):
         return False
-    return after > before + min_delta
+    return after >= min_after and after > before + min_delta
 
 
 def _match_intensity_scale(aligned: np.ndarray, reference: np.ndarray) -> np.ndarray:
@@ -593,17 +602,37 @@ def _align_siril(
 
         aligned = _match_intensity_scale(aligned, old_image)
 
-        estimated_shift = _estimate_translation(aligned, old_image)
+        estimated_shift = _estimate_translation(new_image, aligned)
         if estimated_shift is None:
-            dx = 0.0
-            dy = 0.0
-        else:
-            dx, dy = estimated_shift
-            logger.info("Siril estimated shift: dx=%.3f dy=%.3f", dx, dy)
+            return AlignResult(
+                aligned_old=None,
+                success=False,
+                error_message="Siril 缁撴灉鏃犳硶浼拌鐩稿鏂板浘鍋忕Щ",
+            )
 
+        dx, dy = estimated_shift
+        logger.info("Siril estimated shift: dx=%.3f dy=%.3f", dx, dy)
         if abs(dx) > max_shift or abs(dy) > max_shift:
-            dx = 0.0
-            dy = 0.0
+            return AlignResult(
+                aligned_old=None,
+                dx=dx,
+                dy=dy,
+                success=False,
+                error_message=f"Siril 鍋忕Щ閲忚繃澶? dx={dx:.3f}, dy={dy:.3f}",
+            )
+
+        before, after = _alignment_quality(new_image, old_image, aligned, dx, dy)
+        if not _is_quality_improved(before, after):
+            return AlignResult(
+                aligned_old=None,
+                dx=dx,
+                dy=dy,
+                success=False,
+                error_message=(
+                    f"Siril 璐ㄩ噺涓嶈冻: before={before:.4f}, after={after:.4f}, "
+                    f"dx={dx:.3f}, dy={dy:.3f}"
+                ),
+            )
 
         return AlignResult(
             aligned_old=aligned,
