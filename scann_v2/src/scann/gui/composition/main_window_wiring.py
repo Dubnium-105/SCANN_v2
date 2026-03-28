@@ -38,11 +38,13 @@ class MainWindowWiring:
 
         window.btn_new_folder.clicked.connect(window._on_open_dataset)
         window.btn_old_folder.clicked.connect(window._on_open_dataset)
+        window.btn_preprocess_dataset.clicked.connect(window._on_preprocess_dataset)
         window.btn_align.clicked.connect(window._on_batch_align)
         window.btn_detect.clicked.connect(window._on_batch_detect)
 
         window.act_open_new.triggered.connect(window._on_open_dataset)
         window.act_open_old.triggered.connect(window._on_open_dataset)
+        window.act_preprocess_dataset.triggered.connect(window._on_preprocess_dataset)
         window.act_save.triggered.connect(window._on_save_image)
         window.act_save_marked.triggered.connect(window._on_save_marked_image)
         window.act_exit.triggered.connect(window.close)

@@ -34,6 +34,7 @@ from scann.gui.widgets.suspect_table import SuspectTableWidget
 class MenuBarParts:
     act_open_new: QAction
     act_open_old: QAction
+    act_preprocess_dataset: QAction
     act_save: QAction
     act_save_marked: QAction
     menu_recent: QMenu
@@ -78,6 +79,7 @@ class CentralUiParts:
     sidebar: CollapsibleSidebar
     btn_new_folder: QPushButton
     btn_old_folder: QPushButton
+    btn_preprocess_dataset: QPushButton
     btn_align: QPushButton
     btn_detect: QPushButton
     progress_bar: QProgressBar
@@ -158,6 +160,10 @@ class MainWindowBuilder:
         act_open_old = file_menu.addAction("打开数据集目录")
         act_open_old.setShortcut(QKeySequence("Ctrl+Shift+O"))
         act_open_old.setVisible(False)
+
+        file_menu.addSeparator()
+        act_preprocess_dataset = file_menu.addAction("手动预处理数据集")
+        act_preprocess_dataset.setShortcut(QKeySequence("Ctrl+Shift+P"))
 
         file_menu.addSeparator()
 
@@ -249,6 +255,7 @@ class MainWindowBuilder:
         return MenuBarParts(
             act_open_new=act_open_new,
             act_open_old=act_open_old,
+            act_preprocess_dataset=act_preprocess_dataset,
             act_save=act_save,
             act_save_marked=act_save_marked,
             menu_recent=menu_recent,
@@ -303,6 +310,9 @@ class MainWindowBuilder:
         btn_old_folder.hide()
         btn_layout.addWidget(btn_new_folder)
         sidebar_layout.addLayout(btn_layout)
+
+        btn_preprocess_dataset = QPushButton("🛠 手动预处理")
+        sidebar_layout.addWidget(btn_preprocess_dataset)
 
         func_layout = QHBoxLayout()
         btn_align = QPushButton("🔗 对齐")
@@ -429,6 +439,7 @@ class MainWindowBuilder:
             sidebar=sidebar,
             btn_new_folder=btn_new_folder,
             btn_old_folder=btn_old_folder,
+            btn_preprocess_dataset=btn_preprocess_dataset,
             btn_align=btn_align,
             btn_detect=btn_detect,
             progress_bar=progress_bar,

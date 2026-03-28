@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 
 class PairController:
-    """集中管理主窗口中的数据集加载、配对切换与图像载入。"""
+    """集中管理主窗口中的数据集加载、预处理、配对切换与图像载入。"""
 
     def __init__(
         self,
@@ -33,7 +33,6 @@ class PairController:
 
     @property
     def pair_service(self) -> PairService:
-        """暴露配对服务，供其他流程复用。"""
         return self._pair_service
 
     @staticmethod
@@ -51,7 +50,14 @@ class PairController:
             dataset_root.mkdir(parents=True, exist_ok=True)
             created.append("dataset")
 
-        for name in ("new", "old", "new_marked", "dataset_raw/new", "dataset_raw/old", "dataset_raw/new_marked"):
+        for name in (
+            "new",
+            "old",
+            "new_marked",
+            "dataset_raw/new",
+            "dataset_raw/old",
+            "dataset_raw/new_marked",
+        ):
             folder = dataset_root / name
             if not folder.exists():
                 folder.mkdir(parents=True, exist_ok=True)
@@ -64,6 +70,13 @@ class PairController:
         self._window._current_pair_idx = -1
         self._window._current_pair_using_aligned = False
         self._window._candidates_cache.clear()
+
+    def _activate_dataset_root(self, dataset_root: Path) -> None:
+        self._window._dataset_root = str(dataset_root)
+        self._window._new_folder = str(dataset_root / "new")
+        self._window._old_folder = str(dataset_root / "old")
+        self._window._config.new_folder = self._window._new_folder
+        self._window._config.old_folder = self._window._old_folder
 
     def _load_first_new_image(self, files) -> None:
         if not files:
@@ -98,6 +111,7 @@ class PairController:
         ]
         only_new = [task.task_id for task in prepared_tasks if task.old_path is None]
         only_old: list[str] = []
+
         self._window._image_pairs = pairs
         self._window._current_pair_idx = -1
         self._window._current_pair_using_aligned = False
@@ -105,11 +119,11 @@ class PairController:
 
         self._window.file_list.clear()
         for pair in pairs:
-            self._window.file_list.addItem(f"✓ {pair.name}")
+            self._window.file_list.addItem(f"✅ {pair.name}")
         for name in only_new:
             self._window.file_list.addItem(f"🆕 {name} (仅新图)")
         for name in only_old:
-            self._window.file_list.addItem(f"📷 {name} (仅旧图)")
+            self._window.file_list.addItem(f"📲 {name} (仅旧图)")
 
         if pairs:
             self.load_pair(0)
@@ -119,6 +133,33 @@ class PairController:
             self._window._old_fits_header = None
 
         return len(pairs), len(only_new), len(only_old)
+
+    def _run_preprocess_and_refresh(
+        self,
+        dataset_root: Path,
+        *,
+        created: list[str] | None = None,
+        message_prefix: str,
+    ) -> None:
+        self._reset_loaded_dataset_state()
+
+        if created:
+            created_desc = ", ".join(created)
+            self._window._show_message(
+                f"已自动创建数据集目录结构: {dataset_root} ({created_desc})",
+                5000,
+            )
+
+        self._window._show_message(f"正在预处理数据集: {dataset_root}", 2000)
+        report = self._preprocess_service.prepare_dataset(dataset_root)
+        pair_count, only_new_count, only_old_count = self._refresh_dataset_listing(dataset_root)
+
+        self._window._show_message(
+            f"{message_prefix}: "
+            f"{dataset_root} · 预处理任务 {report.task_count} · "
+            f"配对 {pair_count} · 仅新图 {only_new_count} · 仅旧图 {only_old_count}",
+            5000,
+        )
 
     def open_dataset(self) -> None:
         folder = QFileDialog.getExistingDirectory(self._window, "选择项目根目录或数据集目录")
@@ -134,39 +175,40 @@ class PairController:
 
         dataset_root = self._resolve_dataset_root(selected_root)
         created = self._ensure_dataset_dirs(dataset_root)
+        self._activate_dataset_root(dataset_root)
+        self._run_preprocess_and_refresh(
+            dataset_root,
+            created=created,
+            message_prefix="已加载数据集",
+        )
+        self.add_recent_folder(str(dataset_root))
 
-        self._window._dataset_root = str(dataset_root)
-        self._window._new_folder = str(dataset_root / "new")
-        self._window._old_folder = str(dataset_root / "old")
-        self._window._config.new_folder = self._window._new_folder
-        self._window._config.old_folder = self._window._old_folder
+    def preprocess_current_dataset(self) -> None:
+        dataset_root: Path | None = None
+        if self._window._dataset_root:
+            current_root = Path(self._window._dataset_root)
+            if current_root.exists():
+                dataset_root = current_root
 
-        self._reset_loaded_dataset_state()
+        if dataset_root is None:
+            folder = QFileDialog.getExistingDirectory(self._window, "选择需要预处理的数据集目录")
+            if not folder:
+                return
+            dataset_root = self._resolve_dataset_root(folder)
 
-        if created:
-            created_desc = ", ".join(created)
-            self._window._show_message(
-                f"已自动创建数据集目录结构: {dataset_root} ({created_desc})",
-                5000,
-            )
-
-        report = self._preprocess_service.prepare_dataset(dataset_root)
-        pair_count, only_new_count, only_old_count = self._refresh_dataset_listing(dataset_root)
-
-        self._window._show_message(
-            "已加载数据集: "
-            f"{dataset_root} · 预处理任务 {report.task_count} · "
-            f"配对 {pair_count} · 仅新图 {only_new_count} · 仅旧图 {only_old_count}",
-            5000,
+        created = self._ensure_dataset_dirs(dataset_root)
+        self._activate_dataset_root(dataset_root)
+        self._run_preprocess_and_refresh(
+            dataset_root,
+            created=created,
+            message_prefix="已完成数据集预处理",
         )
         self.add_recent_folder(str(dataset_root))
 
     def open_new_folder(self) -> None:
-        """兼容旧入口，重定向到数据集选择。"""
         self.open_dataset()
 
     def open_old_folder(self) -> None:
-        """兼容旧入口，重定向到数据集选择。"""
         self.open_dataset()
 
     def add_recent_folder(self, folder: str) -> None:
@@ -210,7 +252,6 @@ class PairController:
         self.load_pair(index)
 
     def load_pair(self, index: int) -> None:
-        """加载指定索引的图像配对。"""
         if index < 0 or index >= len(self._window._image_pairs):
             return
 
@@ -274,16 +315,3 @@ class PairController:
 
     def resolve_marked_image_path(self, new_image_path: str | Path) -> Path | None:
         return self._pair_service.resolve_marked_image_path(new_image_path)
-
-    def calc_nonzero_valid_bounds(self, image):
-        return self._pair_service.calc_nonzero_valid_bounds(image)
-
-    def calc_overlap_crop_bounds(self, w: int, h: int, dx: float, dy: float, aligned_old=None, new_image=None):
-        return self._pair_service.calc_overlap_crop_bounds(
-            w=w,
-            h=h,
-            dx=dx,
-            dy=dy,
-            aligned_old=aligned_old,
-            new_image=new_image,
-        )

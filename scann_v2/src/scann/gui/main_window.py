@@ -438,6 +438,9 @@ class MainWindow(QMainWindow):
         """打开项目根目录或数据集目录。"""
         self.pair_controller.open_dataset()
 
+    def _on_preprocess_dataset(self) -> None:
+        self.pair_controller.preprocess_current_dataset()
+
     def _on_open_new_folder(self) -> None:
         """打开新图文件夹"""
         self._on_open_dataset()
