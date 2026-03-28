@@ -59,6 +59,8 @@ class DatasetPreprocessReport:
     generated_aligned_pairs: int = 0
     generated_marked_crops: int = 0
     task_count: int = 0
+    total_task_count: int = 0
+    align_failed_count: int = 0
 
 
 class DatasetPreprocessService:
@@ -336,9 +338,12 @@ class DatasetPreprocessService:
         reused_aligned_pairs, generated_aligned_pairs, generated_marked_crops = (
             self.ensure_aligned_crop_files(dataset_root)
         )
+        task_rows = self._dataset_storage(dataset_root).list_tasks(active_only=True)
         tasks = self.collect_preprocessed_tasks(dataset_root)
         self.write_task_manifest(dataset_root, tasks)
         task_count = len(tasks)
+        total_task_count = len(task_rows)
+        align_failed_count = sum(1 for task in task_rows if task.preprocess_status == "align_failed")
         return DatasetPreprocessReport(
             standardized_files=standardized_files,
             brightness_matched_files=brightness_matched_files,
@@ -346,6 +351,8 @@ class DatasetPreprocessService:
             generated_aligned_pairs=generated_aligned_pairs,
             generated_marked_crops=generated_marked_crops,
             task_count=task_count,
+            total_task_count=total_task_count,
+            align_failed_count=align_failed_count,
         )
 
     def standardize_dataset_by_date_obs(self, root: Path) -> int:

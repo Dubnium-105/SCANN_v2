@@ -156,7 +156,8 @@ class PairController:
 
         self._window._show_message(
             f"{message_prefix}: "
-            f"{dataset_root} · 预处理任务 {report.task_count} · "
+            f"{dataset_root} · 总任务 {report.total_task_count} · "
+            f"就绪 {report.task_count} · 对齐失败 {report.align_failed_count} · "
             f"配对 {pair_count} · 仅新图 {only_new_count} · 仅旧图 {only_old_count}",
             5000,
         )
