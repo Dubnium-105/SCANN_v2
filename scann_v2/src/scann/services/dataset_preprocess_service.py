@@ -4,10 +4,12 @@ import logging
 import os
 import shutil
 from concurrent.futures import ThreadPoolExecutor
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Deque, Optional
+import json
 
 import numpy as np
 
@@ -25,6 +27,8 @@ _MATCH_MAX_SAMPLES = 200000
 _MATCH_HIGH_PERCENTILE = 99.9
 _MATCH_HIGHLIGHT_SIGMA = 5.0
 _MATCH_ADAPTIVE_HIGH_PERCENTILE = False
+_TASK_MANIFEST_FILE = "preprocessed_tasks.json"
+_TASK_MANIFEST_VERSION = "1.0"
 
 
 @dataclass(frozen=True)
@@ -61,6 +65,80 @@ class DatasetPreprocessService:
         self._write_fits = write_fits_fn
         self._max_workers = max_workers
 
+    @staticmethod
+    def _task_manifest_path(root: Path) -> Path:
+        return Path(root) / _TASK_MANIFEST_FILE
+
+    @classmethod
+    def load_task_manifest(cls, root: Path) -> list[PreparedTaskPaths]:
+        manifest_path = cls._task_manifest_path(root)
+        if not manifest_path.is_file():
+            return []
+
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            logger.warning("预处理任务清单解析失败: %s (%s)", manifest_path, exc)
+            return []
+
+        tasks_payload = payload.get("tasks")
+        if not isinstance(tasks_payload, list):
+            return []
+
+        dataset_root = Path(root)
+        tasks: list[PreparedTaskPaths] = []
+        for item in tasks_payload:
+            if not isinstance(item, dict):
+                continue
+
+            task_id = str(item.get("task_id") or "").strip()
+            new_rel = item.get("new_path")
+            if not task_id or not isinstance(new_rel, str) or not new_rel.strip():
+                continue
+
+            new_path = dataset_root / new_rel
+            old_rel = item.get("old_path")
+            marked_rel = item.get("new_marked_path")
+            task = PreparedTaskPaths(
+                task_id=task_id,
+                new_path=new_path,
+                old_path=(dataset_root / old_rel) if isinstance(old_rel, str) and old_rel.strip() else None,
+                new_marked_path=(
+                    (dataset_root / marked_rel)
+                    if isinstance(marked_rel, str) and marked_rel.strip()
+                    else None
+                ),
+            )
+            if task.new_path.is_file():
+                tasks.append(task)
+        return tasks
+
+    @classmethod
+    def write_task_manifest(cls, root: Path, tasks: list[PreparedTaskPaths]) -> None:
+        dataset_root = Path(root)
+        manifest_path = cls._task_manifest_path(dataset_root)
+        payload = {
+            "version": _TASK_MANIFEST_VERSION,
+            "updated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "tasks": [
+                {
+                    "task_id": task.task_id,
+                    "new_path": task.new_path.relative_to(dataset_root).as_posix(),
+                    "old_path": task.old_path.relative_to(dataset_root).as_posix() if task.old_path else None,
+                    "new_marked_path": (
+                        task.new_marked_path.relative_to(dataset_root).as_posix()
+                        if task.new_marked_path
+                        else None
+                    ),
+                }
+                for task in tasks
+            ],
+        }
+        manifest_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
     def prepare_dataset(self, root: Path) -> DatasetPreprocessReport:
         dataset_root = Path(root)
         standardized_files = self.standardize_dataset_by_date_obs(dataset_root)
@@ -68,7 +146,9 @@ class DatasetPreprocessService:
         reused_aligned_pairs, generated_aligned_pairs, generated_marked_crops = (
             self.ensure_aligned_crop_files(dataset_root)
         )
-        task_count = len(self.collect_preprocessed_tasks(dataset_root))
+        tasks = self.collect_preprocessed_tasks(dataset_root)
+        self.write_task_manifest(dataset_root, tasks)
+        task_count = len(tasks)
         return DatasetPreprocessReport(
             standardized_files=standardized_files,
             brightness_matched_files=brightness_matched_files,
@@ -138,6 +218,10 @@ class DatasetPreprocessService:
         return matched_files
 
     def collect_preprocessed_tasks(self, root: Path) -> list[PreparedTaskPaths]:
+        manifest_tasks = self.load_task_manifest(root)
+        if manifest_tasks:
+            return manifest_tasks
+
         marked_files = self.collect_marked_files(root / "new_marked")
         tasks: list[PreparedTaskPaths] = []
         for task_id, new_path, old_path in self.collect_aligned_pairs(root):
@@ -149,6 +233,8 @@ class DatasetPreprocessService:
                     new_marked_path=marked_files.get(task_id),
                 )
             )
+        if tasks:
+            self.write_task_manifest(root, tasks)
         return tasks
 
     def collect_aligned_pairs(
@@ -554,10 +640,9 @@ class DatasetPreprocessService:
         if not old_files:
             return [(sample_id, path, None) for sample_id, path in sorted(new_files.items())]
 
-        old_norm_map = {
-            self.normalize_pair_stem(stem): stem
-            for stem in old_files
-        }
+        old_norm_map: dict[str, Deque[str]] = defaultdict(deque)
+        for stem in sorted(old_files):
+            old_norm_map[self.normalize_pair_stem(stem)].append(stem)
 
         pairs: list[tuple[str, Optional[Path], Optional[Path]]] = []
         matched_old: set[str] = set()
@@ -567,9 +652,12 @@ class DatasetPreprocessService:
                 old_stem = sample_id
             else:
                 norm = self.normalize_pair_stem(sample_id)
-                candidate = old_norm_map.get(norm)
-                if candidate is not None and candidate not in matched_old:
-                    old_stem = candidate
+                candidates = old_norm_map.get(norm)
+                if candidates is not None:
+                    while candidates and candidates[0] in matched_old:
+                        candidates.popleft()
+                    if candidates:
+                        old_stem = candidates.popleft()
 
             if old_stem is None:
                 continue

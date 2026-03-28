@@ -75,20 +75,29 @@ class FitsAnnotationBackend(AnnotationBackend):
             write_fits_fn=write_fits,
         )
         self._dataset_preprocess_service.prepare_dataset(root)
-        aligned_pairs = self._dataset_preprocess_service.collect_aligned_pairs(root)
-        marked_files = self._dataset_preprocess_service.collect_marked_files(root / "new_marked")
+        prepared_tasks = self._dataset_preprocess_service.collect_preprocessed_tasks(root)
 
         # 加载已有标注（优先 SQLite，兼容 legacy JSON）
         self._annotation_storage = FitsAnnotationStorage(root)
         loaded = self._annotation_storage.load_annotations()
         existing_annotations = loaded.by_id
 
-        for sample_id, new_path, old_path in aligned_pairs:
+        for task in prepared_tasks:
+            sample_id = task.task_id
+            new_path = task.new_path
+            old_path = task.old_path
             ref_file = new_path or old_path
             sample = AnnotationSample(
                 id=sample_id,
                 source_path=str(new_path or old_path or ""),
                 display_name=ref_file.name if ref_file is not None else sample_id,
+                metadata={
+                    "paths": {
+                        "new": str(new_path) if new_path else "",
+                        "old": str(old_path) if old_path else "",
+                        "new_marked": str(task.new_marked_path) if task.new_marked_path else "",
+                    }
+                },
             )
 
             # 合并已有标注
@@ -111,7 +120,7 @@ class FitsAnnotationBackend(AnnotationBackend):
             self._image_paths[sample_id] = {
                 "new": str(new_path) if new_path else "",
                 "old": str(old_path) if old_path else "",
-                "new_marked": str(marked_files.get(sample_id, "")),
+                "new_marked": str(task.new_marked_path or ""),
             }
 
             self._samples.append(sample)
@@ -937,6 +946,9 @@ class FitsAnnotationBackend(AnnotationBackend):
                 "id": s.id,
                 "file_name": s.display_name,
             }
+            paths = s.metadata.get("paths") if isinstance(s.metadata, dict) else None
+            if isinstance(paths, dict):
+                img["paths"] = paths
             if s.label:
                 img["label"] = s.label
             if s.detail_type:

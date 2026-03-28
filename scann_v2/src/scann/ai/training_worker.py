@@ -146,6 +146,31 @@ class TrainingWorker(QThread):
                     lookup[key] = pair
         return lookup
 
+    def _resolve_pair_from_paths(self, dataset_root: Path, image_info: dict[str, Any]) -> FitsImagePair | None:
+        paths = image_info.get("paths")
+        if not isinstance(paths, dict):
+            metadata = image_info.get("metadata")
+            if isinstance(metadata, dict):
+                paths = metadata.get("paths")
+        if not isinstance(paths, dict):
+            return None
+
+        new_rel = str(paths.get("new") or "").strip()
+        old_rel = str(paths.get("old") or "").strip()
+        if not new_rel or not old_rel:
+            return None
+
+        new_path = dataset_root / new_rel
+        old_path = dataset_root / old_rel
+        if not new_path.is_file() or not old_path.is_file():
+            return None
+
+        return FitsImagePair(
+            name=str(image_info.get("id") or image_info.get("file_name") or new_path.stem),
+            new_path=new_path,
+            old_path=old_path,
+        )
+
     def _resolve_annotation_label(self, ann: dict[str, Any], image_info: dict[str, Any]) -> str | None:
         label = str(ann.get("label") or "").strip().lower()
         if label in {"real", "bogus"}:
@@ -255,16 +280,17 @@ class TrainingWorker(QThread):
             if not annotations:
                 continue
 
-            pair = None
-            for candidate in (
-                image_info.get("id"),
-                image_info.get("file_name"),
-                image_info.get("file"),
-            ):
-                key = self._normalize_dataset_key(candidate)
-                if key and key in pair_lookup:
-                    pair = pair_lookup[key]
-                    break
+            pair = self._resolve_pair_from_paths(dataset_root, image_info)
+            if pair is None:
+                for candidate in (
+                    image_info.get("id"),
+                    image_info.get("file_name"),
+                    image_info.get("file"),
+                ):
+                    key = self._normalize_dataset_key(candidate)
+                    if key and key in pair_lookup:
+                        pair = pair_lookup[key]
+                        break
             if pair is None:
                 continue
 

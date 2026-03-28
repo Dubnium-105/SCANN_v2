@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from collections import defaultdict, deque
+from typing import Deque, List, Optional, Tuple
 
 
 @dataclass
@@ -130,10 +131,10 @@ def match_new_old_pairs(
         return stem
 
     # 为旧图建立 normalized_stem → original_stem 映射
-    old_norm_map: dict[str, str] = {}
+    old_norm_map: dict[str, Deque[str]] = defaultdict(deque)
     for stem in old_map:
         norm = _normalize_stem(stem)
-        old_norm_map[norm] = stem
+        old_norm_map[norm].append(stem)
 
     # 尝试将 new 文件与 old 文件匹配（先精确匹配，再去前缀匹配）
     matched_old_stems: set[str] = set()
@@ -145,9 +146,12 @@ def match_new_old_pairs(
         else:
             # 尝试 normalize 后匹配
             norm = _normalize_stem(stem)
-            if norm in old_norm_map:
-                old_stem = old_norm_map[norm]
-                if old_stem not in matched_old_stems:
+            candidates = old_norm_map.get(norm)
+            if candidates:
+                while candidates and candidates[0] in matched_old_stems:
+                    candidates.popleft()
+                if candidates:
+                    old_stem = candidates.popleft()
                     new_to_old[stem] = old_stem
                     matched_old_stems.add(old_stem)
 

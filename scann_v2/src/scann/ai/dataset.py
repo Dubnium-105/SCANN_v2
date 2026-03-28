@@ -11,6 +11,7 @@ import numpy as np
 from torchvision import transforms
 
 from scann.core.fits_annotation_storage import load_v2_annotation_document
+from scann.data.file_manager import FitsImagePair
 
 
 logger = logging.getLogger(__name__)
@@ -545,6 +546,31 @@ class FitsDenseDetectionDataset:
                     lookup[key] = pair
         return lookup
 
+    def _resolve_pair_from_paths(self, image_info: dict[str, Any]) -> FitsImagePair | None:
+        paths = image_info.get("paths")
+        if not isinstance(paths, dict):
+            metadata = image_info.get("metadata")
+            if isinstance(metadata, dict):
+                paths = metadata.get("paths")
+        if not isinstance(paths, dict):
+            return None
+
+        new_rel = str(paths.get("new") or "").strip()
+        old_rel = str(paths.get("old") or "").strip()
+        if not new_rel or not old_rel:
+            return None
+
+        new_path = self.dataset_root / new_rel
+        old_path = self.dataset_root / old_rel
+        if not new_path.is_file() or not old_path.is_file():
+            return None
+
+        return FitsImagePair(
+            name=str(image_info.get("id") or image_info.get("file_name") or new_path.stem),
+            new_path=new_path,
+            old_path=old_path,
+        )
+
     @staticmethod
     def _safe_float(value: Any) -> float | None:
         try:
@@ -624,16 +650,17 @@ class FitsDenseDetectionDataset:
             if not isinstance(image_info, dict):
                 continue
 
-            pair = None
-            for candidate in (
-                image_info.get("id"),
-                image_info.get("file_name"),
-                image_info.get("file"),
-            ):
-                key = self._normalize_dataset_key(candidate)
-                if key and key in pair_lookup:
-                    pair = pair_lookup[key]
-                    break
+            pair = self._resolve_pair_from_paths(image_info)
+            if pair is None:
+                for candidate in (
+                    image_info.get("id"),
+                    image_info.get("file_name"),
+                    image_info.get("file"),
+                ):
+                    key = self._normalize_dataset_key(candidate)
+                    if key and key in pair_lookup:
+                        pair = pair_lookup[key]
+                        break
 
             if pair is None:
                 logger.warning("dense 数据集跳过样本：找不到匹配 new/old 图像，image=%s", image_info.get("id"))

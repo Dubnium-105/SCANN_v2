@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Literal, Optional, cast
 
 from pydantic import BaseModel, Field
 
+from scann.services.dataset_preprocess_service import DatasetPreprocessService
+
 
 class AnnotationBox(BaseModel):
     x: float = Field(..., ge=0)
@@ -413,6 +415,22 @@ class AnnotationService:
     def _dataset_v2_path(self) -> Path:
         return self.dataset_root / "annotations.json"
 
+    def _resolve_task_paths(self, task_id: str) -> dict[str, str]:
+        tasks = DatasetPreprocessService.load_task_manifest(self.dataset_root)
+        for task in tasks:
+            if task.task_id != task_id:
+                continue
+            return {
+                "new": task.new_path.relative_to(self.dataset_root).as_posix() if task.new_path else "",
+                "old": task.old_path.relative_to(self.dataset_root).as_posix() if task.old_path else "",
+                "new_marked": (
+                    task.new_marked_path.relative_to(self.dataset_root).as_posix()
+                    if task.new_marked_path
+                    else ""
+                ),
+            }
+        return {}
+
     def _upsert_dataset_v2(
         self,
         task_id: str,
@@ -441,13 +459,19 @@ class AnnotationService:
         if not isinstance(images, list):
             images = []
 
+        task_paths = self._resolve_task_paths(task_id)
+        resolved_file = task_paths.get(source_view) or f"{source_view}/{task_id}.fts"
         new_image_entry = {
             "id": task_id,
-            "file": f"{source_view}/{task_id}.fts",
+            "file": resolved_file,
             "source_view": source_view,
             "updated_at": saved_at,
             "annotations": [ann.model_dump(exclude_none=True) for ann in annotations],
         }
+        if task_paths:
+            new_image_entry["paths"] = task_paths
+            file_name = Path(task_paths.get("new") or task_paths.get("old") or resolved_file).name
+            new_image_entry["file_name"] = file_name
 
         updated = False
         for index, image_item in enumerate(images):

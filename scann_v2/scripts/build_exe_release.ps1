@@ -47,11 +47,35 @@ if (Test-Path $releaseDir) {
 }
 
 $workspaceRoot = Split-Path -Parent $projectRoot
-$venvPython = Join-Path $workspaceRoot "venv\Scripts\python.exe"
-if (Test-Path $venvPython) {
-    $pythonCmd = $venvPython
-} else {
-    $pythonCmd = "python"
+$pythonCandidates = @()
+
+if ($env:VIRTUAL_ENV) {
+    $pythonCandidates += Join-Path $env:VIRTUAL_ENV "Scripts\python.exe"
+}
+
+$pythonCandidates += @(
+    (Join-Path $workspaceRoot ".venv\Scripts\python.exe"),
+    (Join-Path $workspaceRoot "venv\Scripts\python.exe"),
+    (Join-Path $projectRoot ".venv\Scripts\python.exe"),
+    (Join-Path $projectRoot "venv\Scripts\python.exe"),
+    "python"
+)
+
+$pythonCmd = $null
+foreach ($candidate in $pythonCandidates) {
+    if ($candidate -eq "python") {
+        $pythonCmd = $candidate
+        break
+    }
+
+    if (Test-Path $candidate) {
+        $pythonCmd = $candidate
+        break
+    }
+}
+
+if (-not $pythonCmd) {
+    throw "Cannot locate a Python interpreter for the build environment."
 }
 
 $pyInstallerCheck = & $pythonCmd -c "import importlib.util; import sys; sys.exit(0 if importlib.util.find_spec('PyInstaller') else 1)"
@@ -69,10 +93,16 @@ Write-Host "Building executable with PyInstaller (onedir)..."
     --add-data "scann_v2_config.json;." `
     --collect-all torch `
     --collect-all torchvision `
-    --collect-all astropy `
     --collect-all astroquery `
     --collect-all skimage `
     --collect-all sklearn `
+    --collect-data astropy `
+    --hidden-import astropy.io.fits `
+    --hidden-import astropy.visualization `
+    --hidden-import astropy.stats `
+    --hidden-import astropy.wcs `
+    --hidden-import astropy.coordinates `
+    --hidden-import astropy.units `
     src/scann/app.py | Out-Host
 
 $distDir = Join-Path $projectRoot "dist\SCANN_v2"

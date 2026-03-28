@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_DB_FILE = "annotations.db"
 DEFAULT_MANIFEST_FILE = "annotations.json"
-MANIFEST_VERSION = "2.1"
+MANIFEST_VERSION = "2.2"
 
 
 @dataclass
@@ -127,10 +127,17 @@ class FitsAnnotationStorage:
                 detail_type TEXT,
                 ai_suggestion TEXT,
                 ai_confidence REAL,
+                metadata_json TEXT,
                 updated_at TEXT NOT NULL
             )
             """
         )
+        image_columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(images)").fetchall()
+        }
+        if "metadata_json" not in image_columns:
+            conn.execute("ALTER TABLE images ADD COLUMN metadata_json TEXT")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS bboxes (
@@ -166,6 +173,11 @@ class FitsAnnotationStorage:
             image["ai_suggestion"] = sample.ai_suggestion
         if sample.ai_confidence is not None:
             image["ai_confidence"] = sample.ai_confidence
+        if sample.metadata:
+            image["metadata"] = sample.metadata
+            paths = sample.metadata.get("paths")
+            if isinstance(paths, dict):
+                image["paths"] = paths
         return image
 
     @staticmethod
@@ -186,14 +198,15 @@ class FitsAnnotationStorage:
         updated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         conn.execute(
             """
-            INSERT INTO images (id, file_name, label, detail_type, ai_suggestion, ai_confidence, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO images (id, file_name, label, detail_type, ai_suggestion, ai_confidence, metadata_json, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 file_name=excluded.file_name,
                 label=excluded.label,
                 detail_type=excluded.detail_type,
                 ai_suggestion=excluded.ai_suggestion,
                 ai_confidence=excluded.ai_confidence,
+                metadata_json=excluded.metadata_json,
                 updated_at=excluded.updated_at
             """,
             (
@@ -203,6 +216,7 @@ class FitsAnnotationStorage:
                 sample.detail_type,
                 sample.ai_suggestion,
                 sample.ai_confidence,
+                json.dumps(sample.metadata, ensure_ascii=False) if sample.metadata else None,
                 updated_at,
             ),
         )
@@ -230,7 +244,7 @@ class FitsAnnotationStorage:
         conn = self._connect()
         self._ensure_schema(conn)
         image_rows = conn.execute(
-            "SELECT id, file_name, label, detail_type, ai_suggestion, ai_confidence FROM images"
+            "SELECT id, file_name, label, detail_type, ai_suggestion, ai_confidence, metadata_json FROM images"
         ).fetchall()
         bbox_rows = conn.execute(
             """
@@ -256,6 +270,17 @@ class FitsAnnotationStorage:
                 image["ai_suggestion"] = str(row["ai_suggestion"])
             if row["ai_confidence"] is not None:
                 image["ai_confidence"] = float(row["ai_confidence"])
+            metadata_raw = row["metadata_json"]
+            if metadata_raw:
+                try:
+                    metadata = json.loads(str(metadata_raw))
+                except Exception:
+                    metadata = {}
+                if isinstance(metadata, dict) and metadata:
+                    image["metadata"] = metadata
+                    paths = metadata.get("paths")
+                    if isinstance(paths, dict):
+                        image["paths"] = paths
             image["annotations"] = []
             by_id[image_id] = image
 
