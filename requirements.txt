@@ -11,5 +11,6 @@ urllib3
 tqdm
 Pillow
 scikit-learn
+matplotlib
 PyJWT
 passlib

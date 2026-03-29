@@ -8,6 +8,8 @@ focused on product entry points.
 - `diagnostics/`: manual smoke tests and one-off verification scripts. These are
   intentionally kept out of `tests/` so `pytest` does not collect them by
   default.
+- `experiments/`: reproducible experiment entry points for the legacy v1
+  dataset validation workflow.
 - `legacy/`: legacy triplet-image training utilities that still belong to the
   old workflow, but are useful to keep around.
 
