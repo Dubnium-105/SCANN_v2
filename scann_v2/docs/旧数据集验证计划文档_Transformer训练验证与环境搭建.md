@@ -358,25 +358,56 @@ dataset/
 目的：
 - 找到最适合旧数据集的输入组织方式
 
-实验组：
-1. new + old + diff 三通道
-2. 仅 diff
-3. diff + new
-4. diff + old
+完成状态：
+- 已完成输入融合方式对比实验（2026-03-30）
 
-保持：
-- 同一模型
-- 同一训练设置
-- 同一数据划分
+实际执行：
+- 固定使用 `ViT_B_16 pretrained` 作为对比模型，保持与 Exp-3 一致的训练配置
+- 固定使用 manifest 划分，保持 `train=3671 / val=786 / test=786`
+- 固定图像尺寸 `224`、`resize` 预处理、`seed=42`、`batch_size=16`
+- 对以下四组输入模式分别独立训练并对比：
+  - `new_old_diff`：`new + old + diff`
+  - `diff_only`：仅 `diff`
+  - `diff_new`：`diff + new`
+  - `diff_old`：`diff + old`
 
-记录指标：
-- Accuracy
-- Recall
-- F1-score
-- ROC-AUC
+当前结果：
+- `new + old + diff`
+  - Accuracy：`0.9542`
+  - Recall：`0.9565`
+  - F1-score：`0.9483`
+  - ROC-AUC：`0.9902`
+  - 收敛轮次：`25 epoch` 早停，最佳轮次 `15`
+- `diff`
+  - Accuracy：`0.9198`
+  - Recall：`0.8899`
+  - F1-score：`0.9069`
+  - ROC-AUC：`0.9768`
+  - 收敛轮次：`20 epoch` 早停，最佳轮次 `10`
+- `diff + new`
+  - Accuracy：`0.9402`
+  - Recall：`0.9362`
+  - F1-score：`0.9322`
+  - ROC-AUC：`0.9882`
+  - 收敛轮次：`38 epoch` 早停，最佳轮次 `28`
+- `diff + old`
+  - Accuracy：`0.9351`
+  - Recall：`0.9594`
+  - F1-score：`0.9285`
+  - ROC-AUC：`0.9827`
+  - 收敛轮次：`21 epoch` 早停，最佳轮次 `11`
+- 结论：当前旧数据集上，`new + old + diff` 仍然是最优输入组织方式，整体泛化表现最好
+- 结论：`diff` 单路可训练但信息不足，Accuracy、Recall 与 F1 均明显落后于三路融合
+- 结论：`diff + new` 是双路组合里最接近三路融合的方案，但测试集 F1 仍低于 `new + old + diff`
+- 结论：`diff + old` 在测试集上取得最高 Recall（`0.9594`），但 Precision 偏低，导致整体 F1 仍不如三路融合
+- 推荐：后续 Exp-5 及新数据集迁移阶段，默认继续使用 `new_old_diff` 作为主输入方案
 
-输出：
-- input_fusion_comparison.csv
+输出文件：
+- `scann_v2/experiments/results/input_fusion_comparison.csv`
+- `scann_v2/experiments/results/legacy_vit_b16_pretrained_gpu_summary.json`
+- `scann_v2/experiments/results/legacy_vit_b16_pretrained_gpu_diff_only_summary.json`
+- `scann_v2/experiments/results/legacy_vit_b16_pretrained_gpu_diff_new_summary.json`
+- `scann_v2/experiments/results/legacy_vit_b16_pretrained_gpu_diff_old_summary.json`
 
 ---
 
@@ -384,20 +415,61 @@ dataset/
 目的：
 - 找到适合 Transformer 的输入尺寸策略
 
-实验组建议：
-1. 原始 240 x 80
-2. resize 到 224 x 224
-3. padding 到近似方形后 resize
-4. 不同归一化方式对比
+完成状态：
+- 已完成输入尺寸与预处理对比实验（2026-03-30）
 
-记录指标：
-- Accuracy
-- F1-score
-- 收敛速度
-- 显存占用
+实际执行：
+- 固定使用 `ViT_B_16 pretrained` 与 `new_old_diff` 输入模式
+- 固定使用 manifest 划分，保持 `train=3671 / val=786 / test=786`
+- 固定 `seed=42`、`batch_size=16`、其余训练超参数与 Exp-3 保持一致
+- 对以下四组预处理方案分别独立训练并对比：
+  - `native_keep_80`：保持原始单通道空间尺寸 `80 x 80`
+  - `resize_224`：直接 resize 到 `224 x 224`
+  - `pad_resize_224`：先 padding 到近似方形，再 resize 到 `224 x 224`
+  - `resize_224_no_norm`：resize 到 `224 x 224`，但关闭归一化
 
-输出：
-- preprocessing_comparison.csv
+当前结果：
+- `native_keep_80`
+  - Accuracy：`0.9453`
+  - F1-score：`0.9378`
+  - ROC-AUC：`0.9879`
+  - 收敛轮次：`20 epoch` 早停，最佳轮次 `10`
+  - 平均每轮训练+验证时间：`26.11 s`
+  - 峰值显存占用：`1659.23 MB`
+- `resize_224`
+  - Accuracy：`0.9466`
+  - F1-score：`0.9407`
+  - ROC-AUC：`0.9911`
+  - 收敛轮次：`21 epoch` 早停，最佳轮次 `11`
+  - 平均每轮训练+验证时间：`118.10 s`
+  - 峰值显存占用：`2973.06 MB`
+- `pad_resize_224`
+  - Accuracy：`0.9377`
+  - F1-score：`0.9315`
+  - ROC-AUC：`0.9862`
+  - 收敛轮次：`21 epoch` 早停，最佳轮次 `11`
+  - 平均每轮训练+验证时间：`118.59 s`
+  - 峰值显存占用：`2973.06 MB`
+- `resize_224_no_norm`
+  - Accuracy：`0.9313`
+  - F1-score：`0.9248`
+  - ROC-AUC：`0.9844`
+  - 收敛轮次：`17 epoch` 早停，最佳轮次 `7`
+  - 平均每轮训练+验证时间：`116.80 s`
+  - 峰值显存占用：`2973.06 MB`
+- 结论：综合测试集 F1 与 ROC-AUC，`resize_224` 仍然是当前最优预处理策略
+- 结论：`native_keep_80` 在性能上仅略低于 `resize_224`，但训练速度最快、显存占用最低，是明显更高效的备选方案
+- 结论：`pad_resize_224` 未带来性能提升，说明额外 padding 对当前旧数据集并无收益
+- 结论：关闭归一化后验证集表现仍较高，但测试集 F1 明显下降，说明归一化对泛化稳定性仍有帮助
+- 推荐：后续主实验默认继续使用 `resize_224 + normalize`
+- 推荐：若后续受显存或训练时长限制，可优先尝试 `native_keep_80`
+
+输出文件：
+- `scann_v2/experiments/results/preprocessing_comparison.csv`
+- `scann_v2/experiments/results/legacy_vit_b16_pretrained_gpu_native_keep_80_summary.json`
+- `scann_v2/experiments/results/legacy_vit_b16_pretrained_gpu_summary.json`
+- `scann_v2/experiments/results/legacy_vit_b16_pretrained_gpu_pad_resize_224_summary.json`
+- `scann_v2/experiments/results/legacy_vit_b16_pretrained_gpu_resize_224_no_norm_summary.json`
 
 ---
 
@@ -409,15 +481,44 @@ dataset/
 1. pretrained = True
 2. pretrained = False
 
-记录指标：
-- Accuracy
-- Recall
-- F1-score
-- 最终 loss
-- 收敛轮次
+完成状态：
+- 已基于已有 Transformer baseline 结果完成预训练与非预训练对比整理（2026-03-30）
 
-输出：
-- pretrained_vs_scratch.csv
+实际执行：
+- 固定使用 `ViT_B_16` 与 `new_old_diff` 输入方案
+- 固定使用 `224 x 224`、`resize + normalize` 预处理
+- 固定使用同一份 manifest 划分，保持 `train=3671 / val=786 / test=786`
+- 对以下两组设置进行对照：
+  - `scratch`：`pretrained=False`
+  - `pretrained`：`pretrained=True`
+
+当前结果：
+- `scratch`
+  - Accuracy：`0.9071`
+  - Recall：`0.8957`
+  - F1-score：`0.8944`
+  - ROC-AUC：`0.9703`
+  - 最终 train loss：`0.1341`
+  - 最终 val loss：`0.2664`
+  - 收敛轮次：`50 epoch`，最佳轮次 `40`
+- `pretrained`
+  - Accuracy：`0.9567`
+  - Recall：`0.9565`
+  - F1-score：`0.9510`
+  - ROC-AUC：`0.9913`
+  - 最终 train loss：`0.0278`
+  - 最终 val loss：`0.2329`
+  - 收敛轮次：`33 epoch` 早停，最佳轮次 `23`
+- 结论：加载预训练权重后，Transformer 在旧数据小样本场景中的性能明显提升，测试集 F1 从 `0.8944` 提升到 `0.9510`
+- 结论：预训练不仅提升最终精度，也显著缩短有效收敛轮次，最佳轮次从 `40` 提前到 `23`
+- 结论：预训练版本的 Recall、F1 与 ROC-AUC 均全面优于 scratch，说明迁移学习对当前旧数据集是必要且稳定有效的
+- 结论：scratch 版本虽然能够收敛，但泛化能力明显偏弱，更容易在小样本条件下受限于优化难度与表示能力
+- 推荐：后续 Transformer 主实验默认开启 `pretrained=True`
+
+输出文件：
+- `scann_v2/experiments/results/pretrained_vs_scratch.csv`
+- `scann_v2/experiments/results/legacy_vit_b16_baseline_gpu_summary.json`
+- `scann_v2/experiments/results/legacy_vit_b16_pretrained_gpu_summary.json`
 
 ---
 
@@ -428,7 +529,7 @@ dataset/
 实验组：
 1. Tiny
 2. Small
-3. Base（如资源允许）
+3. Base
 
 记录指标：
 - Accuracy

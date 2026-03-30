@@ -27,6 +27,7 @@ from sklearn.metrics import (
 )
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from torchvision import models
+from torchvision.models.vision_transformer import interpolate_embeddings
 
 from scann.ai.device_utils import resolve_device
 from scann.ai.trainer import FocalLoss
@@ -49,6 +50,7 @@ SUMMARY_COLUMNS = [
     "input_mode",
     "image_size",
     "resize_mode",
+    "normalize",
     "pretrained",
     "seed",
     "batch_size",
@@ -75,6 +77,8 @@ SUMMARY_COLUMNS = [
     "test_fp",
     "test_fn",
     "test_tp",
+    "avg_epoch_seconds",
+    "peak_gpu_memory_mb",
     "manifest_path",
     "checkpoint_path",
     "history_path",
@@ -85,6 +89,98 @@ SUMMARY_COLUMNS = [
     "test_analysis_plot",
     "val_predictions_path",
     "test_predictions_path",
+]
+INPUT_FUSION_VARIANTS = [
+    ("new_old_diff", "new+old+diff"),
+    ("diff_only", "diff"),
+    ("diff_new", "diff+new"),
+    ("diff_old", "diff+old"),
+]
+INPUT_FUSION_COLUMNS = [
+    "variant",
+    "input_mode",
+    "experiment_name",
+    "result_source",
+    "model_name",
+    "pretrained",
+    "seed",
+    "image_size",
+    "resize_mode",
+    "batch_size",
+    "epochs_requested",
+    "epochs_ran",
+    "best_epoch",
+    "best_threshold",
+    "val_accuracy",
+    "val_recall",
+    "val_f1",
+    "val_roc_auc",
+    "test_accuracy",
+    "test_recall",
+    "test_f1",
+    "test_roc_auc",
+    "summary_path",
+    "checkpoint_path",
+]
+PREPROCESSING_VARIANTS = [
+    {
+        "variant": "native_keep_80",
+        "description": "native 80x80",
+        "image_size": 80,
+        "resize_mode": "keep",
+        "normalize": True,
+    },
+    {
+        "variant": "resize_224",
+        "description": "resize 224",
+        "image_size": 224,
+        "resize_mode": "resize",
+        "normalize": True,
+    },
+    {
+        "variant": "pad_resize_224",
+        "description": "pad_resize 224",
+        "image_size": 224,
+        "resize_mode": "pad_resize",
+        "normalize": True,
+    },
+    {
+        "variant": "resize_224_no_norm",
+        "description": "resize 224 no_norm",
+        "image_size": 224,
+        "resize_mode": "resize",
+        "normalize": False,
+    },
+]
+PREPROCESSING_COLUMNS = [
+    "variant",
+    "description",
+    "experiment_name",
+    "result_source",
+    "model_name",
+    "pretrained",
+    "input_mode",
+    "seed",
+    "image_size",
+    "resize_mode",
+    "normalize",
+    "batch_size",
+    "epochs_requested",
+    "epochs_ran",
+    "best_epoch",
+    "best_threshold",
+    "val_accuracy",
+    "val_recall",
+    "val_f1",
+    "val_roc_auc",
+    "test_accuracy",
+    "test_recall",
+    "test_f1",
+    "test_roc_auc",
+    "avg_epoch_seconds",
+    "peak_gpu_memory_mb",
+    "summary_path",
+    "checkpoint_path",
 ]
 
 
@@ -189,7 +285,7 @@ def _normalize_model_name(model_name: str) -> str:
     return aliases.get(normalized, normalized)
 
 
-def create_experiment_model(model_name: str, *, pretrained: bool) -> nn.Module:
+def create_experiment_model(model_name: str, *, pretrained: bool, image_size: int = 224) -> nn.Module:
     """Create a torchvision classifier for the experiment."""
 
     normalized = _normalize_model_name(model_name)
@@ -209,8 +305,21 @@ def create_experiment_model(model_name: str, *, pretrained: bool) -> nn.Module:
         model.fc = nn.Linear(model.fc.in_features, 2)
         return model
     if normalized == "vit_b_16":
-        weights = models.ViT_B_16_Weights.DEFAULT if pretrained else None
-        model = models.vit_b_16(weights=weights)
+        resolved_image_size = int(image_size)
+        if pretrained and resolved_image_size != 224:
+            weights = models.ViT_B_16_Weights.DEFAULT
+            model = models.vit_b_16(weights=None, image_size=resolved_image_size)
+            state_dict = weights.get_state_dict(progress=True)
+            state_dict = interpolate_embeddings(
+                image_size=resolved_image_size,
+                patch_size=16,
+                model_state=state_dict,
+                reset_heads=True,
+            )
+            model.load_state_dict(state_dict, strict=False)
+        else:
+            weights = models.ViT_B_16_Weights.DEFAULT if pretrained else None
+            model = models.vit_b_16(weights=weights, image_size=resolved_image_size)
         model.heads.head = nn.Linear(model.heads.head.in_features, 2)
         return model
     raise ValueError(f"Unsupported model name: {model_name}")
@@ -544,6 +653,14 @@ def _write_history(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
+def _write_rows_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as file_obj:
+        writer = csv.DictWriter(file_obj, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows([{field: row.get(field, "") for field in fieldnames} for row in rows])
+
+
 def _append_summary_csv(path: Path, row: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     write_header = not path.exists()
@@ -795,6 +912,7 @@ def train_legacy_classifier(config: str | Path | dict[str, Any]) -> dict[str, An
     model = create_experiment_model(
         experiment_config.model_name,
         pretrained=experiment_config.pretrained,
+        image_size=experiment_config.image_size,
     ).to(device)
     logger.info("Model parameters: %s", f"{_parameter_count(model):,}")
     criterion = _criterion_from_config(experiment_config).to(device)
@@ -808,8 +926,13 @@ def train_legacy_classifier(config: str | Path | dict[str, Any]) -> dict[str, An
     history_rows: list[dict[str, Any]] = []
     patience = 0
     epochs_ran = 0
+    peak_gpu_memory_mb = 0.0
+
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
 
     for epoch in range(1, int(experiment_config.epochs) + 1):
+        eval_start = 0.0
         train_loss, train_seconds = _run_train_epoch(
             model,
             loaders["train"],
@@ -820,7 +943,9 @@ def train_legacy_classifier(config: str | Path | dict[str, Any]) -> dict[str, An
             total_epochs=int(experiment_config.epochs),
             log_every_n_steps=max(0, int(experiment_config.log_every_n_steps)),
         )
+        eval_start = time.perf_counter()
         val_loss, val_probs, val_labels = _run_eval_epoch(model, loaders["val"], criterion, device)
+        eval_seconds = time.perf_counter() - eval_start
         threshold, val_metrics = _choose_threshold(
             val_labels,
             val_probs,
@@ -836,6 +961,9 @@ def train_legacy_classifier(config: str | Path | dict[str, Any]) -> dict[str, An
                 "lr": current_lr,
                 "train_loss": float(train_loss),
                 "val_loss": float(val_loss),
+                "train_seconds": float(train_seconds),
+                "eval_seconds": float(eval_seconds),
+                "epoch_seconds": float(train_seconds + eval_seconds),
                 "val_threshold": float(threshold),
                 "val_accuracy": float(val_metrics["accuracy"]),
                 "val_precision": float(val_metrics["precision"]),
@@ -847,11 +975,17 @@ def train_legacy_classifier(config: str | Path | dict[str, Any]) -> dict[str, An
             }
         )
         epochs_ran = epoch
+        if device.type == "cuda":
+            peak_gpu_memory_mb = max(
+                peak_gpu_memory_mb,
+                float(torch.cuda.max_memory_allocated(device)) / (1024.0 * 1024.0),
+            )
         logger.info(
-            "Epoch %02d/%02d done | %.1fs | train_loss=%.5f | val_loss=%.5f | val_acc=%.4f | val_f1=%.4f | val_f2=%.4f | val_roc_auc=%.4f | val_pr_auc=%.4f | threshold=%.4f",
+            "Epoch %02d/%02d done | %.1fs train + %.1fs eval | train_loss=%.5f | val_loss=%.5f | val_acc=%.4f | val_f1=%.4f | val_f2=%.4f | val_roc_auc=%.4f | val_pr_auc=%.4f | threshold=%.4f",
             epoch,
             int(experiment_config.epochs),
             float(train_seconds),
+            float(eval_seconds),
             float(train_loss),
             float(val_loss),
             float(val_metrics["accuracy"]),
@@ -954,6 +1088,9 @@ def train_legacy_classifier(config: str | Path | dict[str, Any]) -> dict[str, An
         threshold=float(best_threshold),
         split_name="test",
     )
+    avg_epoch_seconds = float(
+        np.mean([float(row["epoch_seconds"]) for row in history_rows]) if history_rows else 0.0
+    )
 
     summary = {
         "experiment_name": experiment_config.experiment_name,
@@ -961,6 +1098,7 @@ def train_legacy_classifier(config: str | Path | dict[str, Any]) -> dict[str, An
         "input_mode": experiment_config.input_mode,
         "image_size": int(experiment_config.image_size),
         "resize_mode": experiment_config.resize_mode,
+        "normalize": bool(experiment_config.normalize),
         "pretrained": bool(experiment_config.pretrained),
         "seed": int(experiment_config.seed),
         "batch_size": int(experiment_config.batch_size),
@@ -987,6 +1125,8 @@ def train_legacy_classifier(config: str | Path | dict[str, Any]) -> dict[str, An
         "test_fp": int(test_result["fp"]),
         "test_fn": int(test_result["fn"]),
         "test_tp": int(test_result["tp"]),
+        "avg_epoch_seconds": avg_epoch_seconds,
+        "peak_gpu_memory_mb": float(peak_gpu_memory_mb),
         "manifest_path": str(paths["manifest_path"]),
         "checkpoint_path": str(paths["checkpoint_path"]),
         "history_path": str(paths["history_path"]),
@@ -1000,13 +1140,15 @@ def train_legacy_classifier(config: str | Path | dict[str, Any]) -> dict[str, An
     }
 
     logger.info(
-        "Final summary | best_epoch=%d | val_f1=%.4f | val_f2=%.4f | test_f1=%.4f | test_f2=%.4f | test_recall=%.4f",
+        "Final summary | best_epoch=%d | val_f1=%.4f | val_f2=%.4f | test_f1=%.4f | test_f2=%.4f | test_recall=%.4f | avg_epoch_seconds=%.2f | peak_gpu_memory_mb=%.1f",
         int(best_epoch),
         float(val_result["f1"]),
         float(val_result["f2"]),
         float(test_result["f1"]),
         float(test_result["f2"]),
         float(test_result["recall"]),
+        float(avg_epoch_seconds),
+        float(peak_gpu_memory_mb),
     )
     logger.info("Plots directory: %s", paths["plots_dir"])
     logger.info("Summary json: %s", paths["summary_path"])
@@ -1019,6 +1161,321 @@ def train_legacy_classifier(config: str | Path | dict[str, Any]) -> dict[str, An
     paths["summary_path"].write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     _append_summary_csv(paths["summary_csv_path"], summary)
     return summary
+
+
+def _input_fusion_experiment_name(base_experiment_name: str, *, base_input_mode: str, input_mode: str) -> str:
+    normalized_base_mode = str(base_input_mode).strip().lower()
+    normalized_input_mode = str(input_mode).strip().lower()
+    if normalized_input_mode == normalized_base_mode:
+        return str(base_experiment_name)
+    return f"{base_experiment_name}_{normalized_input_mode}"
+
+
+def _input_fusion_summary_path(output_root: Path, experiment_name: str) -> Path:
+    return output_root / "results" / f"{experiment_name}_summary.json"
+
+
+def _input_fusion_row(
+    summary: dict[str, Any],
+    *,
+    variant: str,
+    result_source: str,
+    summary_path: Path,
+) -> dict[str, Any]:
+    return {
+        "variant": variant,
+        "input_mode": summary.get("input_mode", ""),
+        "experiment_name": summary.get("experiment_name", ""),
+        "result_source": result_source,
+        "model_name": summary.get("model_name", ""),
+        "pretrained": summary.get("pretrained", ""),
+        "seed": summary.get("seed", ""),
+        "image_size": summary.get("image_size", ""),
+        "resize_mode": summary.get("resize_mode", ""),
+        "batch_size": summary.get("batch_size", ""),
+        "epochs_requested": summary.get("epochs_requested", ""),
+        "epochs_ran": summary.get("epochs_ran", ""),
+        "best_epoch": summary.get("best_epoch", ""),
+        "best_threshold": summary.get("best_threshold", ""),
+        "val_accuracy": summary.get("val_accuracy", ""),
+        "val_recall": summary.get("val_recall", ""),
+        "val_f1": summary.get("val_f1", ""),
+        "val_roc_auc": summary.get("val_roc_auc", ""),
+        "test_accuracy": summary.get("test_accuracy", ""),
+        "test_recall": summary.get("test_recall", ""),
+        "test_f1": summary.get("test_f1", ""),
+        "test_roc_auc": summary.get("test_roc_auc", ""),
+        "summary_path": str(summary_path),
+        "checkpoint_path": summary.get("checkpoint_path", ""),
+    }
+
+
+def run_legacy_input_fusion_comparison(
+    base_config: str | Path | dict[str, Any],
+    *,
+    comparison_csv_path: str | Path | None = None,
+    skip_existing: bool = True,
+) -> dict[str, Any]:
+    """Run Exp-4 by comparing multiple semantic input fusion modes."""
+
+    experiment_config = load_experiment_config(base_config)
+    output_root = Path(experiment_config.output_root).resolve()
+    csv_path = (
+        Path(comparison_csv_path).resolve()
+        if comparison_csv_path is not None
+        else output_root / "results" / "input_fusion_comparison.csv"
+    )
+
+    base_config_dict = asdict(experiment_config)
+    comparison_rows: list[dict[str, Any]] = []
+
+    for input_mode, variant in INPUT_FUSION_VARIANTS:
+        experiment_name = _input_fusion_experiment_name(
+            experiment_config.experiment_name,
+            base_input_mode=experiment_config.input_mode,
+            input_mode=input_mode,
+        )
+        summary_path = _input_fusion_summary_path(output_root, experiment_name)
+
+        if skip_existing and summary_path.is_file():
+            logger.info(
+                "Reusing existing input fusion result | input_mode=%s | summary=%s",
+                input_mode,
+                summary_path,
+            )
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            result_source = "reused"
+        else:
+            logger.info(
+                "Running input fusion experiment | input_mode=%s | experiment_name=%s",
+                input_mode,
+                experiment_name,
+            )
+            run_config = dict(base_config_dict)
+            run_config["experiment_name"] = experiment_name
+            run_config["input_mode"] = input_mode
+            summary = train_legacy_classifier(run_config)
+            result_source = "trained"
+            summary_path = Path(summary.get("checkpoint_path", "")).resolve().parents[1] / "results" / f"{experiment_name}_summary.json"
+            if not summary_path.is_file():
+                summary_path = _input_fusion_summary_path(output_root, experiment_name)
+
+        comparison_rows.append(
+            _input_fusion_row(
+                summary,
+                variant=variant,
+                result_source=result_source,
+                summary_path=summary_path,
+            )
+        )
+
+    _write_rows_csv(csv_path, INPUT_FUSION_COLUMNS, comparison_rows)
+    best_row = max(
+        comparison_rows,
+        key=lambda row: (
+            float(row.get("test_f1") or 0.0),
+            float(row.get("test_recall") or 0.0),
+            float(row.get("test_roc_auc") or 0.0),
+        ),
+    )
+    logger.info(
+        "Input fusion comparison complete | best_variant=%s | input_mode=%s | test_f1=%.4f | csv=%s",
+        best_row["variant"],
+        best_row["input_mode"],
+        float(best_row.get("test_f1") or 0.0),
+        csv_path,
+    )
+    return {
+        "base_experiment_name": experiment_config.experiment_name,
+        "model_name": _normalize_model_name(experiment_config.model_name),
+        "pretrained": bool(experiment_config.pretrained),
+        "comparison_csv_path": str(csv_path),
+        "best_variant": best_row["variant"],
+        "best_input_mode": best_row["input_mode"],
+        "best_test_f1": float(best_row.get("test_f1") or 0.0),
+        "results": comparison_rows,
+    }
+
+
+def _preprocessing_experiment_name(
+    base_experiment_name: str,
+    *,
+    base_image_size: int,
+    base_resize_mode: str,
+    base_normalize: bool,
+    image_size: int,
+    resize_mode: str,
+    normalize: bool,
+    variant: str,
+) -> str:
+    if (
+        int(image_size) == int(base_image_size)
+        and str(resize_mode).strip().lower() == str(base_resize_mode).strip().lower()
+        and bool(normalize) == bool(base_normalize)
+    ):
+        return str(base_experiment_name)
+    return f"{base_experiment_name}_{variant}"
+
+
+def _preprocessing_summary_path(output_root: Path, experiment_name: str) -> Path:
+    return output_root / "results" / f"{experiment_name}_summary.json"
+
+
+def _preprocessing_row(
+    summary: dict[str, Any],
+    *,
+    variant: str,
+    description: str,
+    result_source: str,
+    summary_path: Path,
+) -> dict[str, Any]:
+    return {
+        "variant": variant,
+        "description": description,
+        "experiment_name": summary.get("experiment_name", ""),
+        "result_source": result_source,
+        "model_name": summary.get("model_name", ""),
+        "pretrained": summary.get("pretrained", ""),
+        "input_mode": summary.get("input_mode", ""),
+        "seed": summary.get("seed", ""),
+        "image_size": summary.get("image_size", ""),
+        "resize_mode": summary.get("resize_mode", ""),
+        "normalize": summary.get("normalize", ""),
+        "batch_size": summary.get("batch_size", ""),
+        "epochs_requested": summary.get("epochs_requested", ""),
+        "epochs_ran": summary.get("epochs_ran", ""),
+        "best_epoch": summary.get("best_epoch", ""),
+        "best_threshold": summary.get("best_threshold", ""),
+        "val_accuracy": summary.get("val_accuracy", ""),
+        "val_recall": summary.get("val_recall", ""),
+        "val_f1": summary.get("val_f1", ""),
+        "val_roc_auc": summary.get("val_roc_auc", ""),
+        "test_accuracy": summary.get("test_accuracy", ""),
+        "test_recall": summary.get("test_recall", ""),
+        "test_f1": summary.get("test_f1", ""),
+        "test_roc_auc": summary.get("test_roc_auc", ""),
+        "avg_epoch_seconds": summary.get("avg_epoch_seconds", ""),
+        "peak_gpu_memory_mb": summary.get("peak_gpu_memory_mb", ""),
+        "summary_path": str(summary_path),
+        "checkpoint_path": summary.get("checkpoint_path", ""),
+    }
+
+
+def run_legacy_preprocessing_comparison(
+    base_config: str | Path | dict[str, Any],
+    *,
+    comparison_csv_path: str | Path | None = None,
+    skip_existing: bool = True,
+) -> dict[str, Any]:
+    """Run Exp-5 by comparing image-size and preprocessing strategies."""
+
+    experiment_config = load_experiment_config(base_config)
+    output_root = Path(experiment_config.output_root).resolve()
+    csv_path = (
+        Path(comparison_csv_path).resolve()
+        if comparison_csv_path is not None
+        else output_root / "results" / "preprocessing_comparison.csv"
+    )
+
+    base_config_dict = asdict(experiment_config)
+    comparison_rows: list[dict[str, Any]] = []
+
+    for variant_config in PREPROCESSING_VARIANTS:
+        variant = str(variant_config["variant"])
+        description = str(variant_config["description"])
+        image_size = int(variant_config["image_size"])
+        resize_mode = str(variant_config["resize_mode"])
+        normalize = bool(variant_config["normalize"])
+        experiment_name = _preprocessing_experiment_name(
+            experiment_config.experiment_name,
+            base_image_size=experiment_config.image_size,
+            base_resize_mode=experiment_config.resize_mode,
+            base_normalize=experiment_config.normalize,
+            image_size=image_size,
+            resize_mode=resize_mode,
+            normalize=normalize,
+            variant=variant,
+        )
+        summary_path = _preprocessing_summary_path(output_root, experiment_name)
+
+        if skip_existing and summary_path.is_file():
+            logger.info(
+                "Reusing existing preprocessing result | variant=%s | summary=%s",
+                variant,
+                summary_path,
+            )
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            result_source = "reused"
+        else:
+            logger.info(
+                "Running preprocessing experiment | variant=%s | image_size=%s | resize_mode=%s | normalize=%s | experiment_name=%s",
+                variant,
+                image_size,
+                resize_mode,
+                normalize,
+                experiment_name,
+            )
+            run_config = dict(base_config_dict)
+            run_config["experiment_name"] = experiment_name
+            run_config["image_size"] = image_size
+            run_config["resize_mode"] = resize_mode
+            run_config["normalize"] = normalize
+            summary = train_legacy_classifier(run_config)
+            result_source = "trained"
+            summary_path = _preprocessing_summary_path(output_root, experiment_name)
+
+        summary.setdefault("image_size", image_size)
+        summary.setdefault("resize_mode", resize_mode)
+        summary.setdefault("normalize", normalize)
+        summary.setdefault("avg_epoch_seconds", 0.0)
+        summary.setdefault("peak_gpu_memory_mb", 0.0)
+
+        comparison_rows.append(
+            _preprocessing_row(
+                summary,
+                variant=variant,
+                description=description,
+                result_source=result_source,
+                summary_path=summary_path,
+            )
+        )
+
+    _write_rows_csv(csv_path, PREPROCESSING_COLUMNS, comparison_rows)
+    best_row = max(
+        comparison_rows,
+        key=lambda row: (
+            float(row.get("test_f1") or 0.0),
+            float(row.get("test_recall") or 0.0),
+            float(row.get("test_roc_auc") or 0.0),
+        ),
+    )
+    fastest_row = min(
+        comparison_rows,
+        key=lambda row: float(row.get("avg_epoch_seconds") or float("inf")),
+    )
+    lowest_memory_row = min(
+        comparison_rows,
+        key=lambda row: float(row.get("peak_gpu_memory_mb") or float("inf")),
+    )
+    logger.info(
+        "Preprocessing comparison complete | best_variant=%s | test_f1=%.4f | fastest=%s | lowest_memory=%s | csv=%s",
+        best_row["variant"],
+        float(best_row.get("test_f1") or 0.0),
+        fastest_row["variant"],
+        lowest_memory_row["variant"],
+        csv_path,
+    )
+    return {
+        "base_experiment_name": experiment_config.experiment_name,
+        "model_name": _normalize_model_name(experiment_config.model_name),
+        "pretrained": bool(experiment_config.pretrained),
+        "comparison_csv_path": str(csv_path),
+        "best_variant": best_row["variant"],
+        "best_test_f1": float(best_row.get("test_f1") or 0.0),
+        "fastest_variant": fastest_row["variant"],
+        "lowest_memory_variant": lowest_memory_row["variant"],
+        "results": comparison_rows,
+    }
 
 
 def evaluate_legacy_checkpoint(
@@ -1071,7 +1528,11 @@ def evaluate_legacy_checkpoint(
         pin_memory=torch.cuda.is_available(),
     )
 
-    model = create_experiment_model(checkpoint.get("model_name", config.model_name), pretrained=False)
+    model = create_experiment_model(
+        checkpoint.get("model_name", config.model_name),
+        pretrained=False,
+        image_size=int(config.image_size),
+    )
     model.load_state_dict(checkpoint["state_dict"])
     model = model.to(runtime_device)
 
