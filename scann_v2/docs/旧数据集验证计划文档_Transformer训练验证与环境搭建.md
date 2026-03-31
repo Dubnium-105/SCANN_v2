@@ -531,6 +531,59 @@ dataset/
 2. Small
 3. Base
 
+完成状态：
+- 已完成基于 `Swin-T / Swin-S / Swin-B` 的模型规模对比实验（2026-03-31）
+
+实际执行：
+- 采用分层 Transformer 系列 `Swin` 作为 Tiny / Small / Base 的具体实现，对应：
+  - `Tiny`：`Swin-T`
+  - `Small`：`Swin-S`
+  - `Base`：`Swin-B`
+- 固定使用 `pretrained=True`
+- 固定使用 `new_old_diff` 输入方案
+- 固定使用 `224 x 224`、`resize + normalize` 预处理
+- 固定使用同一份 manifest 划分，保持 `train=3671 / val=786 / test=786`
+- 固定随机种子 `42`、学习率 `5e-5`、优化器 `AdamW`、调度器 `cosine`
+- 统一 batch size 为 `8`，以保证三组模型都能在当前单卡环境稳定训练
+
+当前结果：
+- `Tiny / Swin-T`
+  - Accuracy：`0.9669`
+  - Recall：`0.9536`
+  - F1-score：`0.9620`
+  - ROC-AUC：`0.9945`
+  - 参数量：`27,520,892`
+  - 收敛轮次：`36 epoch` 早停，最佳轮次 `26`
+  - 平均每轮训练+验证时间：`23.60 s`
+  - 峰值显存占用：`1189.62 MB`
+- `Small / Swin-S`
+  - Accuracy：`0.9567`
+  - Recall：`0.9652`
+  - F1-score：`0.9514`
+  - ROC-AUC：`0.9946`
+  - 参数量：`48,838,796`
+  - 收敛轮次：`24 epoch` 早停，最佳轮次 `14`
+  - 平均每轮训练+验证时间：`33.99 s`
+  - 峰值显存占用：`1922.92 MB`
+- `Base / Swin-B`
+  - Accuracy：`0.9593`
+  - Recall：`0.9623`
+  - F1-score：`0.9540`
+  - ROC-AUC：`0.9934`
+  - 参数量：`86,745,274`
+  - 收敛轮次：`21 epoch` 早停，最佳轮次 `11`
+  - 平均每轮训练+验证时间：`45.13 s`
+  - 峰值显存占用：`3037.54 MB`
+
+结论：
+- 结论：在当前旧数据集规模下，`Tiny / Swin-T` 的综合表现最佳，测试集 F1 达到 `0.9620`
+- 结论：模型从 Tiny 扩展到 Small / Base 后，并未带来性能提升，反而在训练时间和显存占用上明显增加
+- 结论：`Swin-S` 的 Recall 略高于 `Swin-T`，但 Precision 下降，最终 F1 仍低于 Tiny
+- 结论：`Swin-B` 的容量进一步增大后，测试集 F1 仍未超过 `Swin-T`，说明当前旧数据规模不足以支撑更大模型稳定获益
+- 结论：从性能、训练效率和显存成本综合看，当前最适合旧数据主实验的模型规模为 `Tiny`
+- 推荐：后续分层 Transformer 路线优先使用 `Swin-T` 作为默认规模配置
+- 推荐：若后续切换到更大规模新数据集，可再重新评估 `Swin-S / Swin-B` 的容量收益
+
 记录指标：
 - Accuracy
 - F1-score
@@ -541,6 +594,10 @@ dataset/
 
 输出：
 - model_scale_comparison.csv
+- `scann_v2/experiments/results/model_scale_comparison.csv`
+- `scann_v2/experiments/results/legacy_swin_t_pretrained_gpu_summary.json`
+- `scann_v2/experiments/results/legacy_swin_t_pretrained_gpu_small_summary.json`
+- `scann_v2/experiments/results/legacy_swin_t_pretrained_gpu_base_summary.json`
 
 ---
 

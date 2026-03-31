@@ -182,6 +182,53 @@ PREPROCESSING_COLUMNS = [
     "summary_path",
     "checkpoint_path",
 ]
+MODEL_SCALE_VARIANTS = [
+    {
+        "variant": "tiny",
+        "description": "Swin-T",
+        "model_name": "swin_t",
+    },
+    {
+        "variant": "small",
+        "description": "Swin-S",
+        "model_name": "swin_s",
+    },
+    {
+        "variant": "base",
+        "description": "Swin-B",
+        "model_name": "swin_b",
+    },
+]
+MODEL_SCALE_COLUMNS = [
+    "variant",
+    "description",
+    "experiment_name",
+    "result_source",
+    "model_name",
+    "pretrained",
+    "input_mode",
+    "seed",
+    "image_size",
+    "resize_mode",
+    "batch_size",
+    "epochs_requested",
+    "epochs_ran",
+    "best_epoch",
+    "best_threshold",
+    "val_accuracy",
+    "val_recall",
+    "val_f1",
+    "val_roc_auc",
+    "test_accuracy",
+    "test_recall",
+    "test_f1",
+    "test_roc_auc",
+    "params",
+    "avg_epoch_seconds",
+    "peak_gpu_memory_mb",
+    "summary_path",
+    "checkpoint_path",
+]
 
 
 @dataclass
@@ -281,6 +328,9 @@ def _normalize_model_name(model_name: str) -> str:
         "legacy_resnet18": "resnet18",
         "vit_baseline": "vit_b_16",
         "vit_b16": "vit_b_16",
+        "swin_tiny": "swin_t",
+        "swin_small": "swin_s",
+        "swin_base": "swin_b",
     }
     return aliases.get(normalized, normalized)
 
@@ -321,6 +371,27 @@ def create_experiment_model(model_name: str, *, pretrained: bool, image_size: in
             weights = models.ViT_B_16_Weights.DEFAULT if pretrained else None
             model = models.vit_b_16(weights=weights, image_size=resolved_image_size)
         model.heads.head = nn.Linear(model.heads.head.in_features, 2)
+        return model
+    if normalized == "swin_t":
+        weights = models.Swin_T_Weights.DEFAULT if pretrained else None
+        model = models.swin_t(weights=None)
+        if weights is not None:
+            model.load_state_dict(weights.get_state_dict(progress=True, check_hash=False))
+        model.head = nn.Linear(model.head.in_features, 2)
+        return model
+    if normalized == "swin_s":
+        weights = models.Swin_S_Weights.DEFAULT if pretrained else None
+        model = models.swin_s(weights=None)
+        if weights is not None:
+            model.load_state_dict(weights.get_state_dict(progress=True, check_hash=False))
+        model.head = nn.Linear(model.head.in_features, 2)
+        return model
+    if normalized == "swin_b":
+        weights = models.Swin_B_Weights.DEFAULT if pretrained else None
+        model = models.swin_b(weights=None)
+        if weights is not None:
+            model.load_state_dict(weights.get_state_dict(progress=True, check_hash=False))
+        model.head = nn.Linear(model.head.in_features, 2)
         return model
     raise ValueError(f"Unsupported model name: {model_name}")
 
@@ -914,7 +985,8 @@ def train_legacy_classifier(config: str | Path | dict[str, Any]) -> dict[str, An
         pretrained=experiment_config.pretrained,
         image_size=experiment_config.image_size,
     ).to(device)
-    logger.info("Model parameters: %s", f"{_parameter_count(model):,}")
+    parameter_count = int(_parameter_count(model))
+    logger.info("Model parameters: %s", f"{parameter_count:,}")
     criterion = _criterion_from_config(experiment_config).to(device)
     optimizer = _optimizer_from_config(model, experiment_config)
     scheduler = _scheduler_from_config(optimizer, experiment_config)
@@ -1125,6 +1197,7 @@ def train_legacy_classifier(config: str | Path | dict[str, Any]) -> dict[str, An
         "test_fp": int(test_result["fp"]),
         "test_fn": int(test_result["fn"]),
         "test_tp": int(test_result["tp"]),
+        "params": parameter_count,
         "avg_epoch_seconds": avg_epoch_seconds,
         "peak_gpu_memory_mb": float(peak_gpu_memory_mb),
         "manifest_path": str(paths["manifest_path"]),
@@ -1471,6 +1544,167 @@ def run_legacy_preprocessing_comparison(
         "pretrained": bool(experiment_config.pretrained),
         "comparison_csv_path": str(csv_path),
         "best_variant": best_row["variant"],
+        "best_test_f1": float(best_row.get("test_f1") or 0.0),
+        "fastest_variant": fastest_row["variant"],
+        "lowest_memory_variant": lowest_memory_row["variant"],
+        "results": comparison_rows,
+    }
+
+
+def _model_scale_experiment_name(
+    base_experiment_name: str,
+    *,
+    base_model_name: str,
+    model_name: str,
+    variant: str,
+) -> str:
+    normalized_base_model = _normalize_model_name(base_model_name)
+    normalized_model = _normalize_model_name(model_name)
+    if normalized_model == normalized_base_model:
+        return str(base_experiment_name)
+    return f"{base_experiment_name}_{variant}"
+
+
+def _model_scale_summary_path(output_root: Path, experiment_name: str) -> Path:
+    return output_root / "results" / f"{experiment_name}_summary.json"
+
+
+def _model_scale_row(
+    summary: dict[str, Any],
+    *,
+    variant: str,
+    description: str,
+    result_source: str,
+    summary_path: Path,
+) -> dict[str, Any]:
+    return {
+        "variant": variant,
+        "description": description,
+        "experiment_name": summary.get("experiment_name", ""),
+        "result_source": result_source,
+        "model_name": summary.get("model_name", ""),
+        "pretrained": summary.get("pretrained", ""),
+        "input_mode": summary.get("input_mode", ""),
+        "seed": summary.get("seed", ""),
+        "image_size": summary.get("image_size", ""),
+        "resize_mode": summary.get("resize_mode", ""),
+        "batch_size": summary.get("batch_size", ""),
+        "epochs_requested": summary.get("epochs_requested", ""),
+        "epochs_ran": summary.get("epochs_ran", ""),
+        "best_epoch": summary.get("best_epoch", ""),
+        "best_threshold": summary.get("best_threshold", ""),
+        "val_accuracy": summary.get("val_accuracy", ""),
+        "val_recall": summary.get("val_recall", ""),
+        "val_f1": summary.get("val_f1", ""),
+        "val_roc_auc": summary.get("val_roc_auc", ""),
+        "test_accuracy": summary.get("test_accuracy", ""),
+        "test_recall": summary.get("test_recall", ""),
+        "test_f1": summary.get("test_f1", ""),
+        "test_roc_auc": summary.get("test_roc_auc", ""),
+        "params": summary.get("params", ""),
+        "avg_epoch_seconds": summary.get("avg_epoch_seconds", ""),
+        "peak_gpu_memory_mb": summary.get("peak_gpu_memory_mb", ""),
+        "summary_path": str(summary_path),
+        "checkpoint_path": summary.get("checkpoint_path", ""),
+    }
+
+
+def run_legacy_model_scale_comparison(
+    base_config: str | Path | dict[str, Any],
+    *,
+    comparison_csv_path: str | Path | None = None,
+    skip_existing: bool = True,
+) -> dict[str, Any]:
+    """Run Exp-7 by comparing Swin Tiny/Small/Base model scales."""
+
+    experiment_config = load_experiment_config(base_config)
+    output_root = Path(experiment_config.output_root).resolve()
+    csv_path = (
+        Path(comparison_csv_path).resolve()
+        if comparison_csv_path is not None
+        else output_root / "results" / "model_scale_comparison.csv"
+    )
+
+    base_config_dict = asdict(experiment_config)
+    comparison_rows: list[dict[str, Any]] = []
+
+    for variant_config in MODEL_SCALE_VARIANTS:
+        variant = str(variant_config["variant"])
+        description = str(variant_config["description"])
+        model_name = str(variant_config["model_name"])
+        experiment_name = _model_scale_experiment_name(
+            experiment_config.experiment_name,
+            base_model_name=experiment_config.model_name,
+            model_name=model_name,
+            variant=variant,
+        )
+        summary_path = _model_scale_summary_path(output_root, experiment_name)
+
+        if skip_existing and summary_path.is_file():
+            logger.info(
+                "Reusing existing model-scale result | variant=%s | model=%s | summary=%s",
+                variant,
+                model_name,
+                summary_path,
+            )
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            result_source = "reused"
+        else:
+            logger.info(
+                "Running model-scale experiment | variant=%s | model=%s | experiment_name=%s",
+                variant,
+                model_name,
+                experiment_name,
+            )
+            run_config = dict(base_config_dict)
+            run_config["experiment_name"] = experiment_name
+            run_config["model_name"] = model_name
+            summary = train_legacy_classifier(run_config)
+            result_source = "trained"
+            summary_path = _model_scale_summary_path(output_root, experiment_name)
+
+        comparison_rows.append(
+            _model_scale_row(
+                summary,
+                variant=variant,
+                description=description,
+                result_source=result_source,
+                summary_path=summary_path,
+            )
+        )
+
+    _write_rows_csv(csv_path, MODEL_SCALE_COLUMNS, comparison_rows)
+    best_row = max(
+        comparison_rows,
+        key=lambda row: (
+            float(row.get("test_f1") or 0.0),
+            float(row.get("test_recall") or 0.0),
+            float(row.get("test_roc_auc") or 0.0),
+        ),
+    )
+    fastest_row = min(
+        comparison_rows,
+        key=lambda row: float(row.get("avg_epoch_seconds") or float("inf")),
+    )
+    lowest_memory_row = min(
+        comparison_rows,
+        key=lambda row: float(row.get("peak_gpu_memory_mb") or float("inf")),
+    )
+    logger.info(
+        "Model-scale comparison complete | best_variant=%s | test_f1=%.4f | fastest=%s | lowest_memory=%s | csv=%s",
+        best_row["variant"],
+        float(best_row.get("test_f1") or 0.0),
+        fastest_row["variant"],
+        lowest_memory_row["variant"],
+        csv_path,
+    )
+    return {
+        "base_experiment_name": experiment_config.experiment_name,
+        "base_model_name": _normalize_model_name(experiment_config.model_name),
+        "pretrained": bool(experiment_config.pretrained),
+        "comparison_csv_path": str(csv_path),
+        "best_variant": best_row["variant"],
+        "best_model_name": best_row["model_name"],
         "best_test_f1": float(best_row.get("test_f1") or 0.0),
         "fastest_variant": fastest_row["variant"],
         "lowest_memory_variant": lowest_memory_row["variant"],

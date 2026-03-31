@@ -6,6 +6,9 @@ from .legacy_runner import (
     LegacyExperimentConfig,
     evaluate_legacy_checkpoint,
     load_experiment_config,
+    run_legacy_input_fusion_comparison,
+    run_legacy_model_scale_comparison,
+    run_legacy_preprocessing_comparison,
     train_legacy_classifier,
 )
 
@@ -16,5 +19,8 @@ __all__ = [
     "evaluate_legacy_checkpoint",
     "load_experiment_config",
     "load_legacy_manifest",
+    "run_legacy_input_fusion_comparison",
+    "run_legacy_model_scale_comparison",
+    "run_legacy_preprocessing_comparison",
     "train_legacy_classifier",
 ]
