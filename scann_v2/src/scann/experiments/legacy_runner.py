@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import copy
 import csv
+import io
+import importlib.util
 import json
 import logging
+import math
 import random
 import sys
 import time
+import types
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +22,7 @@ import matplotlib
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from sklearn.metrics import (
     average_precision_score,
@@ -27,6 +33,7 @@ from sklearn.metrics import (
 )
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from torchvision import models
+from torchvision.models import swin_transformer
 from torchvision.models.vision_transformer import interpolate_embeddings
 
 from scann.ai.device_utils import resolve_device
@@ -228,6 +235,31 @@ MODEL_SCALE_COLUMNS = [
     "peak_gpu_memory_mb",
     "summary_path",
     "checkpoint_path",
+]
+QUANTIZATION_COLUMNS = [
+    "variant",
+    "description",
+    "result_source",
+    "status",
+    "runnable",
+    "model_name",
+    "experiment_name",
+    "split",
+    "threshold",
+    "test_accuracy",
+    "test_precision",
+    "test_recall",
+    "test_f1",
+    "test_roc_auc",
+    "delta_accuracy_vs_fp32",
+    "delta_f1_vs_fp32",
+    "cpu_ms_per_image",
+    "gpu_ms_per_image",
+    "cpu_peak_memory_mb",
+    "gpu_peak_memory_mb",
+    "model_state_size_mb",
+    "checkpoint_path",
+    "notes",
 ]
 
 
@@ -1710,6 +1742,1083 @@ def run_legacy_model_scale_comparison(
         "lowest_memory_variant": lowest_memory_row["variant"],
         "results": comparison_rows,
     }
+
+
+class Int4WeightOnlyLinear(nn.Module):
+    """A lightweight pluggable INT4-style weight-only linear layer for smoke tests."""
+
+    def __init__(self, qweight: torch.Tensor, scale: torch.Tensor, bias: torch.Tensor | None) -> None:
+        super().__init__()
+        self.register_buffer("qweight", qweight.to(torch.int8))
+        self.register_buffer("scale", scale.to(torch.float32))
+        if bias is None:
+            self.bias = None
+        else:
+            self.register_buffer("bias", bias.to(torch.float32))
+
+    @classmethod
+    def from_float(cls, module: nn.Linear) -> "Int4WeightOnlyLinear":
+        weight = module.weight.detach().to(torch.float32)
+        scale = weight.abs().amax(dim=1, keepdim=True).clamp_min(1e-8) / 7.0
+        qweight = torch.clamp(torch.round(weight / scale), min=-8, max=7).to(torch.int8)
+        bias = None if module.bias is None else module.bias.detach().clone()
+        return cls(qweight=qweight, scale=scale, bias=bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        weight = self.qweight.to(dtype=x.dtype) * self.scale.to(device=x.device, dtype=x.dtype)
+        bias = None if self.bias is None else self.bias.to(device=x.device, dtype=x.dtype)
+        return nn.functional.linear(x, weight, bias)
+
+    @property
+    def weight(self) -> torch.Tensor:
+        return self.qweight.to(torch.float32) * self.scale
+
+
+def _replace_modules(
+    module: nn.Module,
+    *,
+    target_type: type[nn.Module],
+    replace_fn: Any,
+) -> nn.Module:
+    for child_name, child_module in list(module.named_children()):
+        if isinstance(child_module, target_type):
+            setattr(module, child_name, replace_fn(child_module))
+            continue
+        _replace_modules(child_module, target_type=target_type, replace_fn=replace_fn)
+    return module
+
+
+def create_int4_weight_only_model(model: nn.Module) -> nn.Module:
+    cloned = copy.deepcopy(model).cpu().eval()
+    return _replace_modules(
+        cloned,
+        target_type=nn.Linear,
+        replace_fn=Int4WeightOnlyLinear.from_float,
+    )
+
+
+def _load_legacy_checkpoint_bundle(
+    checkpoint_path: str | Path,
+    *,
+    config_override: str | Path | dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], LegacyExperimentConfig, nn.Module]:
+    checkpoint_file = Path(checkpoint_path).resolve()
+    checkpoint = torch.load(checkpoint_file, map_location="cpu")
+    if config_override is None:
+        config = load_experiment_config(checkpoint.get("config") or {})
+    elif isinstance(config_override, LegacyExperimentConfig):
+        config = config_override
+    else:
+        config = load_experiment_config(config_override)
+    model = create_experiment_model(
+        checkpoint.get("model_name", config.model_name),
+        pretrained=False,
+        image_size=int(config.image_size),
+    )
+    model.load_state_dict(checkpoint["state_dict"])
+    model.eval()
+    return checkpoint, config, model
+
+
+def _build_eval_loader_for_split(
+    config: LegacyExperimentConfig,
+    *,
+    split: str,
+) -> tuple[LegacyTripletExperimentDataset, DataLoader]:
+    dataset = LegacyTripletExperimentDataset(
+        config.manifest_path,
+        split=split,
+        dataset_root=config.dataset_dir,
+        input_mode=config.input_mode,
+        image_size=config.image_size,
+        resize_mode=config.resize_mode,
+        normalize=config.normalize,
+        augment=False,
+    )
+    loader = DataLoader(
+        dataset,
+        batch_size=int(config.batch_size),
+        shuffle=False,
+        num_workers=int(config.num_workers),
+        pin_memory=torch.cuda.is_available(),
+    )
+    return dataset, loader
+
+
+@torch.no_grad()
+def benchmark_legacy_model_inference(
+    model: nn.Module,
+    config: LegacyExperimentConfig,
+    *,
+    split: str = "test",
+    device: str = "cpu",
+    threshold: float = 0.5,
+    input_dtype: torch.dtype | None = None,
+    clone_model: bool = True,
+) -> dict[str, Any]:
+    try:
+        import psutil
+    except ImportError:
+        psutil = None
+
+    runtime_device = torch.device(device)
+    dataset, loader = _build_eval_loader_for_split(config, split=split)
+    if clone_model:
+        model = copy.deepcopy(model)
+    model = model.to(runtime_device).eval()
+
+    process = psutil.Process() if psutil is not None else None
+    peak_cpu_memory_mb = (
+        float(process.memory_info().rss) / (1024.0 * 1024.0) if process is not None else 0.0
+    )
+    peak_gpu_memory_mb = 0.0
+    probs_list: list[np.ndarray] = []
+    labels_list: list[np.ndarray] = []
+    total_images = 0
+
+    if runtime_device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(runtime_device)
+        torch.cuda.synchronize(runtime_device)
+
+    start_time = time.perf_counter()
+    for x, y in loader:
+        x = x.to(runtime_device)
+        if input_dtype is not None:
+            x = x.to(dtype=input_dtype)
+        y = y.to(runtime_device)
+        logits = model(x)
+        probs = torch.softmax(logits, dim=1)[:, 1]
+        probs_list.append(probs.detach().to(torch.float32).cpu().numpy())
+        labels_list.append(y.detach().cpu().numpy())
+        total_images += int(x.size(0))
+        if process is not None:
+            peak_cpu_memory_mb = max(
+                peak_cpu_memory_mb,
+                float(process.memory_info().rss) / (1024.0 * 1024.0),
+            )
+        if runtime_device.type == "cuda":
+            torch.cuda.synchronize(runtime_device)
+            peak_gpu_memory_mb = max(
+                peak_gpu_memory_mb,
+                float(torch.cuda.max_memory_allocated(runtime_device)) / (1024.0 * 1024.0),
+            )
+    total_seconds = time.perf_counter() - start_time
+
+    if not probs_list:
+        raise ValueError("Evaluation loader produced no batches")
+
+    probs = np.concatenate(probs_list)
+    labels = np.concatenate(labels_list)
+    metrics = _compute_binary_metrics(labels, probs, threshold=threshold)
+    metrics["split"] = str(split).strip().lower()
+    metrics["device"] = runtime_device.type
+    metrics["seconds_total"] = float(total_seconds)
+    metrics["ms_per_image"] = float((total_seconds / max(total_images, 1)) * 1000.0)
+    metrics["peak_cpu_memory_mb"] = float(peak_cpu_memory_mb)
+    metrics["peak_gpu_memory_mb"] = float(peak_gpu_memory_mb)
+    metrics["labels"] = labels
+    metrics["probs"] = probs
+    metrics["entries"] = [dataset.entry(index) for index in range(len(dataset))]
+    return metrics
+
+
+def _load_torchao_quantization_api() -> tuple[Any, Any]:
+    try:
+        import torchao.quantization as torchao_quantization
+        import torchao.quantization.quant_api as torchao_quant_api
+
+        return torchao_quantization, torchao_quant_api
+    except Exception:
+        spec = importlib.util.find_spec("torchao")
+        if spec is None or not spec.submodule_search_locations:
+            raise
+
+        package_root = Path(next(iter(spec.submodule_search_locations))).resolve()
+        root_init = package_root / "__init__.py"
+        quant_init = package_root / "quantization" / "__init__.py"
+        quant_api_path = package_root / "quantization" / "quant_api.py"
+        if not quant_init.is_file() or not quant_api_path.is_file():
+            raise ImportError(f"torchao quantization package not found under {package_root}")
+
+        sys.modules.pop("torchao", None)
+        sys.modules.pop("torchao.quantization", None)
+        sys.modules.pop("torchao.quantization.quant_api", None)
+
+        pkg = types.ModuleType("torchao")
+        pkg.__path__ = [str(package_root)]
+        pkg.__file__ = str(root_init)
+        sys.modules["torchao"] = pkg
+
+        quant_spec = importlib.util.spec_from_file_location(
+            "torchao.quantization",
+            quant_init,
+            submodule_search_locations=[str(package_root / "quantization")],
+        )
+        if quant_spec is None or quant_spec.loader is None:
+            raise ImportError(f"Unable to construct import spec for {quant_init}")
+        quant_module = importlib.util.module_from_spec(quant_spec)
+        sys.modules["torchao.quantization"] = quant_module
+        pkg.quantization = quant_module
+        quant_spec.loader.exec_module(quant_module)
+
+        import torchao.quantization.quant_api as torchao_quant_api
+
+        return quant_module, torchao_quant_api
+
+
+def _estimate_model_state_size_mb(model: nn.Module) -> float:
+    buffer = io.BytesIO()
+    torch.save(model.state_dict(), buffer)
+    return float(buffer.tell()) / (1024.0 * 1024.0)
+
+
+def _quantization_summary_path(output_root: Path, experiment_name: str) -> Path:
+    return output_root / "results" / f"{experiment_name}_quantization_smoke_summary.json"
+
+
+@dataclass(frozen=True)
+class TurboQuantVariantConfig:
+    variant: str
+    description: str
+    mode: str
+    bits: int
+    base_bits: int | None = None
+    qjl_dim: int = 0
+    distribution: str = "beta"
+    distribution_alpha: float = 2.0
+    distribution_beta: float = 2.0
+    sample_size: int = 200_000
+    iterations: int = 48
+    centroid_seed: int = 42
+    rotation_seed: int = 1234
+    projection_seed: int = 5678
+
+
+TURBOQUANT_VARIANTS = [
+    TurboQuantVariantConfig(
+        variant="turboquant_mse_b3",
+        description="TurboQuant MSE 3-bit",
+        mode="mse",
+        bits=3,
+    ),
+    TurboQuantVariantConfig(
+        variant="turboquant_mse_b4",
+        description="TurboQuant MSE 4-bit",
+        mode="mse",
+        bits=4,
+    ),
+    TurboQuantVariantConfig(
+        variant="turboquant_prod_qjl_b4_m16",
+        description="TurboQuant prod 4-bit + QJL residual (m=16)",
+        mode="prod_qjl",
+        bits=4,
+        base_bits=3,
+        qjl_dim=16,
+    ),
+    TurboQuantVariantConfig(
+        variant="turboquant_prod_qjl_b4_m32",
+        description="TurboQuant prod 4-bit + QJL residual (m=32)",
+        mode="prod_qjl",
+        bits=4,
+        base_bits=3,
+        qjl_dim=32,
+    ),
+]
+
+
+def _turboquant_cache_dir(output_root: Path) -> Path:
+    cache_dir = output_root / "results" / "turboquant_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
+def _turboquant_centroid_cache_path(output_root: Path, config: TurboQuantVariantConfig, *, bits: int) -> Path:
+    return (
+        _turboquant_cache_dir(output_root)
+        / (
+            f"lloyd_max_{config.distribution}_bits{bits}_"
+            f"a{config.distribution_alpha:g}_b{config.distribution_beta:g}_"
+            f"seed{config.centroid_seed}.pt"
+        )
+    )
+
+
+def _turboquant_rotation_cache_path(output_root: Path, config: TurboQuantVariantConfig, *, dim: int) -> Path:
+    return _turboquant_cache_dir(output_root) / f"rotation_dim{dim}_seed{config.rotation_seed}.pt"
+
+
+def _turboquant_projection_cache_path(
+    output_root: Path,
+    config: TurboQuantVariantConfig,
+    *,
+    dim: int,
+    qjl_dim: int,
+) -> Path:
+    return (
+        _turboquant_cache_dir(output_root)
+        / f"qjl_projection_dim{dim}_m{qjl_dim}_seed{config.projection_seed}.pt"
+    )
+
+
+def _compute_lloyd_max_codebook(
+    *,
+    bits: int,
+    distribution: str,
+    alpha: float,
+    beta_value: float,
+    sample_size: int,
+    iterations: int,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    if bits <= 0:
+        raise ValueError("bits must be positive")
+    levels = 2**bits
+    rng = np.random.default_rng(seed)
+    if distribution != "beta":
+        raise ValueError(f"Unsupported distribution for Lloyd-Max codebook: {distribution}")
+
+    samples = rng.beta(alpha, beta_value, size=sample_size).astype(np.float64)
+    samples = (samples * 2.0) - 1.0
+    quantiles = np.linspace(0.0, 1.0, levels + 2, dtype=np.float64)[1:-1]
+    centroids = np.quantile(samples, quantiles)
+
+    for _ in range(max(1, int(iterations))):
+        boundaries = (centroids[:-1] + centroids[1:]) / 2.0
+        assignments = np.searchsorted(boundaries, samples, side="left")
+        updated = centroids.copy()
+        for level in range(levels):
+            mask = assignments == level
+            if np.any(mask):
+                updated[level] = float(np.mean(samples[mask]))
+        updated = np.sort(updated)
+        if np.allclose(updated, centroids, atol=1e-7, rtol=0.0):
+            centroids = updated
+            break
+        centroids = updated
+
+    boundaries = (centroids[:-1] + centroids[1:]) / 2.0
+    return centroids.astype(np.float32), boundaries.astype(np.float32)
+
+
+def _load_or_create_lloyd_max_codebook(
+    output_root: Path,
+    config: TurboQuantVariantConfig,
+    *,
+    bits: int,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    cache_path = _turboquant_centroid_cache_path(output_root, config, bits=bits)
+    if cache_path.is_file():
+        payload = torch.load(cache_path, map_location="cpu")
+        centroids = payload["centroids"]
+        boundaries = payload["boundaries"]
+    else:
+        centroids_np, boundaries_np = _compute_lloyd_max_codebook(
+            bits=bits,
+            distribution=config.distribution,
+            alpha=float(config.distribution_alpha),
+            beta_value=float(config.distribution_beta),
+            sample_size=int(config.sample_size),
+            iterations=int(config.iterations),
+            seed=int(config.centroid_seed),
+        )
+        centroids = torch.from_numpy(centroids_np)
+        boundaries = torch.from_numpy(boundaries_np)
+        torch.save(
+            {
+                "centroids": centroids,
+                "boundaries": boundaries,
+                "bits": bits,
+                "distribution": config.distribution,
+            },
+            cache_path,
+        )
+
+    return centroids.to(device=device, dtype=torch.float32), boundaries.to(device=device, dtype=torch.float32)
+
+
+def _load_or_create_random_rotation(
+    output_root: Path,
+    config: TurboQuantVariantConfig,
+    *,
+    dim: int,
+    device: torch.device,
+) -> torch.Tensor:
+    cache_path = _turboquant_rotation_cache_path(output_root, config, dim=dim)
+    if cache_path.is_file():
+        rotation = torch.load(cache_path, map_location="cpu")
+    else:
+        generator = torch.Generator(device="cpu").manual_seed(int(config.rotation_seed) + int(dim))
+        gaussian = torch.randn((dim, dim), generator=generator, dtype=torch.float32)
+        rotation, r = torch.linalg.qr(gaussian, mode="reduced")
+        signs = torch.sign(torch.diag(r))
+        signs = torch.where(signs == 0, torch.ones_like(signs), signs)
+        rotation = rotation * signs.unsqueeze(0)
+        torch.save(rotation, cache_path)
+    return rotation.to(device=device, dtype=torch.float32)
+
+
+def _load_or_create_qjl_projection(
+    output_root: Path,
+    config: TurboQuantVariantConfig,
+    *,
+    dim: int,
+    qjl_dim: int,
+    device: torch.device,
+) -> torch.Tensor:
+    cache_path = _turboquant_projection_cache_path(output_root, config, dim=dim, qjl_dim=qjl_dim)
+    if cache_path.is_file():
+        projection = torch.load(cache_path, map_location="cpu")
+    else:
+        generator = torch.Generator(device="cpu").manual_seed(
+            int(config.projection_seed) + int(dim) * 17 + int(qjl_dim)
+        )
+        gaussian = torch.randn((qjl_dim, dim), generator=generator, dtype=torch.float32)
+        projection = F.normalize(gaussian, dim=-1)
+        torch.save(projection, cache_path)
+    return projection.to(device=device, dtype=torch.float32)
+
+
+class TurboQuantRuntime:
+    """TurboQuant-style scalar codebook compression with optional QJL residual correction."""
+
+    def __init__(self, output_root: Path, config: TurboQuantVariantConfig) -> None:
+        self.output_root = Path(output_root).resolve()
+        self.config = config
+        self._centroid_cache: dict[tuple[int, str], tuple[torch.Tensor, torch.Tensor]] = {}
+        self._rotation_cache: dict[tuple[int, str], torch.Tensor] = {}
+        self._projection_cache: dict[tuple[int, int, str], torch.Tensor] = {}
+
+    def _codebook(self, *, bits: int, dim: int, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
+        key = (bits, str(device))
+        if key not in self._centroid_cache:
+            self._centroid_cache[key] = _load_or_create_lloyd_max_codebook(
+                self.output_root,
+                self.config,
+                bits=bits,
+                device=device,
+            )
+        return self._centroid_cache[key]
+
+    def _rotation(self, *, dim: int, device: torch.device) -> torch.Tensor:
+        key = (dim, str(device))
+        if key not in self._rotation_cache:
+            self._rotation_cache[key] = _load_or_create_random_rotation(
+                self.output_root,
+                self.config,
+                dim=dim,
+                device=device,
+            )
+        return self._rotation_cache[key]
+
+    def _projection(self, *, dim: int, qjl_dim: int, device: torch.device) -> torch.Tensor:
+        key = (dim, qjl_dim, str(device))
+        if key not in self._projection_cache:
+            self._projection_cache[key] = _load_or_create_qjl_projection(
+                self.output_root,
+                self.config,
+                dim=dim,
+                qjl_dim=qjl_dim,
+                device=device,
+            )
+        return self._projection_cache[key]
+
+    def _turboquant_mse(self, x: torch.Tensor, *, bits: int) -> torch.Tensor:
+        device = x.device
+        dim = int(x.shape[-1])
+        x_fp32 = x.to(torch.float32)
+        centroids, boundaries = self._codebook(bits=bits, dim=dim, device=device)
+        rotation = self._rotation(dim=dim, device=device)
+        rotated = torch.matmul(x_fp32, rotation.T)
+        indices = torch.bucketize(rotated.contiguous(), boundaries)
+        quantized = centroids[indices]
+        reconstructed = torch.matmul(quantized, rotation)
+        return reconstructed
+
+    def apply(self, x: torch.Tensor) -> torch.Tensor:
+        original_dtype = x.dtype
+        if self.config.mode == "mse":
+            reconstructed = self._turboquant_mse(x, bits=int(self.config.bits))
+            return reconstructed.to(dtype=original_dtype)
+
+        if self.config.mode == "prod_qjl":
+            base_bits = int(self.config.base_bits or max(int(self.config.bits) - 1, 1))
+            qjl_dim = int(self.config.qjl_dim)
+            x_fp32 = x.to(torch.float32)
+            mse_reconstructed = self._turboquant_mse(x, bits=base_bits)
+            residual = x_fp32 - mse_reconstructed
+            residual_norm = torch.linalg.vector_norm(residual, dim=-1, keepdim=True).clamp_min(1e-6)
+            projection = self._projection(dim=int(x.shape[-1]), qjl_dim=qjl_dim, device=x.device)
+            signed = torch.sign(torch.matmul(residual, projection.T))
+            signed = torch.where(signed == 0, torch.ones_like(signed), signed)
+            direction = torch.matmul(signed, projection)
+            direction_norm = torch.linalg.vector_norm(direction, dim=-1, keepdim=True).clamp_min(1e-6)
+            corrected = mse_reconstructed + (residual_norm * (direction / direction_norm))
+            return corrected.to(dtype=original_dtype)
+
+        raise ValueError(f"Unsupported TurboQuant mode: {self.config.mode}")
+
+
+def _shifted_window_attention_turboquant(
+    input_tensor: torch.Tensor,
+    module: swin_transformer.ShiftedWindowAttention,
+    runtime: TurboQuantRuntime,
+) -> torch.Tensor:
+    B, H, W, C = input_tensor.shape
+    window_size = list(module.window_size)
+    shift_size = list(module.shift_size)
+
+    pad_r = (window_size[1] - W % window_size[1]) % window_size[1]
+    pad_b = (window_size[0] - H % window_size[0]) % window_size[0]
+    x = F.pad(input_tensor, (0, 0, 0, pad_r, 0, pad_b))
+    _, pad_H, pad_W, _ = x.shape
+
+    if window_size[0] >= pad_H:
+        shift_size[0] = 0
+    if window_size[1] >= pad_W:
+        shift_size[1] = 0
+
+    if sum(shift_size) > 0:
+        x = torch.roll(x, shifts=(-shift_size[0], -shift_size[1]), dims=(1, 2))
+
+    num_windows = (pad_H // window_size[0]) * (pad_W // window_size[1])
+    x = x.view(B, pad_H // window_size[0], window_size[0], pad_W // window_size[1], window_size[1], C)
+    x = x.permute(0, 1, 3, 2, 4, 5).reshape(B * num_windows, window_size[0] * window_size[1], C)
+
+    qkv_bias = module.qkv.bias
+    logit_scale = getattr(module, "logit_scale", None)
+    if logit_scale is not None and qkv_bias is not None:
+        qkv_bias = qkv_bias.clone()
+        length = qkv_bias.numel() // 3
+        qkv_bias[length : 2 * length].zero_()
+
+    qkv = F.linear(x, module.qkv.weight, qkv_bias)
+    qkv = qkv.reshape(x.size(0), x.size(1), 3, module.num_heads, C // module.num_heads).permute(2, 0, 3, 1, 4)
+    q, k, v = qkv[0], qkv[1], qkv[2]
+    k = runtime.apply(k)
+    v = runtime.apply(v)
+
+    if logit_scale is not None:
+        attn = F.normalize(q, dim=-1) @ F.normalize(k, dim=-1).transpose(-2, -1)
+        attn = attn * torch.clamp(logit_scale, max=math.log(100.0)).exp()
+    else:
+        q = q * (C // module.num_heads) ** -0.5
+        attn = q.matmul(k.transpose(-2, -1))
+
+    attn = attn + module.get_relative_position_bias()
+
+    if sum(shift_size) > 0:
+        attn_mask = x.new_zeros((pad_H, pad_W))
+        h_slices = ((0, -window_size[0]), (-window_size[0], -shift_size[0]), (-shift_size[0], None))
+        w_slices = ((0, -window_size[1]), (-window_size[1], -shift_size[1]), (-shift_size[1], None))
+        count = 0
+        for h in h_slices:
+            for w in w_slices:
+                attn_mask[h[0] : h[1], w[0] : w[1]] = count
+                count += 1
+        attn_mask = attn_mask.view(pad_H // window_size[0], window_size[0], pad_W // window_size[1], window_size[1])
+        attn_mask = attn_mask.permute(0, 2, 1, 3).reshape(num_windows, window_size[0] * window_size[1])
+        attn_mask = attn_mask.unsqueeze(1) - attn_mask.unsqueeze(2)
+        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
+        attn = attn.view(x.size(0) // num_windows, num_windows, module.num_heads, x.size(1), x.size(1))
+        attn = attn + attn_mask.unsqueeze(1).unsqueeze(0)
+        attn = attn.view(-1, module.num_heads, x.size(1), x.size(1))
+
+    attn = F.softmax(attn, dim=-1)
+    attn = F.dropout(attn, p=float(module.attention_dropout), training=module.training)
+
+    x = attn.matmul(v).transpose(1, 2).reshape(x.size(0), x.size(1), C)
+    x = F.linear(x, module.proj.weight, module.proj.bias)
+    x = F.dropout(x, p=float(module.dropout), training=module.training)
+
+    x = x.view(B, pad_H // window_size[0], pad_W // window_size[1], window_size[0], window_size[1], C)
+    x = x.permute(0, 1, 3, 2, 4, 5).reshape(B, pad_H, pad_W, C)
+
+    if sum(shift_size) > 0:
+        x = torch.roll(x, shifts=(shift_size[0], shift_size[1]), dims=(1, 2))
+
+    return x[:, :H, :W, :].contiguous()
+
+
+def create_turboquant_attention_model(
+    base_model: nn.Module,
+    *,
+    output_root: Path,
+    variant_config: TurboQuantVariantConfig,
+) -> nn.Module:
+    turbo_model = copy.deepcopy(base_model).cuda().eval()
+    runtime = TurboQuantRuntime(output_root=output_root, config=variant_config)
+    patched_count = 0
+
+    for module in turbo_model.modules():
+        if isinstance(module, swin_transformer.ShiftedWindowAttention):
+            def _forward(self, x, _runtime=runtime):
+                return _shifted_window_attention_turboquant(x, self, _runtime)
+
+            module.forward = types.MethodType(_forward, module)
+            patched_count += 1
+
+    if patched_count == 0:
+        raise RuntimeError("TurboQuant attention experiment currently expects a Swin model with ShiftedWindowAttention modules")
+
+    setattr(turbo_model, "quant_variant", variant_config.variant)
+    return turbo_model
+
+
+def _run_turboquant_attention_variant(
+    *,
+    variant_config: TurboQuantVariantConfig,
+    output_root: Path,
+    checkpoint_file: Path,
+    model_name: str,
+    experiment_name: str,
+    config: LegacyExperimentConfig,
+    base_model: nn.Module,
+    threshold: float,
+    baseline_metrics: dict[str, Any],
+) -> dict[str, Any]:
+    turbo_model = create_turboquant_attention_model(
+        base_model,
+        output_root=output_root,
+        variant_config=variant_config,
+    )
+    turbo_gpu = benchmark_legacy_model_inference(
+        turbo_model,
+        config,
+        split="test",
+        device="cuda",
+        threshold=threshold,
+        clone_model=False,
+    )
+    return _quantization_row(
+        variant=variant_config.variant,
+        description=variant_config.description,
+        result_source="measured",
+        status="ok",
+        runnable=True,
+        model_name=model_name,
+        experiment_name=experiment_name,
+        split="test",
+        threshold=threshold,
+        checkpoint_path=checkpoint_file,
+        notes=(
+            f"TurboQuant-style {variant_config.mode} attention compression with bits={variant_config.bits}, "
+            f"base_bits={variant_config.base_bits}, qjl_dim={variant_config.qjl_dim}; "
+            "compresses attention K/V activations at runtime, so checkpoint size remains unchanged."
+        ),
+        metrics_gpu=turbo_gpu,
+        model_state_size_mb=_estimate_model_state_size_mb(turbo_model),
+        baseline_metrics=baseline_metrics,
+    )
+
+
+def _quantization_row(
+    *,
+    variant: str,
+    description: str,
+    result_source: str,
+    status: str,
+    runnable: bool,
+    model_name: str,
+    experiment_name: str,
+    split: str,
+    threshold: float,
+    checkpoint_path: Path,
+    notes: str,
+    metrics_cpu: dict[str, Any] | None = None,
+    metrics_gpu: dict[str, Any] | None = None,
+    model_state_size_mb: float | None = None,
+    baseline_metrics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    cpu_metrics = metrics_cpu or {}
+    gpu_metrics = metrics_gpu or {}
+    primary_metrics = cpu_metrics or gpu_metrics
+    baseline = baseline_metrics or {}
+    test_accuracy = float(primary_metrics.get("accuracy") or 0.0) if runnable else ""
+    test_f1 = float(primary_metrics.get("f1") or 0.0) if runnable else ""
+    return {
+        "variant": variant,
+        "description": description,
+        "result_source": result_source,
+        "status": status,
+        "runnable": runnable,
+        "model_name": model_name,
+        "experiment_name": experiment_name,
+        "split": split,
+        "threshold": float(threshold),
+        "test_accuracy": test_accuracy,
+        "test_precision": float(primary_metrics.get("precision") or 0.0) if runnable else "",
+        "test_recall": float(primary_metrics.get("recall") or 0.0) if runnable else "",
+        "test_f1": test_f1,
+        "test_roc_auc": float(primary_metrics.get("roc_auc") or 0.0) if runnable else "",
+        "delta_accuracy_vs_fp32": (
+            float(test_accuracy) - float(baseline.get("accuracy") or 0.0)
+            if runnable and baseline_metrics is not None
+            else ""
+        ),
+        "delta_f1_vs_fp32": (
+            float(test_f1) - float(baseline.get("f1") or 0.0)
+            if runnable and baseline_metrics is not None
+            else ""
+        ),
+        "cpu_ms_per_image": float(cpu_metrics.get("ms_per_image") or 0.0) if runnable else "",
+        "gpu_ms_per_image": float(gpu_metrics.get("ms_per_image") or 0.0) if gpu_metrics else "",
+        "cpu_peak_memory_mb": float(cpu_metrics.get("peak_cpu_memory_mb") or 0.0) if runnable else "",
+        "gpu_peak_memory_mb": float(gpu_metrics.get("peak_gpu_memory_mb") or 0.0) if gpu_metrics else "",
+        "model_state_size_mb": float(model_state_size_mb or 0.0) if model_state_size_mb is not None else "",
+        "checkpoint_path": str(checkpoint_path),
+        "notes": notes,
+    }
+
+
+def _run_torchao_gpu_quantization_variant(
+    *,
+    variant: str,
+    description: str,
+    checkpoint_file: Path,
+    model_name: str,
+    experiment_name: str,
+    config: LegacyExperimentConfig,
+    base_model: nn.Module,
+    threshold: float,
+    torchao_quantization: Any,
+    quant_config: Any,
+    baseline_metrics: dict[str, Any],
+) -> dict[str, Any]:
+    torchao_model = copy.deepcopy(base_model).cuda().to(torch.bfloat16).eval()
+    torchao_quantization.quantize_(torchao_model, quant_config, device="cuda")
+    torchao_gpu = benchmark_legacy_model_inference(
+        torchao_model,
+        config,
+        split="test",
+        device="cuda",
+        threshold=threshold,
+        input_dtype=torch.bfloat16,
+        clone_model=False,
+    )
+    return _quantization_row(
+        variant=variant,
+        description=description,
+        result_source="measured",
+        status="ok",
+        runnable=True,
+        model_name=model_name,
+        experiment_name=experiment_name,
+        split="test",
+        threshold=threshold,
+        checkpoint_path=checkpoint_file,
+        notes=f"Measured with torchao config {quant_config}.",
+        metrics_gpu=torchao_gpu,
+        model_state_size_mb=_estimate_model_state_size_mb(torchao_model),
+        baseline_metrics=baseline_metrics,
+    )
+
+
+def run_legacy_quantization_smoke(
+    base_config: str | Path | dict[str, Any],
+    *,
+    checkpoint_path: str | Path | None = None,
+    comparison_csv_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Run Exp-8 quantization smoke validation against an existing checkpoint."""
+
+    experiment_config = load_experiment_config(base_config)
+    output_root = Path(experiment_config.output_root).resolve()
+    checkpoint_file = (
+        Path(checkpoint_path).resolve()
+        if checkpoint_path is not None
+        else output_root / "checkpoints" / f"{experiment_config.experiment_name}_best.pt"
+    )
+    csv_path = (
+        Path(comparison_csv_path).resolve()
+        if comparison_csv_path is not None
+        else output_root / "results" / "quantization_smoke_results.csv"
+    )
+    summary_path = _quantization_summary_path(output_root, experiment_config.experiment_name)
+
+    checkpoint, config, base_model = _load_legacy_checkpoint_bundle(
+        checkpoint_file,
+        config_override=experiment_config,
+    )
+    threshold = float(checkpoint.get("threshold", 0.5))
+    model_name = str(checkpoint.get("model_name", config.model_name))
+
+    rows: list[dict[str, Any]] = []
+    baseline_cpu = benchmark_legacy_model_inference(
+        base_model,
+        config,
+        split="test",
+        device="cpu",
+        threshold=threshold,
+    )
+    baseline_gpu = None
+    if torch.cuda.is_available():
+        baseline_gpu = benchmark_legacy_model_inference(
+            base_model,
+            config,
+            split="test",
+            device="cuda",
+            threshold=threshold,
+        )
+    baseline_size_mb = _estimate_model_state_size_mb(base_model)
+    rows.append(
+        _quantization_row(
+            variant="fp32_baseline",
+            description="FP32 baseline",
+            result_source="measured",
+            status="ok",
+            runnable=True,
+            model_name=model_name,
+            experiment_name=config.experiment_name,
+            split="test",
+            threshold=threshold,
+            checkpoint_path=checkpoint_file,
+            notes="Original checkpoint reloaded without quantization.",
+            metrics_cpu=baseline_cpu,
+            metrics_gpu=baseline_gpu,
+            model_state_size_mb=baseline_size_mb,
+            baseline_metrics=baseline_cpu,
+        )
+    )
+
+    try:
+        quantized_int8 = torch.ao.quantization.quantize_dynamic(
+            copy.deepcopy(base_model).cpu().eval(),
+            {nn.Linear},
+            dtype=torch.qint8,
+        )
+        int8_cpu = benchmark_legacy_model_inference(
+            quantized_int8,
+            config,
+            split="test",
+            device="cpu",
+            threshold=threshold,
+        )
+        rows.append(
+            _quantization_row(
+                variant="dynamic_int8",
+                description="Torch AO dynamic INT8 for Linear layers",
+                result_source="measured",
+                status="ok",
+                runnable=True,
+                model_name=model_name,
+                experiment_name=config.experiment_name,
+                split="test",
+                threshold=threshold,
+                checkpoint_path=checkpoint_file,
+                notes="Official torch.ao dynamic quantization on CPU.",
+                metrics_cpu=int8_cpu,
+                model_state_size_mb=_estimate_model_state_size_mb(quantized_int8),
+                baseline_metrics=baseline_cpu,
+            )
+        )
+    except Exception as exc:
+        rows.append(
+            _quantization_row(
+                variant="dynamic_int8",
+                description="Torch AO dynamic INT8 for Linear layers",
+                result_source="checked",
+                status="unsupported_for_model",
+                runnable=False,
+                model_name=model_name,
+                experiment_name=config.experiment_name,
+                split="test",
+                threshold=threshold,
+                checkpoint_path=checkpoint_file,
+                notes=f"Official dynamic INT8 conversion completed but inference failed on this model implementation: {type(exc).__name__}: {exc}",
+                baseline_metrics=baseline_cpu,
+            )
+        )
+
+    try:
+        torchao_quantization, torchao_quant_api = _load_torchao_quantization_api()
+        if not torch.cuda.is_available():
+            raise RuntimeError("TorchAO GPU quantization paths currently require CUDA in this experiment")
+
+        torchao_variants = [
+            (
+                "standard_int4_g32",
+                "TorchAO standard INT4 group_size=32",
+                torchao_quantization.Int4WeightOnlyConfig(
+                    group_size=32,
+                    int4_packing_format=torchao_quant_api.Int4PackingFormat.TILE_PACKED_TO_4D,
+                ),
+            ),
+            (
+                "standard_int4_g64",
+                "TorchAO standard INT4 group_size=64",
+                torchao_quantization.Int4WeightOnlyConfig(
+                    group_size=64,
+                    int4_packing_format=torchao_quant_api.Int4PackingFormat.TILE_PACKED_TO_4D,
+                ),
+            ),
+            (
+                "standard_int4_g128",
+                "TorchAO standard INT4 group_size=128",
+                torchao_quantization.Int4WeightOnlyConfig(
+                    group_size=128,
+                    int4_packing_format=torchao_quant_api.Int4PackingFormat.TILE_PACKED_TO_4D,
+                ),
+            ),
+            (
+                "int8_weight_only",
+                "TorchAO INT8 weight-only",
+                torchao_quantization.Int8WeightOnlyConfig(),
+            ),
+            (
+                "int8_dynact_int8_weight",
+                "TorchAO INT8 dynamic activation + INT8 weight",
+                torchao_quantization.Int8DynamicActivationInt8WeightConfig(),
+            ),
+        ]
+
+        for variant_name, description, quant_config in torchao_variants:
+            try:
+                rows.append(
+                    _run_torchao_gpu_quantization_variant(
+                        variant=variant_name,
+                        description=description,
+                        checkpoint_file=checkpoint_file,
+                        model_name=model_name,
+                        experiment_name=config.experiment_name,
+                        config=config,
+                        base_model=base_model,
+                        threshold=threshold,
+                        torchao_quantization=torchao_quantization,
+                        quant_config=quant_config,
+                        baseline_metrics=baseline_gpu or baseline_cpu,
+                    )
+                )
+            except Exception as exc:
+                rows.append(
+                    _quantization_row(
+                        variant=variant_name,
+                        description=description,
+                        result_source="checked",
+                        status="unsupported_in_environment",
+                        runnable=False,
+                        model_name=model_name,
+                        experiment_name=config.experiment_name,
+                        split="test",
+                        threshold=threshold,
+                        checkpoint_path=checkpoint_file,
+                        notes=f"TorchAO path could not be executed in the current environment: {type(exc).__name__}: {exc}",
+                        baseline_metrics=baseline_gpu or baseline_cpu,
+                    )
+                )
+    except Exception as exc:
+        for variant_name, description in [
+            ("standard_int4_g32", "TorchAO standard INT4 group_size=32"),
+            ("standard_int4_g64", "TorchAO standard INT4 group_size=64"),
+            ("standard_int4_g128", "TorchAO standard INT4 group_size=128"),
+            ("int8_weight_only", "TorchAO INT8 weight-only"),
+            ("int8_dynact_int8_weight", "TorchAO INT8 dynamic activation + INT8 weight"),
+        ]:
+            rows.append(
+                _quantization_row(
+                    variant=variant_name,
+                    description=description,
+                    result_source="checked",
+                    status="unsupported_in_environment",
+                    runnable=False,
+                    model_name=model_name,
+                    experiment_name=config.experiment_name,
+                    split="test",
+                    threshold=threshold,
+                    checkpoint_path=checkpoint_file,
+                    notes=f"TorchAO quantization API could not be loaded in the current environment: {type(exc).__name__}: {exc}",
+                    baseline_metrics=baseline_gpu or baseline_cpu,
+                )
+            )
+
+    for variant_config in TURBOQUANT_VARIANTS:
+        try:
+            rows.append(
+                _run_turboquant_attention_variant(
+                    variant_config=variant_config,
+                    output_root=output_root,
+                    checkpoint_file=checkpoint_file,
+                    model_name=model_name,
+                    experiment_name=config.experiment_name,
+                    config=config,
+                    base_model=base_model,
+                    threshold=threshold,
+                    baseline_metrics=baseline_gpu or baseline_cpu,
+                )
+            )
+        except Exception as exc:
+            rows.append(
+                _quantization_row(
+                    variant=variant_config.variant,
+                    description=variant_config.description,
+                    result_source="checked",
+                    status="unsupported_in_environment",
+                    runnable=False,
+                    model_name=model_name,
+                    experiment_name=config.experiment_name,
+                    split="test",
+                    threshold=threshold,
+                    checkpoint_path=checkpoint_file,
+                    notes=(
+                        "TurboQuant-style attention compression path could not be executed in the current "
+                        f"environment: {type(exc).__name__}: {exc}"
+                    ),
+                    baseline_metrics=baseline_gpu or baseline_cpu,
+                )
+            )
+
+    custom_int4_model = create_int4_weight_only_model(base_model)
+    custom_int4_cpu = benchmark_legacy_model_inference(
+        custom_int4_model,
+        config,
+        split="test",
+        device="cpu",
+        threshold=threshold,
+    )
+    custom_int4_gpu = None
+    if torch.cuda.is_available():
+        custom_int4_gpu = benchmark_legacy_model_inference(
+            custom_int4_model,
+            config,
+            split="test",
+            device="cuda",
+            threshold=threshold,
+        )
+    rows.append(
+        _quantization_row(
+            variant="custom_weight_only_int4",
+            description="Pluggable custom INT4-style weight-only linear layer",
+            result_source="measured",
+            status="ok",
+            runnable=True,
+            model_name=model_name,
+            experiment_name=config.experiment_name,
+            split="test",
+            threshold=threshold,
+            checkpoint_path=checkpoint_file,
+            notes="Custom adapter replaces nn.Linear recursively and dequantizes on the fly for smoke validation.",
+            metrics_cpu=custom_int4_cpu,
+            metrics_gpu=custom_int4_gpu,
+            model_state_size_mb=_estimate_model_state_size_mb(custom_int4_model),
+            baseline_metrics=baseline_cpu,
+        )
+    )
+
+    _write_rows_csv(csv_path, QUANTIZATION_COLUMNS, rows)
+    summary = {
+        "experiment_name": config.experiment_name,
+        "model_name": model_name,
+        "checkpoint_path": str(checkpoint_file),
+        "comparison_csv_path": str(csv_path),
+        "baseline_variant": "fp32_baseline",
+        "best_quantized_variant": max(
+            [row for row in rows if row["runnable"] and row["variant"] != "fp32_baseline"],
+            key=lambda row: (float(row.get("test_f1") or 0.0), float(row.get("test_accuracy") or 0.0)),
+        )["variant"],
+        "results": rows,
+    }
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    return summary
 
 
 def evaluate_legacy_checkpoint(

@@ -9,6 +9,7 @@ from .legacy_runner import (
     run_legacy_input_fusion_comparison,
     run_legacy_model_scale_comparison,
     run_legacy_preprocessing_comparison,
+    run_legacy_quantization_smoke,
     train_legacy_classifier,
 )
 
@@ -22,5 +23,6 @@ __all__ = [
     "run_legacy_input_fusion_comparison",
     "run_legacy_model_scale_comparison",
     "run_legacy_preprocessing_comparison",
+    "run_legacy_quantization_smoke",
     "train_legacy_classifier",
 ]

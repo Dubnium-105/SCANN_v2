@@ -605,18 +605,207 @@ dataset/
 目的：
 - 为后续 PolarQuant-inspired 方法预验证接口可用性
 
-第一阶段不要求完整实现复杂压缩，只需验证以下两类：
+本阶段扩展为同时验证以下三类：
 1. 标准 INT8 / INT4 推理量化
 2. 自定义量化层接口可插入
+3. `PolarQuant 主压缩 + QJL 残差校正` 的 TurboQuant-style attention 压缩思路是否可落地
+
+完成状态：
+- 已完成基于新 CUDA 虚拟环境的扩展量化 + TurboQuant-style attention 压缩 smoke 验证（2026-04-02）
+
+实际执行：
+- 选用 Exp-7 中综合表现最佳的 `Swin-T pretrained` 作为量化验证基线模型
+- 固定使用 `new_old_diff` 输入方案、`224 x 224`、`resize + normalize` 预处理，以及同一份 manifest 划分
+- 在新的 `Python 3.11 + torch 2.11.0+cu128 + torchvision 0.26.0+cu128 + torchao 0.17.0` 虚拟环境中重跑 Exp-8
+- 基线 FP32 模型同时记录 CPU / GPU 推理时间、内存占用与模型状态体积
+- 使用 `torch.ao.quantization.quantize_dynamic` 对 `nn.Linear` 层执行标准动态 `INT8` 量化 smoke 检查
+- 使用 `torchao` 新增以下量化方法并逐一评测：
+  - `Int4WeightOnlyConfig(group_size=32)`
+  - `Int4WeightOnlyConfig(group_size=64)`
+  - `Int4WeightOnlyConfig(group_size=128)`
+  - `Int8WeightOnlyConfig()`
+  - `Int8DynamicActivationInt8WeightConfig()`
+- 保留可插拔自定义量化层 `Int4WeightOnlyLinear`，继续验证权重量化接口可接入并完成推理
+- 修复量化评测阶段中 `bfloat16` 概率直接转 `numpy` 的兼容问题，保证 `torchao` 路线可正常统计指标
+- 新增 `TurboQuant / PolarQuant-style` attention 压缩实验：
+  - 离线用 `beta` 分布预计算 Lloyd-Max 质心并缓存
+  - 通过 QR 分解生成随机正交旋转矩阵并缓存
+  - 实现 `TurboQuant_mse`：先旋转，再按最近质心做逐维量化/反量化
+  - 实现 `TurboQuant_prod`：在 `(b-1)` bit `TurboQuant_mse` 基础上，对残差引入 `QJL sign(Sr)` 方向校正
+  - 将 `ShiftedWindowAttention` 运行时替换为 TurboQuant 版本，对 attention 的 `K/V` 激活执行在线压缩与恢复
+- 本轮 TurboQuant 变体实际评测：
+  - `turboquant_mse_b3`
+  - `turboquant_mse_b4`
+  - `turboquant_prod_qjl_b4_m16`
+  - `turboquant_prod_qjl_b4_m32`
 
 记录指标：
 - 是否可正常运行
 - 推理精度变化
 - GPU/CPU 推理时间
 - 显存占用变化
+- 若属于权重量化，再记录模型状态体积变化
+- 若属于 TurboQuant attention 路线，则额外记录“checkpoint 体积不变，仅压缩运行时 K/V 激活”
+
+当前结果：
+- `FP32 baseline`
+  - Accuracy：`0.9669`
+  - Precision：`0.9705`
+  - Recall：`0.9536`
+  - F1-score：`0.9620`
+  - ROC-AUC：`0.9945`
+  - CPU 推理时间：`29.23 ms / image`
+  - GPU 推理时间：`2.67 ms / image`
+  - CPU 峰值内存：`1324.25 MB`
+  - GPU 峰值显存：`229.50 MB`
+  - 模型状态体积：`105.26 MB`
+- `dynamic INT8`
+  - 状态：`unsupported_for_model`
+  - 结果：量化转换可执行，但在当前 `torchvision` 的 `Swin-T` 实现上推理失败
+  - 失败原因：attention 内部直接调用 `F.linear(..., qkv.weight, ...)`，与动态量化后的权重访问方式不兼容
+- `standard INT4 / group_size=32`
+  - 状态：`ok`
+  - Accuracy：`0.9656`
+  - Precision：`0.9649`
+  - Recall：`0.9565`
+  - F1-score：`0.9607`
+  - ROC-AUC：`0.9939`
+  - 相对 FP32 的 Accuracy 变化：`-0.0013`
+  - 相对 FP32 的 F1 变化：`-0.0013`
+  - GPU 推理时间：`3.93 ms / image`
+  - GPU 峰值显存：`140.67 MB`
+  - 模型状态体积：`29.31 MB`
+- `standard INT4 / group_size=64`
+  - 状态：`ok`
+  - Accuracy：`0.9618`
+  - Precision：`0.9701`
+  - Recall：`0.9420`
+  - F1-score：`0.9559`
+  - ROC-AUC：`0.9932`
+  - 相对 FP32 的 Accuracy 变化：`-0.0051`
+  - 相对 FP32 的 F1 变化：`-0.0061`
+  - GPU 推理时间：`3.07 ms / image`
+  - GPU 峰值显存：`160.16 MB`
+  - 模型状态体积：`25.86 MB`
+- `standard INT4 / group_size=128`
+  - 状态：`ok`
+  - Accuracy：`0.9606`
+  - Precision：`0.9673`
+  - Recall：`0.9420`
+  - F1-score：`0.9545`
+  - ROC-AUC：`0.9932`
+  - 相对 FP32 的 Accuracy 变化：`-0.0064`
+  - 相对 FP32 的 F1 变化：`-0.0075`
+  - GPU 推理时间：`2.76 ms / image`
+  - GPU 峰值显存：`185.29 MB`
+  - 模型状态体积：`24.00 MB`
+- `INT8 weight-only`
+  - 状态：`ok`
+  - Accuracy：`0.9682`
+  - Precision：`0.9734`
+  - Recall：`0.9536`
+  - F1-score：`0.9634`
+  - ROC-AUC：`0.9931`
+  - 相对 FP32 的 Accuracy 变化：`+0.0013`
+  - 相对 FP32 的 F1 变化：`+0.0014`
+  - GPU 推理时间：`2.70 ms / image`
+  - GPU 峰值显存：`178.40 MB`
+  - 模型状态体积：`27.05 MB`
+- `INT8 dynamic activation + INT8 weight`
+  - 状态：`ok`
+  - Accuracy：`0.9644`
+  - Precision：`0.9676`
+  - Recall：`0.9507`
+  - F1-score：`0.9591`
+  - ROC-AUC：`0.9932`
+  - 相对 FP32 的 Accuracy 变化：`-0.0025`
+  - 相对 FP32 的 F1 变化：`-0.0029`
+  - GPU 推理时间：`12.04 ms / image`
+  - GPU 峰值显存：`226.06 MB`
+  - 模型状态体积：`26.73 MB`
+- `TurboQuant MSE 3-bit`
+  - 状态：`ok`
+  - Accuracy：`0.5852`
+  - Precision：`1.0000`
+  - Recall：`0.0551`
+  - F1-score：`0.1044`
+  - ROC-AUC：`0.9775`
+  - 相对 FP32 的 Accuracy 变化：`-0.3817`
+  - 相对 FP32 的 F1 变化：`-0.8576`
+  - GPU 推理时间：`2.57 ms / image`
+  - GPU 峰值显存：`384.13 MB`
+  - 说明：当前实现仅压缩运行时 `K/V` 激活，checkpoint 体积不变
+- `TurboQuant MSE 4-bit`
+  - 状态：`ok`
+  - Accuracy：`0.7150`
+  - Precision：`1.0000`
+  - Recall：`0.3507`
+  - F1-score：`0.5193`
+  - ROC-AUC：`0.9825`
+  - 相对 FP32 的 Accuracy 变化：`-0.2519`
+  - 相对 FP32 的 F1 变化：`-0.4427`
+  - GPU 推理时间：`2.57 ms / image`
+  - GPU 峰值显存：`419.42 MB`
+  - 说明：当前实现仅压缩运行时 `K/V` 激活，checkpoint 体积不变
+- `TurboQuant prod 4-bit + QJL residual / m=16`
+  - 状态：`ok`
+  - Accuracy：`0.9262`
+  - Precision：`0.9832`
+  - Recall：`0.8464`
+  - F1-score：`0.9097`
+  - ROC-AUC：`0.9899`
+  - 相对 FP32 的 Accuracy 变化：`-0.0407`
+  - 相对 FP32 的 F1 变化：`-0.0523`
+  - GPU 推理时间：`3.32 ms / image`
+  - GPU 峰值显存：`248.68 MB`
+  - 说明：当前实现仅压缩运行时 `K/V` 激活，checkpoint 体积不变
+- `TurboQuant prod 4-bit + QJL residual / m=32`
+  - 状态：`ok`
+  - Accuracy：`0.9466`
+  - Precision：`0.9810`
+  - Recall：`0.8957`
+  - F1-score：`0.9364`
+  - ROC-AUC：`0.9921`
+  - 相对 FP32 的 Accuracy 变化：`-0.0204`
+  - 相对 FP32 的 F1 变化：`-0.0256`
+  - GPU 推理时间：`3.36 ms / image`
+  - GPU 峰值显存：`287.75 MB`
+  - 说明：当前实现仅压缩运行时 `K/V` 激活，checkpoint 体积不变
+- `custom weight-only INT4`
+  - 状态：`ok`
+  - Accuracy：`0.9618`
+  - Precision：`0.9701`
+  - Recall：`0.9420`
+  - F1-score：`0.9559`
+  - ROC-AUC：`0.9947`
+  - 相对 FP32 的 Accuracy 变化：`-0.0051`
+  - 相对 FP32 的 F1 变化：`-0.0061`
+  - CPU 推理时间：`29.97 ms / image`
+  - GPU 推理时间：`2.48 ms / image`
+  - CPU 峰值内存：`2444.36 MB`
+  - GPU 峰值显存：`223.06 MB`
+  - 模型状态体积：`26.96 MB`
+
+结论：
+- 结论：当前实验框架已经具备“多种量化/压缩模块可插拔”的基本能力，`torchao` 标准配置、自定义量化层、以及 TurboQuant-style attention 压缩都可以接入 `Swin-T`
+- 结论：在当前验证范围内，`INT8 weight-only` 综合表现最佳，测试集 `F1=0.9634`，略高于 FP32 基线 `0.9620`
+- 结论：`standard INT4 / group_size=32` 是标准 `INT4` 路线中精度最接近基线的配置，测试集 F1 仅下降约 `0.0013`
+- 结论：`group_size` 增大到 `64 / 128` 后，模型状态体积继续下降，但测试集 F1 也进一步下降，说明更细粒度的 `INT4` 分组在当前模型上更稳妥
+- 结论：`INT8 dynamic activation + INT8 weight` 可以正常运行，但推理速度明显慢于其余 GPU 量化方案，不适合作为当前默认路线
+- 结论：自定义 `INT4` 路线仍保持较好的压缩效果与可插拔性，但在综合精度上不优于 `torchao standard INT4 g32`
+- 结论：官方动态 `INT8` 在当前 `torchvision` `Swin-T` 实现上仍存在兼容性问题，问题不在环境安装，而在模型实现与量化权重访问方式的耦合
+- 结论：纯 `TurboQuant_mse` 路线在当前 `Swin-T` 上精度损失极大，`3-bit` 与 `4-bit` 单独使用都不足以直接替代现有量化方案
+- 结论：在 `TurboQuant_mse` 上加入 `QJL` 残差校正后，性能显著恢复，`m=32` 将 F1 从 `0.5193` 提升到 `0.9364`，验证了 “主压缩 + 残差校正” 这一路线在当前模型上是有价值的
+- 结论：当前 TurboQuant 实现仍落后于最佳权重量化方案，且 GPU 显存开销偏高，说明现阶段更适合作为思路验证，而不是部署默认方案
+- 结论：由于当前实现压缩的是运行时 `K/V` 激活而非模型权重，checkpoint 体积不会下降；若后续需要评估真实压缩比，还需要补齐索引打包、符号比特存储和缓存复用
+- 推荐：后续正式量化实验优先以 `INT8 weight-only` 和 `standard INT4 / group_size=32` 作为两条主线继续深入
+- 推荐：若后续继续推进 PolarQuant/TurboQuant 方向，优先围绕 `prod + QJL m=32` 做进一步优化，再考虑更高效的残差编码与 packed storage
 
 输出：
 - quantization_smoke_results.csv
+- `scann_v2/experiments/results/quantization_smoke_results.csv`
+- `scann_v2/experiments/results/legacy_swin_t_pretrained_gpu_quantization_smoke_summary.json`
+- `scann_v2/experiments/results/turboquant_cache/`
 
 ---
 

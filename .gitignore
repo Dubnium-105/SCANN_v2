@@ -72,6 +72,7 @@ docs/_build/
 # ============================================
 .env
 .venv/
+.venv311_torchao/
 venv/
 ENV/
 env.bak/

@@ -55,3 +55,12 @@ The training run will also write:
 python scann_v2/scripts/experiments/evaluate_legacy_classifier.py `
   --checkpoint scann_v2/experiments/checkpoints/legacy_resnet18_baseline_best.pt
 ```
+
+4. Run the Exp-8 quantization smoke validation:
+
+```powershell
+python scann_v2/scripts/experiments/run_legacy_quantization_smoke.py `
+  --config scann_v2/experiments/configs/legacy_swin_t_pretrained_gpu.json
+```
+
+This smoke run now covers `torch.ao` dynamic INT8, `torchao` INT4 / INT8 weight quantization, the custom `Int4WeightOnlyLinear` path, and TurboQuant-style attention `K/V` compression with cached Lloyd-Max centroids, random rotations, and optional QJL residual correction.
