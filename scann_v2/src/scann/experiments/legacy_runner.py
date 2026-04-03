@@ -542,6 +542,45 @@ def create_vit_attention_compression_model(
     )
 
 
+def create_vit_packed_kv_attention_model(
+    base_model: nn.Module,
+    *,
+    layer_selector: str = "all",
+    count: int | None = None,
+    explicit_indices: list[int] | tuple[int, ...] | None = None,
+    group_size: int = 32,
+    block_size: int = 64,
+    quantize_k: bool = True,
+    quantize_v: bool = True,
+    preserve_cls_token: bool = False,
+    compute_dtype: torch.dtype = torch.float32,
+) -> nn.Module:
+    from .vit_attention_compression import (
+        PackedKVAttentionConfig,
+        ViTAttentionPatchConfig,
+        create_vit_packed_kv_compression_model,
+    )
+
+    patch_config = ViTAttentionPatchConfig(
+        layer_selector=layer_selector,
+        count=count,
+        explicit_indices=tuple(explicit_indices or ()),
+    )
+    packed_kv_config = PackedKVAttentionConfig(
+        group_size=group_size,
+        block_size=block_size,
+        quantize_k=quantize_k,
+        quantize_v=quantize_v,
+        preserve_cls_token=preserve_cls_token,
+        compute_dtype=compute_dtype,
+    )
+    return create_vit_packed_kv_compression_model(
+        base_model,
+        patch_config=patch_config,
+        packed_kv_config=packed_kv_config,
+    )
+
+
 def _criterion_from_config(config: LegacyExperimentConfig) -> nn.Module:
     loss_name = str(config.loss_name).strip().lower()
     if loss_name == "focal":

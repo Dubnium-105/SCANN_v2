@@ -85,3 +85,51 @@ def test_patched_vit_forward_matches_baseline_with_passthrough_adapter():
 
     assert actual.shape == expected.shape
     assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-5)
+
+
+def test_packed_kv_attention_model_matches_baseline_when_quantization_disabled():
+    torch.manual_seed(1)
+    base_model = legacy_runner.create_experiment_model("vit_b_16", pretrained=False, image_size=224).eval()
+    reference_model = copy.deepcopy(base_model).eval()
+    packed_model = legacy_runner.create_vit_packed_kv_attention_model(
+        base_model,
+        layer_selector="all",
+        quantize_k=False,
+        quantize_v=False,
+        preserve_cls_token=True,
+    ).eval()
+    x = torch.randn(1, 3, 224, 224)
+
+    with torch.no_grad():
+        expected = reference_model(x)
+        actual = packed_model(x)
+
+    assert actual.shape == expected.shape
+    assert torch.allclose(actual, expected, atol=1e-5, rtol=1e-5)
+
+
+def test_packed_kv_attention_model_runs_with_quantization_and_cls_preservation():
+    torch.manual_seed(2)
+    base_model = legacy_runner.create_experiment_model("vit_b_16", pretrained=False, image_size=224).eval()
+    packed_model = legacy_runner.create_vit_packed_kv_attention_model(
+        base_model,
+        layer_selector="first_n",
+        count=2,
+        group_size=8,
+        block_size=4,
+        quantize_k=True,
+        quantize_v=True,
+        preserve_cls_token=True,
+    ).eval()
+    x = torch.randn(1, 3, 224, 224)
+
+    with torch.no_grad():
+        output = packed_model(x)
+
+    assert tuple(output.shape) == (1, 2)
+    assert torch.isfinite(output).all()
+    assert getattr(packed_model, "_vit_attention_patched_indices") == [0, 1]
+    config = getattr(packed_model, "_vit_packed_kv_attention_config")
+    assert config.preserve_cls_token is True
+    assert config.quantize_k is True
+    assert config.quantize_v is True
