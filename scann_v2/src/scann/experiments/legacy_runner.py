@@ -39,7 +39,12 @@ from torchvision.models.vision_transformer import interpolate_embeddings
 from scann.ai.device_utils import resolve_device
 from scann.ai.trainer import FocalLoss
 
-from .legacy_dataset import LegacyTripletExperimentDataset
+from .legacy_dataset import (
+    LegacyTripletExperimentDataset,
+    format_image_size_spec,
+    image_size_specs_equal,
+    normalize_image_size_spec,
+)
 from .legacy_manifest import build_legacy_triplet_manifest, load_legacy_manifest
 
 matplotlib.use("Agg")
@@ -274,7 +279,7 @@ class LegacyExperimentConfig:
     model_name: str = "resnet18"
     pretrained: bool = False
     input_mode: str = "new_old_diff"
-    image_size: int = 224
+    image_size: int | list[int] | str = 224
     resize_mode: str = "resize"
     normalize: bool = True
     batch_size: int = 32
@@ -340,6 +345,8 @@ def load_experiment_config(config: str | Path | dict[str, Any]) -> LegacyExperim
     for key in ("dataset_dir", "manifest_path", "output_root"):
         if key in raw:
             raw[key] = _resolve_relative_path(raw.get(key), base_dir)
+    if "image_size" in raw:
+        raw["image_size"] = normalize_image_size_spec(raw["image_size"])
 
     return LegacyExperimentConfig(**raw)
 
@@ -367,7 +374,27 @@ def _normalize_model_name(model_name: str) -> str:
     return aliases.get(normalized, normalized)
 
 
-def create_experiment_model(model_name: str, *, pretrained: bool, image_size: int = 224) -> nn.Module:
+def _resolve_square_model_image_size(image_size: int | list[int] | str) -> int:
+    normalized = normalize_image_size_spec(image_size)
+    if normalized == "keep":
+        raise ValueError(
+            "image_size='keep' cannot be used for model creation; provide an explicit numeric size"
+        )
+    if isinstance(normalized, list):
+        if int(normalized[0]) != int(normalized[1]):
+            raise ValueError(
+                f"Current model factory only supports square image_size for model creation, got {normalized}"
+            )
+        return int(normalized[0])
+    return int(normalized)
+
+
+def create_experiment_model(
+    model_name: str,
+    *,
+    pretrained: bool,
+    image_size: int | list[int] | str = 224,
+) -> nn.Module:
     """Create a torchvision classifier for the experiment."""
 
     normalized = _normalize_model_name(model_name)
@@ -387,7 +414,7 @@ def create_experiment_model(model_name: str, *, pretrained: bool, image_size: in
         model.fc = nn.Linear(model.fc.in_features, 2)
         return model
     if normalized == "vit_b_16":
-        resolved_image_size = int(image_size)
+        resolved_image_size = _resolve_square_model_image_size(image_size)
         if pretrained and resolved_image_size != 224:
             weights = models.ViT_B_16_Weights.DEFAULT
             model = models.vit_b_16(weights=None, image_size=resolved_image_size)
@@ -994,11 +1021,11 @@ def train_legacy_classifier(config: str | Path | dict[str, Any]) -> dict[str, An
     logger.info("Dataset root: %s", experiment_config.dataset_dir)
     logger.info("Manifest: %s", paths["manifest_path"])
     logger.info(
-        "Config: model=%s pretrained=%s input_mode=%s image_size=%d batch=%d epochs=%d optimizer=%s lr=%.3e scheduler=%s",
+        "Config: model=%s pretrained=%s input_mode=%s image_size=%s batch=%d epochs=%d optimizer=%s lr=%.3e scheduler=%s",
         _normalize_model_name(experiment_config.model_name),
         experiment_config.pretrained,
         experiment_config.input_mode,
-        int(experiment_config.image_size),
+        format_image_size_spec(experiment_config.image_size),
         int(experiment_config.batch_size),
         int(experiment_config.epochs),
         experiment_config.optimizer,
@@ -1200,7 +1227,7 @@ def train_legacy_classifier(config: str | Path | dict[str, Any]) -> dict[str, An
         "experiment_name": experiment_config.experiment_name,
         "model_name": _normalize_model_name(experiment_config.model_name),
         "input_mode": experiment_config.input_mode,
-        "image_size": int(experiment_config.image_size),
+        "image_size": normalize_image_size_spec(experiment_config.image_size),
         "resize_mode": experiment_config.resize_mode,
         "normalize": bool(experiment_config.normalize),
         "pretrained": bool(experiment_config.pretrained),
@@ -1405,16 +1432,16 @@ def run_legacy_input_fusion_comparison(
 def _preprocessing_experiment_name(
     base_experiment_name: str,
     *,
-    base_image_size: int,
+    base_image_size: int | list[int] | str,
     base_resize_mode: str,
     base_normalize: bool,
-    image_size: int,
+    image_size: int | list[int] | str,
     resize_mode: str,
     normalize: bool,
     variant: str,
 ) -> str:
     if (
-        int(image_size) == int(base_image_size)
+        image_size_specs_equal(image_size, base_image_size)
         and str(resize_mode).strip().lower() == str(base_resize_mode).strip().lower()
         and bool(normalize) == bool(base_normalize)
     ):
@@ -1488,7 +1515,7 @@ def run_legacy_preprocessing_comparison(
     for variant_config in PREPROCESSING_VARIANTS:
         variant = str(variant_config["variant"])
         description = str(variant_config["description"])
-        image_size = int(variant_config["image_size"])
+        image_size = normalize_image_size_spec(variant_config["image_size"])
         resize_mode = str(variant_config["resize_mode"])
         normalize = bool(variant_config["normalize"])
         experiment_name = _preprocessing_experiment_name(
@@ -1813,7 +1840,7 @@ def _load_legacy_checkpoint_bundle(
     model = create_experiment_model(
         checkpoint.get("model_name", config.model_name),
         pretrained=False,
-        image_size=int(config.image_size),
+        image_size=config.image_size,
     )
     model.load_state_dict(checkpoint["state_dict"])
     model.eval()
@@ -2874,7 +2901,7 @@ def evaluate_legacy_checkpoint(
     model = create_experiment_model(
         checkpoint.get("model_name", config.model_name),
         pretrained=False,
-        image_size=int(config.image_size),
+        image_size=config.image_size,
     )
     model.load_state_dict(checkpoint["state_dict"])
     model = model.to(runtime_device)
