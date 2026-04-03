@@ -73,6 +73,8 @@ SUMMARY_COLUMNS = [
     "preserve_cls_token",
     "quantize_k",
     "quantize_v",
+    "streaming_enabled",
+    "materialize_attention_matrix",
     "pretrained",
     "seed",
     "batch_size",
@@ -280,6 +282,190 @@ QUANTIZATION_COLUMNS = [
     "checkpoint_path",
     "notes",
 ]
+VIT_ATTENTION_ABLATION_COLUMNS = [
+    "variant",
+    "description",
+    "result_source",
+    "status",
+    "supported",
+    "layer_scope",
+    "kv_target",
+    "cls_policy",
+    "precision_mode",
+    "streaming_enabled",
+    "materialize_attention_matrix",
+    "experiment_name",
+    "model_name",
+    "image_size",
+    "attention_compression_mode",
+    "attention_layer_selector",
+    "attention_layer_count",
+    "enabled_layer_indices",
+    "kv_bits",
+    "group_size",
+    "token_block_size",
+    "preserve_cls_token",
+    "quantize_k",
+    "quantize_v",
+    "split",
+    "threshold",
+    "accuracy",
+    "precision",
+    "recall",
+    "f1",
+    "roc_auc",
+    "ms_per_image",
+    "peak_cpu_memory_mb",
+    "peak_gpu_memory_mb",
+    "peak_gpu_memory_attention_only_mb",
+    "packed_kv_size_mb",
+    "token_count",
+    "num_patched_layers",
+    "checkpoint_path",
+    "notes",
+]
+VIT_ATTENTION_ABLATION_VARIANTS = [
+    {
+        "variant": "baseline_dense",
+        "description": "dense bf16 baseline",
+        "layer_scope": "all_layers",
+        "kv_target": "none",
+        "cls_policy": "patch_plus_cls",
+        "precision_mode": "bf16 baseline",
+        "streaming_enabled": False,
+        "materialize_attention_matrix": True,
+        "attention_compression_mode": "none",
+        "quantize_k": False,
+        "quantize_v": False,
+        "preserve_cls_token": False,
+    },
+    {
+        "variant": "all_layers_k_only_4bit",
+        "description": "full-module K-only packed streaming",
+        "layer_scope": "all_layers",
+        "kv_target": "K only",
+        "cls_policy": "patch_plus_cls",
+        "precision_mode": "K 4-bit",
+        "streaming_enabled": True,
+        "materialize_attention_matrix": False,
+        "attention_compression_mode": "vit_packed_kv",
+        "quantize_k": True,
+        "quantize_v": False,
+        "preserve_cls_token": False,
+    },
+    {
+        "variant": "all_layers_v_only_4bit",
+        "description": "full-module V-only packed streaming",
+        "layer_scope": "all_layers",
+        "kv_target": "V only",
+        "cls_policy": "patch_plus_cls",
+        "precision_mode": "KV 4-bit",
+        "streaming_enabled": True,
+        "materialize_attention_matrix": False,
+        "attention_compression_mode": "vit_packed_kv",
+        "quantize_k": False,
+        "quantize_v": True,
+        "preserve_cls_token": False,
+    },
+    {
+        "variant": "all_layers_kv_4bit",
+        "description": "full-module K/V packed streaming",
+        "layer_scope": "all_layers",
+        "kv_target": "K/V both",
+        "cls_policy": "patch_plus_cls",
+        "precision_mode": "KV 4-bit",
+        "streaming_enabled": True,
+        "materialize_attention_matrix": False,
+        "attention_compression_mode": "vit_packed_kv",
+        "quantize_k": True,
+        "quantize_v": True,
+        "preserve_cls_token": False,
+    },
+    {
+        "variant": "all_layers_kv_4bit_patch_only",
+        "description": "patch-token packed K/V with dense cls token",
+        "layer_scope": "all_layers",
+        "kv_target": "K/V both",
+        "cls_policy": "patch_only",
+        "precision_mode": "KV 4-bit",
+        "streaming_enabled": True,
+        "materialize_attention_matrix": False,
+        "attention_compression_mode": "vit_packed_kv",
+        "quantize_k": True,
+        "quantize_v": True,
+        "preserve_cls_token": True,
+    },
+    {
+        "variant": "all_layers_kv_4bit_cls_preserved",
+        "description": "full-module K/V packed streaming with cls preserved",
+        "layer_scope": "all_layers",
+        "kv_target": "K/V both",
+        "cls_policy": "cls_preserved",
+        "precision_mode": "KV 4-bit",
+        "streaming_enabled": True,
+        "materialize_attention_matrix": False,
+        "attention_compression_mode": "vit_packed_kv",
+        "quantize_k": True,
+        "quantize_v": True,
+        "preserve_cls_token": True,
+    },
+    {
+        "variant": "first_25pct_kv_4bit",
+        "description": "first quarter of ViT blocks with K/V packed streaming",
+        "layer_scope": "first_25pct",
+        "kv_target": "K/V both",
+        "cls_policy": "patch_plus_cls",
+        "precision_mode": "KV 4-bit",
+        "streaming_enabled": True,
+        "materialize_attention_matrix": False,
+        "attention_compression_mode": "vit_packed_kv",
+        "quantize_k": True,
+        "quantize_v": True,
+        "preserve_cls_token": False,
+    },
+    {
+        "variant": "middle_50pct_kv_4bit",
+        "description": "middle half of ViT blocks with K/V packed streaming",
+        "layer_scope": "middle_50pct",
+        "kv_target": "K/V both",
+        "cls_policy": "patch_plus_cls",
+        "precision_mode": "KV 4-bit",
+        "streaming_enabled": True,
+        "materialize_attention_matrix": False,
+        "attention_compression_mode": "vit_packed_kv",
+        "quantize_k": True,
+        "quantize_v": True,
+        "preserve_cls_token": False,
+    },
+    {
+        "variant": "last_25pct_kv_4bit",
+        "description": "last quarter of ViT blocks with K/V packed streaming",
+        "layer_scope": "last_25pct",
+        "kv_target": "K/V both",
+        "cls_policy": "patch_plus_cls",
+        "precision_mode": "KV 4-bit",
+        "streaming_enabled": True,
+        "materialize_attention_matrix": False,
+        "attention_compression_mode": "vit_packed_kv",
+        "quantize_k": True,
+        "quantize_v": True,
+        "preserve_cls_token": False,
+    },
+    {
+        "variant": "custom_indices_kv_4bit",
+        "description": "custom ViT block indices with K/V packed streaming",
+        "layer_scope": "custom_indices",
+        "kv_target": "K/V both",
+        "cls_policy": "patch_plus_cls",
+        "precision_mode": "KV 4-bit",
+        "streaming_enabled": True,
+        "materialize_attention_matrix": False,
+        "attention_compression_mode": "vit_packed_kv",
+        "quantize_k": True,
+        "quantize_v": True,
+        "preserve_cls_token": False,
+    },
+]
 
 
 @dataclass
@@ -306,6 +492,8 @@ class LegacyExperimentConfig:
     preserve_cls_token: bool = False
     quantize_k: bool = True
     quantize_v: bool = True
+    streaming_enabled: bool = True
+    materialize_attention_matrix: bool = False
     batch_size: int = 32
     epochs: int = 30
     lr: float = 2e-4
@@ -611,6 +799,79 @@ def _attention_compression_enabled(config: LegacyExperimentConfig) -> bool:
     return str(config.attention_compression_mode).strip().lower() not in {"", "none"}
 
 
+def _vit_encoder_layer_count(model_name: str) -> int:
+    normalized = _normalize_model_name(model_name)
+    if normalized == "vit_b_16":
+        return 12
+    if normalized == "vit_h_14":
+        return 32
+    raise ValueError(f"ViT attention ablation currently only supports torchvision ViT models, got {model_name!r}")
+
+
+def _resolve_ablation_layer_config(
+    *,
+    layer_scope: str,
+    model_name: str,
+    custom_indices: list[int] | None = None,
+) -> tuple[str, int, list[int]]:
+    normalized_scope = str(layer_scope).strip().lower()
+    total_layers = _vit_encoder_layer_count(model_name)
+    if normalized_scope == "all_layers":
+        return "all", 0, []
+    if normalized_scope == "first_25pct":
+        return "first_n", max(1, math.ceil(total_layers * 0.25)), []
+    if normalized_scope == "middle_50pct":
+        return "middle", max(1, math.ceil(total_layers * 0.50)), []
+    if normalized_scope == "last_25pct":
+        return "last_n", max(1, math.ceil(total_layers * 0.25)), []
+    if normalized_scope == "custom_indices":
+        indices = [int(index) for index in (custom_indices or [0])]
+        return "explicit_indices", 0, indices
+    raise ValueError(f"Unsupported ViT attention ablation layer_scope: {layer_scope}")
+
+
+def _build_vit_attention_ablation_variants(
+    config: LegacyExperimentConfig,
+    *,
+    variants: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    resolved_variants = variants or VIT_ATTENTION_ABLATION_VARIANTS
+    rows: list[dict[str, Any]] = []
+    for variant_spec in resolved_variants:
+        layer_selector, layer_count, explicit_indices = _resolve_ablation_layer_config(
+            layer_scope=str(variant_spec["layer_scope"]),
+            model_name=config.model_name,
+            custom_indices=list(config.enabled_layer_indices),
+        )
+        notes = ""
+        if str(variant_spec["layer_scope"]).strip().lower() == "custom_indices" and not config.enabled_layer_indices:
+            notes = "enabled_layer_indices was empty; defaulted custom_indices to [0]"
+        rows.append(
+            {
+                "variant": str(variant_spec["variant"]),
+                "description": str(variant_spec["description"]),
+                "layer_scope": str(variant_spec["layer_scope"]),
+                "kv_target": str(variant_spec["kv_target"]),
+                "cls_policy": str(variant_spec["cls_policy"]),
+                "precision_mode": str(variant_spec["precision_mode"]),
+                "streaming_enabled": bool(variant_spec["streaming_enabled"]),
+                "materialize_attention_matrix": bool(variant_spec["materialize_attention_matrix"]),
+                "attention_compression_mode": str(variant_spec["attention_compression_mode"]),
+                "attention_layer_selector": layer_selector,
+                "attention_layer_count": int(layer_count),
+                "enabled_layer_indices": list(explicit_indices),
+                "quantize_k": bool(variant_spec["quantize_k"]),
+                "quantize_v": bool(variant_spec["quantize_v"]),
+                "preserve_cls_token": bool(variant_spec["preserve_cls_token"]),
+                "kv_bits": 4 if str(variant_spec["attention_compression_mode"]).strip().lower() != "none" else 0,
+                "group_size": int(config.group_size),
+                "token_block_size": int(config.token_block_size),
+                "notes": notes,
+            }
+        )
+    return rows
+
+
 def _apply_attention_compression_from_config(
     model: nn.Module,
     config: LegacyExperimentConfig,
@@ -632,6 +893,10 @@ def _apply_attention_compression_from_config(
         )
     if int(config.kv_bits) != 4:
         raise ValueError("Current packed KV attention path only supports kv_bits=4")
+    if not bool(config.streaming_enabled):
+        raise ValueError("Current packed KV attention path requires streaming_enabled=True")
+    if bool(config.materialize_attention_matrix):
+        raise ValueError("Current packed KV attention path requires materialize_attention_matrix=False")
 
     explicit_indices = list(config.enabled_layer_indices or [])
     layer_count = int(config.attention_layer_count) if int(config.attention_layer_count) > 0 else None
@@ -1474,6 +1739,8 @@ def train_legacy_classifier(config: str | Path | dict[str, Any]) -> dict[str, An
         "preserve_cls_token": bool(experiment_config.preserve_cls_token),
         "quantize_k": bool(experiment_config.quantize_k),
         "quantize_v": bool(experiment_config.quantize_v),
+        "streaming_enabled": bool(experiment_config.streaming_enabled),
+        "materialize_attention_matrix": bool(experiment_config.materialize_attention_matrix),
         "pretrained": bool(experiment_config.pretrained),
         "seed": int(experiment_config.seed),
         "batch_size": int(experiment_config.batch_size),
@@ -2252,7 +2519,182 @@ def benchmark_legacy_checkpoint(
     metrics["experiment_name"] = str(config.experiment_name)
     metrics["model_name"] = _normalize_model_name(checkpoint.get("model_name", config.model_name))
     metrics["attention_compression_mode"] = str(config.attention_compression_mode)
+    metrics["threshold"] = float(resolved_threshold)
+    metrics["streaming_enabled"] = bool(config.streaming_enabled)
+    metrics["materialize_attention_matrix"] = bool(config.materialize_attention_matrix)
     return metrics
+
+
+def _vit_attention_ablation_row(
+    metrics: dict[str, Any],
+    *,
+    variant_config: dict[str, Any],
+    config: LegacyExperimentConfig,
+    status: str,
+    supported: bool,
+    result_source: str,
+    notes: str = "",
+) -> dict[str, Any]:
+    merged_notes = [str(variant_config.get("notes", "")).strip(), str(notes).strip()]
+    return {
+        "variant": variant_config.get("variant", ""),
+        "description": variant_config.get("description", ""),
+        "result_source": result_source,
+        "status": status,
+        "supported": bool(supported),
+        "layer_scope": variant_config.get("layer_scope", ""),
+        "kv_target": variant_config.get("kv_target", ""),
+        "cls_policy": variant_config.get("cls_policy", ""),
+        "precision_mode": variant_config.get("precision_mode", ""),
+        "streaming_enabled": bool(variant_config.get("streaming_enabled", False)),
+        "materialize_attention_matrix": bool(variant_config.get("materialize_attention_matrix", False)),
+        "experiment_name": str(config.experiment_name),
+        "model_name": _normalize_model_name(config.model_name),
+        "image_size": format_image_size_spec(config.image_size),
+        "attention_compression_mode": str(config.attention_compression_mode),
+        "attention_layer_selector": str(config.attention_layer_selector),
+        "attention_layer_count": int(config.attention_layer_count),
+        "enabled_layer_indices": json.dumps(list(config.enabled_layer_indices), ensure_ascii=False),
+        "kv_bits": int(config.kv_bits),
+        "group_size": int(config.group_size),
+        "token_block_size": int(config.token_block_size),
+        "preserve_cls_token": bool(config.preserve_cls_token),
+        "quantize_k": bool(config.quantize_k),
+        "quantize_v": bool(config.quantize_v),
+        "split": metrics.get("split", ""),
+        "threshold": metrics.get("threshold", ""),
+        "accuracy": metrics.get("accuracy", ""),
+        "precision": metrics.get("precision", ""),
+        "recall": metrics.get("recall", ""),
+        "f1": metrics.get("f1", ""),
+        "roc_auc": metrics.get("roc_auc", ""),
+        "ms_per_image": metrics.get("ms_per_image", ""),
+        "peak_cpu_memory_mb": metrics.get("peak_cpu_memory_mb", ""),
+        "peak_gpu_memory_mb": metrics.get("peak_gpu_memory_mb", ""),
+        "peak_gpu_memory_attention_only_mb": metrics.get("peak_gpu_memory_attention_only_mb", ""),
+        "packed_kv_size_mb": metrics.get("packed_kv_size_mb", ""),
+        "token_count": metrics.get("token_count", ""),
+        "num_patched_layers": metrics.get("num_patched_layers", ""),
+        "checkpoint_path": metrics.get("checkpoint_path", ""),
+        "notes": " | ".join(note for note in merged_notes if note),
+    }
+
+
+def run_vit_attention_ablation(
+    checkpoint_path: str | Path,
+    *,
+    base_config: str | Path | dict[str, Any] | None = None,
+    comparison_csv_path: str | Path | None = None,
+    split: str = "test",
+    device: str = "cpu",
+    threshold: float | None = None,
+    variants: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Benchmark a saved ViT checkpoint across the default full-module attention ablation matrix."""
+
+    if base_config is None:
+        checkpoint, experiment_config, _ = _load_legacy_checkpoint_bundle(checkpoint_path)
+        resolved_threshold = float(threshold) if threshold is not None else float(checkpoint.get("threshold", 0.5))
+    else:
+        experiment_config = load_experiment_config(base_config)
+        checkpoint = None
+        resolved_threshold = float(threshold) if threshold is not None else 0.5
+
+    normalized_model_name = _normalize_model_name(experiment_config.model_name)
+    if not normalized_model_name.startswith("vit_"):
+        raise ValueError("run_vit_attention_ablation currently only supports ViT checkpoints")
+
+    output_root = Path(experiment_config.output_root).resolve()
+    csv_path = (
+        Path(comparison_csv_path).resolve()
+        if comparison_csv_path is not None
+        else output_root / "results" / "vit_attention_ablation.csv"
+    )
+
+    variant_configs = _build_vit_attention_ablation_variants(experiment_config, variants=variants)
+    comparison_rows: list[dict[str, Any]] = []
+
+    for variant in variant_configs:
+        run_config = asdict(experiment_config)
+        run_config["attention_compression_mode"] = variant["attention_compression_mode"]
+        run_config["attention_layer_selector"] = variant["attention_layer_selector"]
+        run_config["attention_layer_count"] = int(variant["attention_layer_count"])
+        run_config["enabled_layer_indices"] = list(variant["enabled_layer_indices"])
+        run_config["quantize_k"] = bool(variant["quantize_k"])
+        run_config["quantize_v"] = bool(variant["quantize_v"])
+        run_config["preserve_cls_token"] = bool(variant["preserve_cls_token"])
+        run_config["kv_bits"] = int(variant["kv_bits"])
+        run_config["streaming_enabled"] = bool(variant["streaming_enabled"])
+        run_config["materialize_attention_matrix"] = bool(variant["materialize_attention_matrix"])
+        resolved_config = load_experiment_config(run_config)
+
+        try:
+            metrics = benchmark_legacy_checkpoint(
+                checkpoint_path,
+                config_override=run_config,
+                split=split,
+                device=device,
+                threshold=resolved_threshold,
+            )
+            metrics.setdefault(
+                "threshold",
+                float(checkpoint.get("threshold", resolved_threshold)) if checkpoint is not None else float(resolved_threshold),
+            )
+            comparison_rows.append(
+                _vit_attention_ablation_row(
+                    metrics,
+                    variant_config=variant,
+                    config=resolved_config,
+                    status="completed",
+                    supported=True,
+                    result_source="benchmarked",
+                )
+            )
+        except ValueError as exc:
+            comparison_rows.append(
+                _vit_attention_ablation_row(
+                    {"checkpoint_path": str(Path(checkpoint_path).resolve())},
+                    variant_config=variant,
+                    config=resolved_config,
+                    status="unsupported",
+                    supported=False,
+                    result_source="skipped",
+                    notes=str(exc),
+                )
+            )
+
+    _write_rows_csv(csv_path, VIT_ATTENTION_ABLATION_COLUMNS, comparison_rows)
+    completed_rows = [row for row in comparison_rows if row["status"] == "completed"]
+    if not completed_rows:
+        raise RuntimeError("No ViT attention ablation variants completed successfully")
+    best_row = max(
+        completed_rows,
+        key=lambda row: (
+            float(row.get("f1") or 0.0),
+            float(row.get("recall") or 0.0),
+            float(row.get("roc_auc") or 0.0),
+        ),
+    )
+    lowest_memory_row = min(
+        completed_rows,
+        key=lambda row: float(row.get("peak_gpu_memory_mb") or float("inf")),
+    )
+    logger.info(
+        "ViT attention ablation complete | best_variant=%s | best_f1=%.4f | lowest_memory=%s | csv=%s",
+        best_row["variant"],
+        float(best_row.get("f1") or 0.0),
+        lowest_memory_row["variant"],
+        csv_path,
+    )
+    return {
+        "base_experiment_name": experiment_config.experiment_name,
+        "model_name": normalized_model_name,
+        "comparison_csv_path": str(csv_path),
+        "best_variant": best_row["variant"],
+        "best_f1": float(best_row.get("f1") or 0.0),
+        "lowest_memory_variant": lowest_memory_row["variant"],
+        "results": comparison_rows,
+    }
 
 
 def _load_torchao_quantization_api() -> tuple[Any, Any]:
