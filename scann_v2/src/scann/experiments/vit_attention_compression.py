@@ -45,6 +45,8 @@ class PackedKVAttentionConfig:
     quantize_k: bool = True
     quantize_v: bool = True
     preserve_cls_token: bool = False
+    residual_mode: str = "none"
+    qjl_dim: int = 0
     compute_dtype: torch.dtype = torch.float32
 
 
@@ -374,6 +376,8 @@ def build_packed_kv_attention_adapter(
         setattr(attention_module, "_vit_last_quantize_k", bool(runtime_config.quantize_k))
         setattr(attention_module, "_vit_last_quantize_v", bool(runtime_config.quantize_v))
         setattr(attention_module, "_vit_last_preserve_cls_token", bool(runtime_config.preserve_cls_token))
+        setattr(attention_module, "_vit_last_residual_mode", str(runtime_config.residual_mode))
+        setattr(attention_module, "_vit_last_qjl_dim", int(runtime_config.qjl_dim))
         cls_k = cls_v = None
         patch_k = k
         patch_v = v
@@ -384,12 +388,24 @@ def build_packed_kv_attention_adapter(
             patch_v = v[..., 1:, :]
 
         packed_key = (
-            pack_tensor_4bit(patch_k, group_size=runtime_config.group_size, token_axis=-2)
+            pack_tensor_4bit(
+                patch_k,
+                group_size=runtime_config.group_size,
+                token_axis=-2,
+                residual_mode=runtime_config.residual_mode,
+                qjl_dim=runtime_config.qjl_dim,
+            )
             if runtime_config.quantize_k and int(patch_k.shape[-2]) > 0
             else None
         )
         packed_value = (
-            pack_tensor_4bit(patch_v, group_size=runtime_config.group_size, token_axis=-2)
+            pack_tensor_4bit(
+                patch_v,
+                group_size=runtime_config.group_size,
+                token_axis=-2,
+                residual_mode=runtime_config.residual_mode,
+                qjl_dim=runtime_config.qjl_dim,
+            )
             if runtime_config.quantize_v and int(patch_v.shape[-2]) > 0
             else None
         )

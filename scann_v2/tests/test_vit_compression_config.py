@@ -27,6 +27,8 @@ def test_load_experiment_config_supports_vit_compression_fields():
             "preserve_cls_token": True,
             "quantize_k": True,
             "quantize_v": False,
+            "residual_mode": "qjl_sign_norm",
+            "qjl_dim": 8,
         }
     )
 
@@ -40,6 +42,8 @@ def test_load_experiment_config_supports_vit_compression_fields():
     assert config.preserve_cls_token is True
     assert config.quantize_k is True
     assert config.quantize_v is False
+    assert config.residual_mode == "qjl_sign_norm"
+    assert config.qjl_dim == 8
 
 
 def test_benchmark_legacy_checkpoint_passes_through_new_metrics(monkeypatch, tmp_path):
@@ -57,6 +61,8 @@ def test_benchmark_legacy_checkpoint_passes_through_new_metrics(monkeypatch, tmp
         preserve_cls_token=True,
         quantize_k=True,
         quantize_v=True,
+        residual_mode="qjl_sign_norm",
+        qjl_dim=8,
     )
     model = nn.Identity()
 
@@ -96,6 +102,8 @@ def test_benchmark_legacy_checkpoint_passes_through_new_metrics(monkeypatch, tmp
     assert metrics["peak_gpu_memory_attention_only_mb"] == 80.0
     assert metrics["token_count"] == 197
     assert metrics["num_patched_layers"] == 12
+    assert metrics["residual_mode"] == "qjl_sign_norm"
+    assert metrics["qjl_dim"] == 8
 
 
 def test_train_legacy_classifier_rejects_attention_compression_for_training(tmp_path, monkeypatch):

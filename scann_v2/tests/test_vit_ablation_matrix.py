@@ -24,6 +24,7 @@ def test_build_vit_attention_ablation_variants_includes_required_full_module_row
     assert "all_layers_k_only_4bit" in variant_names
     assert "all_layers_kv_4bit" in variant_names
     assert "all_layers_kv_4bit_cls_preserved" in variant_names
+    assert "all_layers_kv_4bit_qjl" in variant_names
 
     first_variant = next(variant for variant in variants if variant["variant"] == "first_25pct_kv_4bit")
     middle_variant = next(variant for variant in variants if variant["variant"] == "middle_50pct_kv_4bit")
@@ -109,6 +110,8 @@ def test_run_vit_attention_ablation_writes_csv_with_required_metadata(monkeypatc
     assert row_by_variant["all_layers_k_only_4bit"]["layer_scope"] == "all_layers"
     assert row_by_variant["all_layers_kv_4bit"]["kv_target"] == "K/V both"
     assert row_by_variant["all_layers_kv_4bit_cls_preserved"]["cls_policy"] == "cls_preserved"
+    assert row_by_variant["all_layers_kv_4bit_qjl"]["residual_mode"] == "qjl_sign_norm"
+    assert row_by_variant["all_layers_kv_4bit_qjl"]["qjl_dim"] == "8"
     assert row_by_variant["custom_indices_kv_4bit"]["enabled_layer_indices"] == "[0, 5, 11]"
     assert row_by_variant["middle_50pct_kv_4bit"]["attention_layer_selector"] == "middle"
     assert row_by_variant["last_25pct_kv_4bit"]["attention_layer_count"] == "3"

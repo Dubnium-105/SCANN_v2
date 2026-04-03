@@ -73,6 +73,8 @@ SUMMARY_COLUMNS = [
     "preserve_cls_token",
     "quantize_k",
     "quantize_v",
+    "residual_mode",
+    "qjl_dim",
     "streaming_enabled",
     "materialize_attention_matrix",
     "pretrained",
@@ -307,6 +309,8 @@ VIT_ATTENTION_ABLATION_COLUMNS = [
     "preserve_cls_token",
     "quantize_k",
     "quantize_v",
+    "residual_mode",
+    "qjl_dim",
     "split",
     "threshold",
     "accuracy",
@@ -338,6 +342,8 @@ VIT_ATTENTION_ABLATION_VARIANTS = [
         "quantize_k": False,
         "quantize_v": False,
         "preserve_cls_token": False,
+        "residual_mode": "none",
+        "qjl_dim": 0,
     },
     {
         "variant": "all_layers_k_only_4bit",
@@ -352,6 +358,8 @@ VIT_ATTENTION_ABLATION_VARIANTS = [
         "quantize_k": True,
         "quantize_v": False,
         "preserve_cls_token": False,
+        "residual_mode": "none",
+        "qjl_dim": 0,
     },
     {
         "variant": "all_layers_v_only_4bit",
@@ -366,6 +374,8 @@ VIT_ATTENTION_ABLATION_VARIANTS = [
         "quantize_k": False,
         "quantize_v": True,
         "preserve_cls_token": False,
+        "residual_mode": "none",
+        "qjl_dim": 0,
     },
     {
         "variant": "all_layers_kv_4bit",
@@ -380,6 +390,8 @@ VIT_ATTENTION_ABLATION_VARIANTS = [
         "quantize_k": True,
         "quantize_v": True,
         "preserve_cls_token": False,
+        "residual_mode": "none",
+        "qjl_dim": 0,
     },
     {
         "variant": "all_layers_kv_4bit_patch_only",
@@ -394,6 +406,8 @@ VIT_ATTENTION_ABLATION_VARIANTS = [
         "quantize_k": True,
         "quantize_v": True,
         "preserve_cls_token": True,
+        "residual_mode": "none",
+        "qjl_dim": 0,
     },
     {
         "variant": "all_layers_kv_4bit_cls_preserved",
@@ -408,6 +422,8 @@ VIT_ATTENTION_ABLATION_VARIANTS = [
         "quantize_k": True,
         "quantize_v": True,
         "preserve_cls_token": True,
+        "residual_mode": "none",
+        "qjl_dim": 0,
     },
     {
         "variant": "first_25pct_kv_4bit",
@@ -422,6 +438,8 @@ VIT_ATTENTION_ABLATION_VARIANTS = [
         "quantize_k": True,
         "quantize_v": True,
         "preserve_cls_token": False,
+        "residual_mode": "none",
+        "qjl_dim": 0,
     },
     {
         "variant": "middle_50pct_kv_4bit",
@@ -436,6 +454,8 @@ VIT_ATTENTION_ABLATION_VARIANTS = [
         "quantize_k": True,
         "quantize_v": True,
         "preserve_cls_token": False,
+        "residual_mode": "none",
+        "qjl_dim": 0,
     },
     {
         "variant": "last_25pct_kv_4bit",
@@ -450,6 +470,8 @@ VIT_ATTENTION_ABLATION_VARIANTS = [
         "quantize_k": True,
         "quantize_v": True,
         "preserve_cls_token": False,
+        "residual_mode": "none",
+        "qjl_dim": 0,
     },
     {
         "variant": "custom_indices_kv_4bit",
@@ -464,6 +486,24 @@ VIT_ATTENTION_ABLATION_VARIANTS = [
         "quantize_k": True,
         "quantize_v": True,
         "preserve_cls_token": False,
+        "residual_mode": "none",
+        "qjl_dim": 0,
+    },
+    {
+        "variant": "all_layers_kv_4bit_qjl",
+        "description": "full-module K/V packed streaming with qjl sign-norm residual",
+        "layer_scope": "all_layers",
+        "kv_target": "K/V both",
+        "cls_policy": "patch_plus_cls",
+        "precision_mode": "KV 4-bit + qjl residual",
+        "streaming_enabled": True,
+        "materialize_attention_matrix": False,
+        "attention_compression_mode": "vit_packed_kv",
+        "quantize_k": True,
+        "quantize_v": True,
+        "preserve_cls_token": False,
+        "residual_mode": "qjl_sign_norm",
+        "qjl_dim": 8,
     },
 ]
 
@@ -492,6 +532,8 @@ class LegacyExperimentConfig:
     preserve_cls_token: bool = False
     quantize_k: bool = True
     quantize_v: bool = True
+    residual_mode: str = "none"
+    qjl_dim: int = 0
     streaming_enabled: bool = True
     materialize_attention_matrix: bool = False
     batch_size: int = 32
@@ -767,6 +809,8 @@ def create_vit_packed_kv_attention_model(
     quantize_k: bool = True,
     quantize_v: bool = True,
     preserve_cls_token: bool = False,
+    residual_mode: str = "none",
+    qjl_dim: int = 0,
     compute_dtype: torch.dtype = torch.float32,
 ) -> nn.Module:
     from .vit_attention_compression import (
@@ -786,6 +830,8 @@ def create_vit_packed_kv_attention_model(
         quantize_k=quantize_k,
         quantize_v=quantize_v,
         preserve_cls_token=preserve_cls_token,
+        residual_mode=residual_mode,
+        qjl_dim=qjl_dim,
         compute_dtype=compute_dtype,
     )
     return create_vit_packed_kv_compression_model(
@@ -863,6 +909,8 @@ def _build_vit_attention_ablation_variants(
                 "quantize_k": bool(variant_spec["quantize_k"]),
                 "quantize_v": bool(variant_spec["quantize_v"]),
                 "preserve_cls_token": bool(variant_spec["preserve_cls_token"]),
+                "residual_mode": str(variant_spec.get("residual_mode", config.residual_mode)),
+                "qjl_dim": int(variant_spec.get("qjl_dim", config.qjl_dim)),
                 "kv_bits": 4 if str(variant_spec["attention_compression_mode"]).strip().lower() != "none" else 0,
                 "group_size": int(config.group_size),
                 "token_block_size": int(config.token_block_size),
@@ -897,6 +945,8 @@ def _apply_attention_compression_from_config(
         raise ValueError("Current packed KV attention path requires streaming_enabled=True")
     if bool(config.materialize_attention_matrix):
         raise ValueError("Current packed KV attention path requires materialize_attention_matrix=False")
+    if str(config.residual_mode).strip().lower() == "qjl_sign_norm" and int(config.qjl_dim) <= 0:
+        raise ValueError("residual_mode='qjl_sign_norm' requires qjl_dim > 0")
 
     explicit_indices = list(config.enabled_layer_indices or [])
     layer_count = int(config.attention_layer_count) if int(config.attention_layer_count) > 0 else None
@@ -911,6 +961,8 @@ def _apply_attention_compression_from_config(
             quantize_k=bool(config.quantize_k),
             quantize_v=bool(config.quantize_v),
             preserve_cls_token=bool(config.preserve_cls_token),
+            residual_mode=str(config.residual_mode),
+            qjl_dim=int(config.qjl_dim),
             compute_dtype=torch.float32,
         )
     raise ValueError(f"Unsupported attention_compression_mode: {config.attention_compression_mode}")
@@ -1739,6 +1791,8 @@ def train_legacy_classifier(config: str | Path | dict[str, Any]) -> dict[str, An
         "preserve_cls_token": bool(experiment_config.preserve_cls_token),
         "quantize_k": bool(experiment_config.quantize_k),
         "quantize_v": bool(experiment_config.quantize_v),
+        "residual_mode": str(experiment_config.residual_mode),
+        "qjl_dim": int(experiment_config.qjl_dim),
         "streaming_enabled": bool(experiment_config.streaming_enabled),
         "materialize_attention_matrix": bool(experiment_config.materialize_attention_matrix),
         "pretrained": bool(experiment_config.pretrained),
@@ -2520,6 +2574,8 @@ def benchmark_legacy_checkpoint(
     metrics["model_name"] = _normalize_model_name(checkpoint.get("model_name", config.model_name))
     metrics["attention_compression_mode"] = str(config.attention_compression_mode)
     metrics["threshold"] = float(resolved_threshold)
+    metrics["residual_mode"] = str(config.residual_mode)
+    metrics["qjl_dim"] = int(config.qjl_dim)
     metrics["streaming_enabled"] = bool(config.streaming_enabled)
     metrics["materialize_attention_matrix"] = bool(config.materialize_attention_matrix)
     return metrics
@@ -2561,6 +2617,8 @@ def _vit_attention_ablation_row(
         "preserve_cls_token": bool(config.preserve_cls_token),
         "quantize_k": bool(config.quantize_k),
         "quantize_v": bool(config.quantize_v),
+        "residual_mode": str(config.residual_mode),
+        "qjl_dim": int(config.qjl_dim),
         "split": metrics.get("split", ""),
         "threshold": metrics.get("threshold", ""),
         "accuracy": metrics.get("accuracy", ""),
@@ -2623,6 +2681,8 @@ def run_vit_attention_ablation(
         run_config["quantize_k"] = bool(variant["quantize_k"])
         run_config["quantize_v"] = bool(variant["quantize_v"])
         run_config["preserve_cls_token"] = bool(variant["preserve_cls_token"])
+        run_config["residual_mode"] = str(variant["residual_mode"])
+        run_config["qjl_dim"] = int(variant["qjl_dim"])
         run_config["kv_bits"] = int(variant["kv_bits"])
         run_config["streaming_enabled"] = bool(variant["streaming_enabled"])
         run_config["materialize_attention_matrix"] = bool(variant["materialize_attention_matrix"])

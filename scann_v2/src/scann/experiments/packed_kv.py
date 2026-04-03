@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence, Tuple
+from typing import Tuple
 
 import torch
 import torch.nn.functional as F
+
+_QJL_PROJECTION_SEED = 1729
 
 
 @dataclass(frozen=True)
@@ -20,11 +22,20 @@ class PackedTensor4Bit:
     group_size: int
     groups_per_token: int
     token_axis: int
+    residual_mode: str = "none"
+    qjl_dim: int = 0
+    residual_norms: torch.Tensor | None = None
+    residual_signs: torch.Tensor | None = None
 
     def storage_size_bytes(self) -> int:
-        return (self.packed_codes.element_size() * self.packed_codes.numel()) + (
+        total = (self.packed_codes.element_size() * self.packed_codes.numel()) + (
             self.scales.element_size() * self.scales.numel()
         )
+        if self.residual_norms is not None:
+            total += self.residual_norms.element_size() * self.residual_norms.numel()
+        if self.residual_signs is not None:
+            total += self.residual_signs.element_size() * self.residual_signs.numel()
+        return int(total)
 
 
 @dataclass(frozen=True)
@@ -62,6 +73,25 @@ def _validate_group_size(group_size: int) -> int:
     return resolved
 
 
+def _resolve_residual_mode(residual_mode: str) -> str:
+    normalized = str(residual_mode).strip().lower()
+    if normalized in {"", "none"}:
+        return "none"
+    if normalized == "qjl_sign_norm":
+        return normalized
+    raise ValueError(f"Unsupported residual_mode: {residual_mode}")
+
+
+def _resolve_qjl_dim(qjl_dim: int, *, group_size: int, residual_mode: str) -> int:
+    del group_size
+    if residual_mode == "none":
+        return 0
+    resolved = int(qjl_dim)
+    if resolved <= 0:
+        raise ValueError("qjl_dim must be positive when residual_mode='qjl_sign_norm'")
+    return resolved
+
+
 def _pad_last_dim(x: torch.Tensor, *, group_size: int) -> tuple[torch.Tensor, int]:
     last_dim = int(x.shape[-1])
     padded_last_dim = ((last_dim + group_size - 1) // group_size) * group_size
@@ -83,6 +113,19 @@ def _pack_nibbles(codes: torch.Tensor) -> torch.Tensor:
     return low | (high << 4)
 
 
+def _pack_bits(bits: torch.Tensor) -> torch.Tensor:
+    if bits.dtype != torch.uint8:
+        raise TypeError("bits must use torch.uint8 before bit packing")
+
+    if int(bits.shape[-1]) % 8 != 0:
+        bits = F.pad(bits, (0, 8 - (int(bits.shape[-1]) % 8)), value=0)
+
+    shifts = torch.arange(8, device=bits.device, dtype=torch.int64)
+    grouped = bits.reshape(*bits.shape[:-1], -1, 8).to(torch.int64)
+    packed = torch.sum(grouped * (1 << shifts), dim=-1)
+    return packed.to(torch.uint8)
+
+
 def _unpack_nibbles(packed_codes: torch.Tensor, *, group_size: int) -> torch.Tensor:
     low = packed_codes & 0x0F
     high = (packed_codes >> 4) & 0x0F
@@ -90,11 +133,28 @@ def _unpack_nibbles(packed_codes: torch.Tensor, *, group_size: int) -> torch.Ten
     return codes[..., :group_size]
 
 
+def _unpack_bits(packed_bits: torch.Tensor, *, bit_count: int) -> torch.Tensor:
+    shifts = torch.arange(8, device=packed_bits.device, dtype=torch.int64)
+    expanded = ((packed_bits.to(torch.int64).unsqueeze(-1) >> shifts) & 0x01).to(torch.uint8)
+    bits = expanded.reshape(*packed_bits.shape[:-1], -1)
+    return bits[..., :bit_count]
+
+
+def _qjl_projection(group_size: int, qjl_dim: int, *, device: torch.device) -> torch.Tensor:
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(int(_QJL_PROJECTION_SEED) + (int(group_size) * 31) + int(qjl_dim))
+    projection = torch.randn((int(qjl_dim), int(group_size)), generator=generator, dtype=torch.float32)
+    projection = F.normalize(projection, dim=-1)
+    return projection.to(device=device)
+
+
 def pack_tensor_4bit(
     tensor: torch.Tensor,
     *,
     group_size: int = 32,
     token_axis: int = -2,
+    residual_mode: str = "none",
+    qjl_dim: int = 0,
 ) -> PackedTensor4Bit:
     """Symmetrically quantize a tensor into packed 4-bit groups on the last dim."""
 
@@ -103,6 +163,12 @@ def pack_tensor_4bit(
 
     resolved_group_size = _validate_group_size(group_size)
     resolved_token_axis = _canonical_token_axis(tensor.ndim, token_axis)
+    resolved_residual_mode = _resolve_residual_mode(residual_mode)
+    resolved_qjl_dim = _resolve_qjl_dim(
+        qjl_dim,
+        group_size=resolved_group_size,
+        residual_mode=resolved_residual_mode,
+    )
     x = tensor.detach().to(torch.float32)
     original_shape = tuple(int(dim) for dim in x.shape)
     x_padded, padded_last_dim = _pad_last_dim(x, group_size=resolved_group_size)
@@ -113,6 +179,15 @@ def pack_tensor_4bit(
     quantized = torch.round(grouped / scales.unsqueeze(-1)).clamp(-8, 7).to(torch.int16)
     codes = (quantized + 8).to(torch.uint8)
     packed_codes = _pack_nibbles(codes)
+    residual_norms = None
+    residual_signs = None
+    if resolved_residual_mode == "qjl_sign_norm":
+        reconstructed = quantized.to(torch.float32) * scales.unsqueeze(-1)
+        residual = grouped - reconstructed
+        residual_norms = residual.norm(dim=-1).contiguous()
+        projection = _qjl_projection(resolved_group_size, resolved_qjl_dim, device=residual.device)
+        residual_sketch = torch.matmul(residual, projection.transpose(0, 1))
+        residual_signs = _pack_bits((residual_sketch >= 0).to(torch.uint8)).contiguous()
 
     return PackedTensor4Bit(
         packed_codes=packed_codes.contiguous(),
@@ -122,6 +197,10 @@ def pack_tensor_4bit(
         group_size=resolved_group_size,
         groups_per_token=groups_per_token,
         token_axis=resolved_token_axis,
+        residual_mode=resolved_residual_mode,
+        qjl_dim=resolved_qjl_dim,
+        residual_norms=residual_norms,
+        residual_signs=residual_signs,
     )
 
 
@@ -135,6 +214,15 @@ def unpack_tensor_4bit(
     codes = _unpack_nibbles(packed.packed_codes, group_size=int(packed.group_size))
     quantized = codes.to(torch.int16) - 8
     reconstructed = quantized.to(torch.float32) * packed.scales.unsqueeze(-1)
+    if packed.residual_mode == "qjl_sign_norm":
+        if packed.residual_norms is None or packed.residual_signs is None:
+            raise ValueError("Packed tensor is missing residual metadata for residual_mode='qjl_sign_norm'")
+        sign_bits = _unpack_bits(packed.residual_signs, bit_count=int(packed.qjl_dim))
+        sign_values = (sign_bits.to(torch.float32) * 2.0) - 1.0
+        projection = _qjl_projection(int(packed.group_size), int(packed.qjl_dim), device=reconstructed.device)
+        residual_direction = torch.matmul(sign_values, projection)
+        residual_direction = residual_direction / residual_direction.norm(dim=-1, keepdim=True).clamp_min(1e-8)
+        reconstructed = reconstructed + (residual_direction * packed.residual_norms.unsqueeze(-1))
     reconstructed = reconstructed.reshape(*packed.padded_shape)[..., : packed.original_shape[-1]]
     return reconstructed.to(dtype=dtype)
 
@@ -172,6 +260,18 @@ def slice_packed_tensor(
         group_size=int(packed.group_size),
         groups_per_token=int(packed.groups_per_token),
         token_axis=int(packed.token_axis if axis is None else resolved_axis),
+        residual_mode=str(packed.residual_mode),
+        qjl_dim=int(packed.qjl_dim),
+        residual_norms=(
+            None
+            if packed.residual_norms is None
+            else packed.residual_norms.narrow(resolved_axis, start_index, end_index - start_index).contiguous()
+        ),
+        residual_signs=(
+            None
+            if packed.residual_signs is None
+            else packed.residual_signs.narrow(resolved_axis, start_index, end_index - start_index).contiguous()
+        ),
     )
 
 
@@ -195,6 +295,8 @@ def pack_kv_per_head(
     *,
     group_size: int = 32,
     token_axis: int = -2,
+    residual_mode: str = "none",
+    qjl_dim: int = 0,
 ) -> PackedKV4Bit:
     """Pack K/V tensors that already expose a per-head layout such as [B, H, T, D]."""
 
@@ -202,8 +304,20 @@ def pack_kv_per_head(
         raise ValueError("key and value tensors must share the same shape")
 
     return PackedKV4Bit(
-        packed_k=pack_tensor_4bit(key, group_size=group_size, token_axis=token_axis),
-        packed_v=pack_tensor_4bit(value, group_size=group_size, token_axis=token_axis),
+        packed_k=pack_tensor_4bit(
+            key,
+            group_size=group_size,
+            token_axis=token_axis,
+            residual_mode=residual_mode,
+            qjl_dim=qjl_dim,
+        ),
+        packed_v=pack_tensor_4bit(
+            value,
+            group_size=group_size,
+            token_axis=token_axis,
+            residual_mode=residual_mode,
+            qjl_dim=qjl_dim,
+        ),
     )
 
 
