@@ -4,6 +4,7 @@ from .legacy_dataset import LegacyTripletExperimentDataset
 from .legacy_manifest import build_legacy_triplet_manifest, load_legacy_manifest
 from .legacy_runner import (
     LegacyExperimentConfig,
+    benchmark_legacy_checkpoint,
     create_vit_attention_compression_model,
     create_vit_packed_kv_attention_model,
     evaluate_legacy_checkpoint,
@@ -18,6 +19,7 @@ from .legacy_runner import (
 __all__ = [
     "LegacyExperimentConfig",
     "LegacyTripletExperimentDataset",
+    "benchmark_legacy_checkpoint",
     "build_legacy_triplet_manifest",
     "create_vit_attention_compression_model",
     "create_vit_packed_kv_attention_model",

@@ -63,6 +63,16 @@ SUMMARY_COLUMNS = [
     "image_size",
     "resize_mode",
     "normalize",
+    "attention_compression_mode",
+    "attention_layer_selector",
+    "attention_layer_count",
+    "enabled_layer_indices",
+    "kv_bits",
+    "group_size",
+    "token_block_size",
+    "preserve_cls_token",
+    "quantize_k",
+    "quantize_v",
     "pretrained",
     "seed",
     "batch_size",
@@ -91,6 +101,10 @@ SUMMARY_COLUMNS = [
     "test_tp",
     "avg_epoch_seconds",
     "peak_gpu_memory_mb",
+    "peak_gpu_memory_attention_only_mb",
+    "packed_kv_size_mb",
+    "token_count",
+    "num_patched_layers",
     "manifest_path",
     "checkpoint_path",
     "history_path",
@@ -282,6 +296,16 @@ class LegacyExperimentConfig:
     image_size: int | list[int] | str = 224
     resize_mode: str = "resize"
     normalize: bool = True
+    attention_compression_mode: str = "none"
+    attention_layer_selector: str = "all"
+    attention_layer_count: int = 0
+    enabled_layer_indices: list[int] = field(default_factory=list)
+    kv_bits: int = 4
+    group_size: int = 32
+    token_block_size: int = 64
+    preserve_cls_token: bool = False
+    quantize_k: bool = True
+    quantize_v: bool = True
     batch_size: int = 32
     epochs: int = 30
     lr: float = 2e-4
@@ -347,6 +371,8 @@ def load_experiment_config(config: str | Path | dict[str, Any]) -> LegacyExperim
             raw[key] = _resolve_relative_path(raw.get(key), base_dir)
     if "image_size" in raw:
         raw["image_size"] = normalize_image_size_spec(raw["image_size"])
+    if "enabled_layer_indices" in raw and raw["enabled_layer_indices"] is not None:
+        raw["enabled_layer_indices"] = [int(value) for value in raw["enabled_layer_indices"]]
 
     return LegacyExperimentConfig(**raw)
 
@@ -579,6 +605,83 @@ def create_vit_packed_kv_attention_model(
         patch_config=patch_config,
         packed_kv_config=packed_kv_config,
     )
+
+
+def _attention_compression_enabled(config: LegacyExperimentConfig) -> bool:
+    return str(config.attention_compression_mode).strip().lower() not in {"", "none"}
+
+
+def _apply_attention_compression_from_config(
+    model: nn.Module,
+    config: LegacyExperimentConfig,
+    *,
+    for_training: bool,
+) -> nn.Module:
+    mode = str(config.attention_compression_mode).strip().lower()
+    if mode in {"", "none"}:
+        return model
+
+    normalized_model_name = _normalize_model_name(config.model_name)
+    if not normalized_model_name.startswith("vit_"):
+        raise ValueError(
+            f"attention_compression_mode={config.attention_compression_mode!r} currently only supports ViT models"
+        )
+    if for_training:
+        raise ValueError(
+            "attention_compression_mode is currently inference-only; training with packed KV attention is not yet supported"
+        )
+    if int(config.kv_bits) != 4:
+        raise ValueError("Current packed KV attention path only supports kv_bits=4")
+
+    explicit_indices = list(config.enabled_layer_indices or [])
+    layer_count = int(config.attention_layer_count) if int(config.attention_layer_count) > 0 else None
+    if mode == "vit_packed_kv":
+        return create_vit_packed_kv_attention_model(
+            model,
+            layer_selector=config.attention_layer_selector,
+            count=layer_count,
+            explicit_indices=explicit_indices,
+            group_size=int(config.group_size),
+            block_size=int(config.token_block_size),
+            quantize_k=bool(config.quantize_k),
+            quantize_v=bool(config.quantize_v),
+            preserve_cls_token=bool(config.preserve_cls_token),
+            compute_dtype=torch.float32,
+        )
+    raise ValueError(f"Unsupported attention_compression_mode: {config.attention_compression_mode}")
+
+
+def _estimate_vit_token_count_from_input(model: nn.Module, x: torch.Tensor) -> int:
+    patch_size = getattr(model, "patch_size", None)
+    if patch_size is None:
+        return 0
+    if isinstance(patch_size, int):
+        patch_h = patch_w = int(patch_size)
+    else:
+        patch_h = int(patch_size[0])
+        patch_w = int(patch_size[1])
+    height = int(x.shape[-2])
+    width = int(x.shape[-1])
+    return int((height // patch_h) * (width // patch_w) + 1)
+
+
+def _collect_attention_runtime_stats(model: nn.Module) -> dict[str, float]:
+    packed_kv_size_bytes = 0
+    attention_memory_bytes = 0
+    token_count = 0
+    for module in model.modules():
+        packed_kv_size_bytes += int(getattr(module, "_vit_last_packed_kv_size_bytes", 0) or 0)
+        attention_memory_bytes = max(
+            attention_memory_bytes,
+            int(getattr(module, "_vit_last_attention_memory_bytes", 0) or 0),
+        )
+        token_count = max(token_count, int(getattr(module, "_vit_last_token_count", 0) or 0))
+    return {
+        "packed_kv_size_mb": float(packed_kv_size_bytes) / (1024.0 * 1024.0),
+        "peak_gpu_memory_attention_only_mb": float(attention_memory_bytes) / (1024.0 * 1024.0),
+        "token_count": int(token_count),
+        "num_patched_layers": int(len(getattr(model, "_vit_attention_patched_indices", []))),
+    }
 
 
 def _criterion_from_config(config: LegacyExperimentConfig) -> nn.Module:
@@ -1133,6 +1236,11 @@ def train_legacy_classifier(config: str | Path | dict[str, Any]) -> dict[str, An
     """Run the legacy v1 classifier experiment end to end."""
 
     experiment_config = load_experiment_config(config)
+    if _attention_compression_enabled(experiment_config):
+        raise ValueError(
+            "attention_compression_mode is configured for this experiment, but train_legacy_classifier currently "
+            "supports it only for inference/benchmark paths. Train a baseline checkpoint first and then benchmark it."
+        )
     _set_random_seed(experiment_config.seed)
     _ensure_manifest(experiment_config)
     paths = _prepare_output_paths(experiment_config)
@@ -1356,6 +1464,16 @@ def train_legacy_classifier(config: str | Path | dict[str, Any]) -> dict[str, An
         "image_size": normalize_image_size_spec(experiment_config.image_size),
         "resize_mode": experiment_config.resize_mode,
         "normalize": bool(experiment_config.normalize),
+        "attention_compression_mode": experiment_config.attention_compression_mode,
+        "attention_layer_selector": experiment_config.attention_layer_selector,
+        "attention_layer_count": int(experiment_config.attention_layer_count),
+        "enabled_layer_indices": list(experiment_config.enabled_layer_indices),
+        "kv_bits": int(experiment_config.kv_bits),
+        "group_size": int(experiment_config.group_size),
+        "token_block_size": int(experiment_config.token_block_size),
+        "preserve_cls_token": bool(experiment_config.preserve_cls_token),
+        "quantize_k": bool(experiment_config.quantize_k),
+        "quantize_v": bool(experiment_config.quantize_v),
         "pretrained": bool(experiment_config.pretrained),
         "seed": int(experiment_config.seed),
         "batch_size": int(experiment_config.batch_size),
@@ -1385,6 +1503,10 @@ def train_legacy_classifier(config: str | Path | dict[str, Any]) -> dict[str, An
         "params": parameter_count,
         "avg_epoch_seconds": avg_epoch_seconds,
         "peak_gpu_memory_mb": float(peak_gpu_memory_mb),
+        "peak_gpu_memory_attention_only_mb": 0.0,
+        "packed_kv_size_mb": 0.0,
+        "token_count": 0,
+        "num_patched_layers": 0,
         "manifest_path": str(paths["manifest_path"]),
         "checkpoint_path": str(paths["checkpoint_path"]),
         "history_path": str(paths["history_path"]),
@@ -1969,6 +2091,7 @@ def _load_legacy_checkpoint_bundle(
         image_size=config.image_size,
     )
     model.load_state_dict(checkpoint["state_dict"])
+    model = _apply_attention_compression_from_config(model, config, for_training=False)
     model.eval()
     return checkpoint, config, model
 
@@ -2025,6 +2148,10 @@ def benchmark_legacy_model_inference(
         float(process.memory_info().rss) / (1024.0 * 1024.0) if process is not None else 0.0
     )
     peak_gpu_memory_mb = 0.0
+    peak_gpu_memory_attention_only_mb = 0.0
+    packed_kv_size_mb = 0.0
+    token_count = 0
+    num_patched_layers = int(len(getattr(model, "_vit_attention_patched_indices", [])))
     probs_list: list[np.ndarray] = []
     labels_list: list[np.ndarray] = []
     total_images = 0
@@ -2041,6 +2168,23 @@ def benchmark_legacy_model_inference(
         y = y.to(runtime_device)
         logits = model(x)
         probs = torch.softmax(logits, dim=1)[:, 1]
+        runtime_stats = _collect_attention_runtime_stats(model)
+        peak_gpu_memory_attention_only_mb = max(
+            peak_gpu_memory_attention_only_mb,
+            float(runtime_stats.get("peak_gpu_memory_attention_only_mb") or 0.0),
+        )
+        packed_kv_size_mb = max(
+            packed_kv_size_mb,
+            float(runtime_stats.get("packed_kv_size_mb") or 0.0),
+        )
+        token_count = max(
+            token_count,
+            int(runtime_stats.get("token_count") or 0) or _estimate_vit_token_count_from_input(model, x),
+        )
+        num_patched_layers = max(
+            num_patched_layers,
+            int(runtime_stats.get("num_patched_layers") or 0),
+        )
         probs_list.append(probs.detach().to(torch.float32).cpu().numpy())
         labels_list.append(y.detach().cpu().numpy())
         total_images += int(x.size(0))
@@ -2069,9 +2213,45 @@ def benchmark_legacy_model_inference(
     metrics["ms_per_image"] = float((total_seconds / max(total_images, 1)) * 1000.0)
     metrics["peak_cpu_memory_mb"] = float(peak_cpu_memory_mb)
     metrics["peak_gpu_memory_mb"] = float(peak_gpu_memory_mb)
+    metrics["peak_gpu_memory_attention_only_mb"] = float(peak_gpu_memory_attention_only_mb)
+    metrics["packed_kv_size_mb"] = float(packed_kv_size_mb)
+    metrics["token_count"] = int(token_count)
+    metrics["num_patched_layers"] = int(num_patched_layers)
     metrics["labels"] = labels
     metrics["probs"] = probs
     metrics["entries"] = [dataset.entry(index) for index in range(len(dataset))]
+    return metrics
+
+
+def benchmark_legacy_checkpoint(
+    checkpoint_path: str | Path,
+    *,
+    config_override: str | Path | dict[str, Any] | None = None,
+    split: str = "test",
+    device: str = "cpu",
+    threshold: float | None = None,
+    input_dtype: torch.dtype | None = None,
+) -> dict[str, Any]:
+    """Load a checkpoint bundle and run the unified inference benchmark."""
+
+    checkpoint, config, model = _load_legacy_checkpoint_bundle(
+        checkpoint_path,
+        config_override=config_override,
+    )
+    resolved_threshold = float(threshold) if threshold is not None else float(checkpoint.get("threshold", 0.5))
+    metrics = benchmark_legacy_model_inference(
+        model,
+        config,
+        split=split,
+        device=device,
+        threshold=resolved_threshold,
+        input_dtype=input_dtype,
+        clone_model=False,
+    )
+    metrics["checkpoint_path"] = str(Path(checkpoint_path).resolve())
+    metrics["experiment_name"] = str(config.experiment_name)
+    metrics["model_name"] = _normalize_model_name(checkpoint.get("model_name", config.model_name))
+    metrics["attention_compression_mode"] = str(config.attention_compression_mode)
     return metrics
 
 
@@ -3030,6 +3210,7 @@ def evaluate_legacy_checkpoint(
         image_size=config.image_size,
     )
     model.load_state_dict(checkpoint["state_dict"])
+    model = _apply_attention_compression_from_config(model, config, for_training=False)
     model = model.to(runtime_device)
 
     criterion = _criterion_from_config(config).to(runtime_device)

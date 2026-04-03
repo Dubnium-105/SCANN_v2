@@ -365,11 +365,15 @@ def build_packed_kv_attention_adapter(
         attention_module: nn.Module,
         module_spec: ViTAttentionModuleSpec,
     ) -> torch.Tensor:
-        del module_spec
         if not isinstance(attention_module, nn.MultiheadAttention):
             raise TypeError("Packed KV attention adapter expects nn.MultiheadAttention modules")
 
         q, k, v = _project_self_attention_qkv(normalized_input, attention_module)
+        setattr(attention_module, "_vit_last_module_spec", module_spec)
+        setattr(attention_module, "_vit_last_token_count", int(q.shape[-2]))
+        setattr(attention_module, "_vit_last_quantize_k", bool(runtime_config.quantize_k))
+        setattr(attention_module, "_vit_last_quantize_v", bool(runtime_config.quantize_v))
+        setattr(attention_module, "_vit_last_preserve_cls_token", bool(runtime_config.preserve_cls_token))
         cls_k = cls_v = None
         patch_k = k
         patch_v = v
@@ -391,6 +395,12 @@ def build_packed_kv_attention_adapter(
         )
         dense_key = None if packed_key is not None else patch_k
         dense_value = None if packed_value is not None else patch_v
+        packed_storage_bytes = 0
+        if packed_key is not None:
+            packed_storage_bytes += int(packed_key.storage_size_bytes())
+        if packed_value is not None:
+            packed_storage_bytes += int(packed_value.storage_size_bytes())
+        setattr(attention_module, "_vit_last_packed_kv_size_bytes", packed_storage_bytes)
 
         scale = float(q.shape[-1]) ** -0.5
         running_max = running_denom = running_weighted_values = None
@@ -418,6 +428,14 @@ def build_packed_kv_attention_adapter(
                 running_weighted_values=running_weighted_values,
             )
         attended = running_weighted_values / running_denom.clamp_min(1e-12)
+        if normalized_input.device.type == "cuda":
+            setattr(
+                attention_module,
+                "_vit_last_attention_memory_bytes",
+                int(torch.cuda.memory_allocated(normalized_input.device)),
+            )
+        else:
+            setattr(attention_module, "_vit_last_attention_memory_bytes", 0)
 
         merged = _merge_attention_heads(attended).to(dtype=normalized_input.dtype)
         return attention_module.out_proj(merged)
