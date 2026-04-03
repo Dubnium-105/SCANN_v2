@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import copy
+import math
 import types
 from dataclasses import dataclass
-from typing import Callable, Iterable, List, Sequence
+from typing import Callable, Sequence
 
 import torch
 import torch.nn as nn
+
+from .packed_kv import PackedKV4Bit, unpack_kv_block
 
 
 @dataclass(frozen=True)
@@ -121,6 +124,94 @@ def vit_attention_passthrough_adapter(
         need_weights=False,
     )
     return output
+
+
+def decode_kv_block(
+    packed_kv: PackedKV4Bit,
+    *,
+    start: int,
+    end: int,
+    dtype: torch.dtype = torch.float32,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Decode one K/V token block from packed storage."""
+
+    return unpack_kv_block(packed_kv, start=start, end=end, dtype=dtype)
+
+
+def online_softmax_update(
+    *,
+    logits_block: torch.Tensor,
+    value_block: torch.Tensor,
+    running_max: torch.Tensor,
+    running_denom: torch.Tensor,
+    running_weighted_values: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Update streaming softmax state with one attention block."""
+
+    block_max = logits_block.amax(dim=-1, keepdim=True)
+    next_max = torch.maximum(running_max, block_max)
+
+    prev_scale = torch.where(
+        running_denom > 0,
+        torch.exp(running_max - next_max),
+        torch.zeros_like(running_denom),
+    )
+    block_scale = torch.exp(logits_block - next_max)
+
+    next_denom = (running_denom * prev_scale) + block_scale.sum(dim=-1, keepdim=True)
+    next_weighted_values = (running_weighted_values * prev_scale) + torch.matmul(block_scale, value_block)
+    return next_max, next_denom, next_weighted_values
+
+
+def streaming_packed_attention(
+    query: torch.Tensor,
+    packed_kv: PackedKV4Bit,
+    *,
+    block_size: int = 64,
+    scale: float | None = None,
+    compute_dtype: torch.dtype = torch.float32,
+    output_dtype: torch.dtype | None = None,
+) -> torch.Tensor:
+    """Compute attention by blockwise K/V decode without materializing dense K/V."""
+
+    if query.ndim != 4:
+        raise ValueError(f"Expected query shaped [B, H, T, D], got {tuple(query.shape)}")
+
+    resolved_block_size = max(1, int(block_size))
+    resolved_output_dtype = output_dtype or query.dtype
+    query_compute = query.to(dtype=compute_dtype)
+    head_dim = int(query.shape[-1])
+    scale_value = float(scale) if scale is not None else float(head_dim) ** -0.5
+    total_tokens = int(packed_kv.packed_k.original_shape[packed_kv.token_axis])
+
+    running_max = torch.full(
+        (*query_compute.shape[:-1], 1),
+        fill_value=-torch.inf,
+        dtype=compute_dtype,
+        device=query_compute.device,
+    )
+    running_denom = torch.zeros_like(running_max)
+    running_weighted_values = torch.zeros_like(query_compute)
+
+    for start in range(0, total_tokens, resolved_block_size):
+        end = min(total_tokens, start + resolved_block_size)
+        key_block, value_block = decode_kv_block(
+            packed_kv,
+            start=start,
+            end=end,
+            dtype=compute_dtype,
+        )
+        logits_block = torch.matmul(query_compute, key_block.transpose(-2, -1)) * scale_value
+        running_max, running_denom, running_weighted_values = online_softmax_update(
+            logits_block=logits_block,
+            value_block=value_block,
+            running_max=running_max,
+            running_denom=running_denom,
+            running_weighted_values=running_weighted_values,
+        )
+
+    output = running_weighted_values / running_denom.clamp_min(1e-12)
+    return output.to(dtype=resolved_output_dtype)
 
 
 def patch_vit_attention_modules(
