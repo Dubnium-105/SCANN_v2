@@ -517,6 +517,31 @@ def create_experiment_model(
     raise ValueError(f"Unsupported model name: {model_name}")
 
 
+def create_vit_attention_compression_model(
+    base_model: nn.Module,
+    *,
+    layer_selector: str = "all",
+    count: int | None = None,
+    explicit_indices: list[int] | tuple[int, ...] | None = None,
+    attention_adapter: Any = None,
+) -> nn.Module:
+    from .vit_attention_compression import (
+        ViTAttentionPatchConfig,
+        create_vit_attention_compression_model as _create_vit_attention_compression_model,
+    )
+
+    patch_config = ViTAttentionPatchConfig(
+        layer_selector=layer_selector,
+        count=count,
+        explicit_indices=tuple(explicit_indices or ()),
+    )
+    return _create_vit_attention_compression_model(
+        base_model,
+        config=patch_config,
+        attention_adapter=attention_adapter,
+    )
+
+
 def _criterion_from_config(config: LegacyExperimentConfig) -> nn.Module:
     loss_name = str(config.loss_name).strip().lower()
     if loss_name == "focal":
