@@ -367,6 +367,8 @@ def _normalize_model_name(model_name: str) -> str:
         "legacy_resnet18": "resnet18",
         "vit_baseline": "vit_b_16",
         "vit_b16": "vit_b_16",
+        "vit_h14": "vit_h_14",
+        "vit_huge": "vit_h_14",
         "swin_tiny": "swin_t",
         "swin_small": "swin_s",
         "swin_base": "swin_b",
@@ -387,6 +389,68 @@ def _resolve_square_model_image_size(image_size: int | list[int] | str) -> int:
             )
         return int(normalized[0])
     return int(normalized)
+
+
+def _weights_default_image_size(weights: Any, *, fallback: int) -> int:
+    crop_size = getattr(weights, "meta", {}).get("min_size")
+    if isinstance(crop_size, (list, tuple)) and crop_size:
+        return int(crop_size[0])
+
+    transforms_factory = getattr(weights, "transforms", None)
+    if callable(transforms_factory):
+        transforms = transforms_factory()
+        crop_size = getattr(transforms, "crop_size", None)
+        if isinstance(crop_size, (list, tuple)) and crop_size:
+            return int(crop_size[0])
+        if isinstance(crop_size, int):
+            return int(crop_size)
+
+    return int(fallback)
+
+
+def _interpolate_vit_state_dict(
+    *,
+    weights: Any,
+    image_size: int,
+    patch_size: int,
+) -> dict[str, Any]:
+    state_dict = weights.get_state_dict(progress=True)
+    return interpolate_embeddings(
+        image_size=int(image_size),
+        patch_size=int(patch_size),
+        model_state=state_dict,
+        reset_heads=True,
+    )
+
+
+def _create_vit_classifier(
+    *,
+    model_builder: Any,
+    weights_enum: Any,
+    image_size: int | list[int] | str,
+    patch_size: int,
+    pretrained: bool,
+) -> nn.Module:
+    resolved_image_size = _resolve_square_model_image_size(image_size)
+
+    if pretrained:
+        weights = weights_enum.DEFAULT
+        default_image_size = _weights_default_image_size(weights, fallback=resolved_image_size)
+        if resolved_image_size != default_image_size:
+            model = model_builder(weights=None, image_size=resolved_image_size)
+            state_dict = _interpolate_vit_state_dict(
+                weights=weights,
+                image_size=resolved_image_size,
+                patch_size=patch_size,
+            )
+            model.load_state_dict(state_dict, strict=False)
+        else:
+            model = model_builder(weights=weights, image_size=resolved_image_size)
+    else:
+        model = model_builder(weights=None, image_size=resolved_image_size)
+
+    model.heads.head = nn.Linear(model.heads.head.in_features, 2)
+    return model
 
 
 def create_experiment_model(
@@ -414,23 +478,21 @@ def create_experiment_model(
         model.fc = nn.Linear(model.fc.in_features, 2)
         return model
     if normalized == "vit_b_16":
-        resolved_image_size = _resolve_square_model_image_size(image_size)
-        if pretrained and resolved_image_size != 224:
-            weights = models.ViT_B_16_Weights.DEFAULT
-            model = models.vit_b_16(weights=None, image_size=resolved_image_size)
-            state_dict = weights.get_state_dict(progress=True)
-            state_dict = interpolate_embeddings(
-                image_size=resolved_image_size,
-                patch_size=16,
-                model_state=state_dict,
-                reset_heads=True,
-            )
-            model.load_state_dict(state_dict, strict=False)
-        else:
-            weights = models.ViT_B_16_Weights.DEFAULT if pretrained else None
-            model = models.vit_b_16(weights=weights, image_size=resolved_image_size)
-        model.heads.head = nn.Linear(model.heads.head.in_features, 2)
-        return model
+        return _create_vit_classifier(
+            model_builder=models.vit_b_16,
+            weights_enum=models.ViT_B_16_Weights,
+            image_size=image_size,
+            patch_size=16,
+            pretrained=pretrained,
+        )
+    if normalized == "vit_h_14":
+        return _create_vit_classifier(
+            model_builder=models.vit_h_14,
+            weights_enum=models.ViT_H_14_Weights,
+            image_size=image_size,
+            patch_size=14,
+            pretrained=pretrained,
+        )
     if normalized == "swin_t":
         weights = models.Swin_T_Weights.DEFAULT if pretrained else None
         model = models.swin_t(weights=None)
