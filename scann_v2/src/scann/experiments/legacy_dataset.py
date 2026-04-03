@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 from pathlib import Path
-from typing import Any
+from typing import Any, List, Tuple, Union
 
 import torch
 from PIL import Image
@@ -32,7 +32,7 @@ DEFAULT_COMPONENT_STD = {
     "new": 0.12256077701380531,
     "old": 0.12825460877519965,
 }
-ImageSizeSpec = int | list[int] | tuple[int, int] | str
+ImageSizeSpec = Union[int, List[int], Tuple[int, int], str]
 
 
 def semantic_channels_for_input_mode(input_mode: str) -> tuple[str, str, str]:
