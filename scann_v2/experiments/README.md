@@ -64,3 +64,45 @@ python scann_v2/scripts/experiments/run_legacy_quantization_smoke.py `
 ```
 
 This smoke run now covers `torch.ao` dynamic INT8, `torchao` INT4 / INT8 weight quantization, the custom `Int4WeightOnlyLinear` path, and TurboQuant-style attention `K/V` compression with cached Lloyd-Max centroids, random rotations, and optional QJL residual correction.
+
+5. Benchmark a saved ViT checkpoint with packed-KV attention enabled:
+
+```powershell
+python scann_v2/scripts/experiments/benchmark_legacy_checkpoint.py `
+  --checkpoint scann_v2/experiments/checkpoints/legacy_vit_b16_pretrained_gpu_best.pt `
+  --config scann_v2/experiments/configs/legacy_vit_b16_fullres_k4_stream.json `
+  --device cpu
+```
+
+6. Run the full-module ViT attention ablation matrix:
+
+```powershell
+python scann_v2/scripts/experiments/benchmark_vit_attention_ablation.py `
+  --checkpoint scann_v2/experiments/checkpoints/legacy_vit_b16_pretrained_gpu_best.pt `
+  --config scann_v2/experiments/configs/legacy_vit_b16_fullres_ablation.json `
+  --device cpu
+```
+
+7. Run the lightweight workflow regression smoke check:
+
+```powershell
+python scann_v2/scripts/experiments/validate_vit_attention_workflow.py `
+  --image-size 224 `
+  --device cpu
+```
+
+## ViT packed-KV configs
+
+- `legacy_vit_b16_fullres_baseline.json`: full-resolution ViT-B baseline.
+- `legacy_vit_b16_fullres_k4_stream.json`: full-module packed K/V streaming attention.
+- `legacy_vit_b16_fullres_k4_stream_qjl.json`: packed K/V streaming attention with optional `qjl_sign_norm` residual correction.
+- `legacy_vit_b16_fullres_ablation.json`: default full-module ablation matrix base config.
+- `legacy_vit_h14_fullres_baseline.json`: full-resolution ViT-H baseline.
+- `legacy_vit_h14_fullres_k4_stream.json`: ViT-H packed K/V streaming attention.
+- `legacy_vit_h14_fullres_k4_stream_qjl.json`: ViT-H packed K/V plus `qjl_sign_norm` residual correction.
+- `legacy_vit_h14_fullres_ablation.json`: ViT-H full-module ablation matrix base config.
+
+## Result schemas
+
+- `results/vit_attention_benchmark_template.csv`: single-run benchmark schema aligned with `SUMMARY_COLUMNS`.
+- `results/vit_attention_ablation_template.csv`: ablation schema aligned with `VIT_ATTENTION_ABLATION_COLUMNS`.

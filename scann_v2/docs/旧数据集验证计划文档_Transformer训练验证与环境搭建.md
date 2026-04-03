@@ -1050,3 +1050,72 @@ project/
 ## 20. 一句话总结
 旧数据集阶段的核心任务不是追求最终论文结果，而是：
 “尽快验证 Transformer 在现有业务裁块数据上的可行性，并搭建一套能直接迁移到新数据集的实验环境。”
+
+---
+
+## 21. ViT Full-Resolution Packed-KV 路线更新
+
+在旧数据集验证框架内，现已补充一条面向 `ViT-B/16` 与 `ViT-H/14` 的 full-resolution attention 压缩实验路线，定位是：
+
+- 用旧数据集先验证 `PackedKV4Bit + streaming attention` 的工程可行性。
+- 保留完整的“全模块消融”能力，而不是只做单层 demo。
+- 为后续更大分辨率输入和更大 Transformer 骨干做显存优化预研。
+
+已落地能力：
+
+- `image_size` 支持 full-resolution square 输入配置。
+- `vit_h_14` 已接入实验工厂。
+- `PackedKV4Bit` 已实现真实 `uint8` 打包与 block decode。
+- `ViT` attention 已支持按层选择、按 token block 流式解码与运行时统计。
+- `QJL sign-norm residual` 已作为可选分支接入 packed-KV 路线。
+
+建议直接使用的配置与脚本：
+
+- 配置：
+  - `scann_v2/experiments/configs/legacy_vit_b16_fullres_baseline.json`
+  - `scann_v2/experiments/configs/legacy_vit_b16_fullres_k4_stream.json`
+  - `scann_v2/experiments/configs/legacy_vit_b16_fullres_k4_stream_qjl.json`
+  - `scann_v2/experiments/configs/legacy_vit_b16_fullres_ablation.json`
+  - `scann_v2/experiments/configs/legacy_vit_h14_fullres_baseline.json`
+  - `scann_v2/experiments/configs/legacy_vit_h14_fullres_k4_stream.json`
+  - `scann_v2/experiments/configs/legacy_vit_h14_fullres_k4_stream_qjl.json`
+  - `scann_v2/experiments/configs/legacy_vit_h14_fullres_ablation.json`
+- 脚本：
+  - `scann_v2/scripts/experiments/benchmark_legacy_checkpoint.py`
+  - `scann_v2/scripts/experiments/benchmark_vit_attention_ablation.py`
+  - `scann_v2/scripts/experiments/validate_vit_attention_workflow.py`
+
+新增结果字段：
+
+- 单次 benchmark / summary：
+  - `peak_gpu_memory_attention_only_mb`
+  - `packed_kv_size_mb`
+  - `token_count`
+  - `num_patched_layers`
+  - `residual_mode`
+  - `qjl_dim`
+  - `streaming_enabled`
+  - `materialize_attention_matrix`
+- 全模块消融：
+  - `layer_scope`
+  - `kv_target`
+  - `cls_policy`
+  - `precision_mode`
+  - `streaming_enabled`
+  - `materialize_attention_matrix`
+  - `residual_mode`
+  - `qjl_dim`
+
+推荐执行顺序：
+
+1. 先跑 baseline checkpoint benchmark
+2. 再跑 full-module `K/V 4-bit` benchmark
+3. 再跑 `qjl_sign_norm` residual 增强版本
+4. 最后跑 full-module ablation matrix
+
+当前仍属于后续工作而非本阶段目标：
+
+- 非 square ViT 正式支持
+- 训练态 packed-KV attention
+- 3-bit 真正 bit-pack
+- 自定义 CUDA kernel
