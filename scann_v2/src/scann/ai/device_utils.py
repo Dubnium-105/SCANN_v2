@@ -56,6 +56,14 @@ ACCELERATOR_SPECS: tuple[AcceleratorSpec, ...] = (
         default_device="cuda:0",
     ),
     AcceleratorSpec(
+        key="dcu",
+        label="DCU / Hygon",
+        aliases=("dcu", "dcu:0", "hygon", "k100", "k100_ai", "dcu-k100"),
+        extension_modules=("torch_dcu",),
+        torch_attr="cuda",
+        default_device="cuda:0",
+    ),
+    AcceleratorSpec(
         key="npu",
         label="Ascend NPU",
         aliases=("npu", "npu:0", "ascend", "huawei", "huawei-ascend"),
@@ -95,7 +103,7 @@ ACCELERATOR_SPECS: tuple[AcceleratorSpec, ...] = (
     ),
 )
 
-AUTO_DEVICE_PRIORITY: tuple[str, ...] = ("cuda", "npu", "mlu", "musa", "xpu", "mps")
+AUTO_DEVICE_PRIORITY: tuple[str, ...] = ("cuda", "dcu", "npu", "mlu", "musa", "xpu", "mps")
 KNOWN_DEVICE_VALUES: tuple[str, ...] = ("auto", "cpu") + tuple(
     spec.key for spec in ACCELERATOR_SPECS
 )
@@ -401,6 +409,7 @@ def get_training_device_choices(current_value: str | None = None) -> list[tuple[
     choices = [
         ("Auto (自动选择加速器)", "auto"),
         ("CUDA", "cuda"),
+        ("DCU (Hygon K100)", "dcu"),
         ("NPU (Ascend)", "npu"),
         ("MLU (Cambricon)", "mlu"),
         ("MUSA", "musa"),

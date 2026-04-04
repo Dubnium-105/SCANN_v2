@@ -141,7 +141,7 @@ class TrainingDialog(QDialog):
         self._populate_device_choices("auto")
         self.combo_device.setToolTip(
             "Select training device\n"
-            "Auto: choose the first available accelerator backend (CUDA / NPU / MLU / MUSA), otherwise fall back to CPU\n"
+            "Auto: choose the first available accelerator backend (CUDA / DCU / NPU / MLU / MUSA), otherwise fall back to CPU\n"
             "Other options: prefer the selected backend and fall back to CPU if unavailable"
         )
         device_layout.addWidget(self.combo_device)
