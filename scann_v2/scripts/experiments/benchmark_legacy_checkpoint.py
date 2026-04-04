@@ -6,11 +6,20 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from scann.experiments import benchmark_legacy_checkpoint
+
+
+def _json_safe_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in metrics.items()
+        if key not in {"labels", "probs", "entries"}
+    }
 
 
 def main() -> int:
@@ -29,7 +38,7 @@ def main() -> int:
         device=args.device,
         threshold=args.threshold,
     )
-    print(json.dumps(metrics, ensure_ascii=False, indent=2))
+    print(json.dumps(_json_safe_metrics(metrics), ensure_ascii=False, indent=2))
     return 0
 
 

@@ -47,7 +47,7 @@ class PackedKVAttentionConfig:
     preserve_cls_token: bool = False
     residual_mode: str = "none"
     qjl_dim: int = 0
-    compute_dtype: torch.dtype = torch.float32
+    compute_dtype: torch.dtype | None = None
 
 
 AttentionAdapter = Callable[[torch.Tensor, nn.Module, ViTAttentionModuleSpec], torch.Tensor]
@@ -307,10 +307,9 @@ def _streaming_attention_from_sources(
     return output.to(dtype=resolved_output_dtype)
 
 
-def _project_self_attention_qkv(
-    normalized_input: torch.Tensor,
+def _resolve_self_attention_projection_weights(
     attention_module: nn.MultiheadAttention,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
     if not bool(attention_module.batch_first):
         raise RuntimeError("Packed KV ViT attention adapter currently expects batch_first=True")
     if attention_module.bias_k is not None or attention_module.bias_v is not None:
@@ -338,18 +337,64 @@ def _project_self_attention_qkv(
         k_weight = attention_module.k_proj_weight
         v_weight = attention_module.v_proj_weight
         q_bias = k_bias = v_bias = None
+    return q_weight, k_weight, v_weight, q_bias, k_bias, v_bias
+
+
+def _reshape_projected_attention_tensor(
+    projected: torch.Tensor,
+    *,
+    num_heads: int,
+) -> torch.Tensor:
+    batch_size, token_count, embed_dim = projected.shape
+    head_dim = embed_dim // int(num_heads)
+    reshape_dims = (batch_size, token_count, int(num_heads), head_dim)
+    return projected.reshape(reshape_dims).permute(0, 2, 1, 3).contiguous()
+
+
+def _project_self_attention_qkv(
+    normalized_input: torch.Tensor,
+    attention_module: nn.MultiheadAttention,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    q_weight, k_weight, v_weight, q_bias, k_bias, v_bias = _resolve_self_attention_projection_weights(attention_module)
+    num_heads = int(attention_module.num_heads)
 
     q = F.linear(normalized_input, q_weight, q_bias)
     k = F.linear(normalized_input, k_weight, k_bias)
     v = F.linear(normalized_input, v_weight, v_bias)
 
-    batch_size, token_count, _ = q.shape
-    head_dim = embed_dim // int(attention_module.num_heads)
-    reshape_dims = (batch_size, token_count, int(attention_module.num_heads), head_dim)
-    q = q.reshape(reshape_dims).permute(0, 2, 1, 3).contiguous()
-    k = k.reshape(reshape_dims).permute(0, 2, 1, 3).contiguous()
-    v = v.reshape(reshape_dims).permute(0, 2, 1, 3).contiguous()
+    q = _reshape_projected_attention_tensor(q, num_heads=num_heads)
+    k = _reshape_projected_attention_tensor(k, num_heads=num_heads)
+    v = _reshape_projected_attention_tensor(v, num_heads=num_heads)
     return q, k, v
+
+
+def _project_self_attention_query(
+    normalized_input: torch.Tensor,
+    attention_module: nn.MultiheadAttention,
+    *,
+    q_weight: torch.Tensor,
+    q_bias: torch.Tensor | None,
+) -> torch.Tensor:
+    q = F.linear(normalized_input, q_weight, q_bias)
+    return _reshape_projected_attention_tensor(q, num_heads=int(attention_module.num_heads))
+
+
+def _project_self_attention_kv_block(
+    normalized_input_block: torch.Tensor,
+    attention_module: nn.MultiheadAttention,
+    *,
+    k_weight: torch.Tensor,
+    v_weight: torch.Tensor,
+    k_bias: torch.Tensor | None,
+    v_bias: torch.Tensor | None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    k = F.linear(normalized_input_block, k_weight, k_bias)
+    v = F.linear(normalized_input_block, v_weight, v_bias)
+    num_heads = int(attention_module.num_heads)
+    return (
+        _reshape_projected_attention_tensor(k, num_heads=num_heads),
+        _reshape_projected_attention_tensor(v, num_heads=num_heads),
+    )
 
 
 def _merge_attention_heads(attended_values: torch.Tensor) -> torch.Tensor:
@@ -370,7 +415,20 @@ def build_packed_kv_attention_adapter(
         if not isinstance(attention_module, nn.MultiheadAttention):
             raise TypeError("Packed KV attention adapter expects nn.MultiheadAttention modules")
 
-        q, k, v = _project_self_attention_qkv(normalized_input, attention_module)
+        (
+            q_weight,
+            k_weight,
+            v_weight,
+            q_bias,
+            k_bias,
+            v_bias,
+        ) = _resolve_self_attention_projection_weights(attention_module)
+        q = _project_self_attention_query(
+            normalized_input,
+            attention_module,
+            q_weight=q_weight,
+            q_bias=q_bias,
+        )
         setattr(attention_module, "_vit_last_module_spec", module_spec)
         setattr(attention_module, "_vit_last_token_count", int(q.shape[-2]))
         setattr(attention_module, "_vit_last_quantize_k", bool(runtime_config.quantize_k))
@@ -378,82 +436,151 @@ def build_packed_kv_attention_adapter(
         setattr(attention_module, "_vit_last_preserve_cls_token", bool(runtime_config.preserve_cls_token))
         setattr(attention_module, "_vit_last_residual_mode", str(runtime_config.residual_mode))
         setattr(attention_module, "_vit_last_qjl_dim", int(runtime_config.qjl_dim))
-        cls_k = cls_v = None
-        patch_k = k
-        patch_v = v
-        if runtime_config.preserve_cls_token and int(k.shape[-2]) > 0:
-            cls_k = k[..., :1, :]
-            cls_v = v[..., :1, :]
-            patch_k = k[..., 1:, :]
-            patch_v = v[..., 1:, :]
-
-        packed_key = (
-            pack_tensor_4bit(
-                patch_k,
-                group_size=runtime_config.group_size,
-                token_axis=-2,
-                residual_mode=runtime_config.residual_mode,
-                qjl_dim=runtime_config.qjl_dim,
-            )
-            if runtime_config.quantize_k and int(patch_k.shape[-2]) > 0
-            else None
-        )
-        packed_value = (
-            pack_tensor_4bit(
-                patch_v,
-                group_size=runtime_config.group_size,
-                token_axis=-2,
-                residual_mode=runtime_config.residual_mode,
-                qjl_dim=runtime_config.qjl_dim,
-            )
-            if runtime_config.quantize_v and int(patch_v.shape[-2]) > 0
-            else None
-        )
-        dense_key = None if packed_key is not None else patch_k
-        dense_value = None if packed_value is not None else patch_v
         packed_storage_bytes = 0
-        if packed_key is not None:
-            packed_storage_bytes += int(packed_key.storage_size_bytes())
-        if packed_value is not None:
-            packed_storage_bytes += int(packed_value.storage_size_bytes())
-        setattr(attention_module, "_vit_last_packed_kv_size_bytes", packed_storage_bytes)
+        peak_packed_resident_bytes = 0
+        resolved_compute_dtype = runtime_config.compute_dtype or q.dtype
+        query_compute = q.to(dtype=resolved_compute_dtype)
+        memory_base_bytes = (
+            int(torch.cuda.memory_allocated(normalized_input.device))
+            if normalized_input.device.type == "cuda"
+            else 0
+        )
+        local_peak_bytes = 0
+
+        def _update_memory_peak() -> None:
+            nonlocal local_peak_bytes
+            if normalized_input.device.type != "cuda":
+                return
+            local_peak_bytes = max(
+                local_peak_bytes,
+                max(0, int(torch.cuda.memory_allocated(normalized_input.device)) - memory_base_bytes),
+            )
+
+        _update_memory_peak()
 
         scale = float(q.shape[-1]) ** -0.5
-        running_max = running_denom = running_weighted_values = None
-        if cls_k is not None and cls_v is not None:
-            running_max, running_denom, running_weighted_values = _streaming_attention_update_from_sources(
-                q,
-                dense_key=cls_k,
-                dense_value=cls_v,
-                block_size=1,
-                scale=scale,
-                compute_dtype=runtime_config.compute_dtype,
+        scale_tensor = float(scale)
+        running_max = torch.full(
+            (*query_compute.shape[:-1], 1),
+            fill_value=-torch.inf,
+            dtype=resolved_compute_dtype,
+            device=query_compute.device,
+        )
+        running_denom = torch.zeros_like(running_max)
+        running_weighted_values = torch.zeros_like(query_compute)
+        _update_memory_peak()
+
+        token_count = int(normalized_input.shape[1])
+        start_token = 0
+        if runtime_config.preserve_cls_token and token_count > 0:
+            cls_input = normalized_input[:, :1, :]
+            cls_k, cls_v = _project_self_attention_kv_block(
+                cls_input,
+                attention_module,
+                k_weight=k_weight,
+                v_weight=v_weight,
+                k_bias=k_bias,
+                v_bias=v_bias,
             )
-        if cls_k is None or int(patch_k.shape[-2]) > 0:
-            running_max, running_denom, running_weighted_values = _streaming_attention_update_from_sources(
-                q,
-                dense_key=dense_key,
-                dense_value=dense_value,
-                packed_key=packed_key,
-                packed_value=packed_value,
-                block_size=runtime_config.block_size,
-                scale=scale,
-                compute_dtype=runtime_config.compute_dtype,
+            cls_k = cls_k.to(dtype=resolved_compute_dtype)
+            cls_v = cls_v.to(dtype=resolved_compute_dtype)
+            logits_block = torch.matmul(query_compute, cls_k.transpose(-2, -1)) * scale_tensor
+            running_max, running_denom, running_weighted_values = online_softmax_update(
+                logits_block=logits_block,
+                value_block=cls_v,
                 running_max=running_max,
                 running_denom=running_denom,
                 running_weighted_values=running_weighted_values,
             )
-        attended = running_weighted_values / running_denom.clamp_min(1e-12)
-        if normalized_input.device.type == "cuda":
-            setattr(
+            start_token = 1
+            _update_memory_peak()
+
+        for start in range(start_token, token_count, max(1, int(runtime_config.block_size))):
+            end = min(token_count, start + max(1, int(runtime_config.block_size)))
+            token_block_input = normalized_input[:, start:end, :]
+            key_block, value_block = _project_self_attention_kv_block(
+                token_block_input,
                 attention_module,
-                "_vit_last_attention_memory_bytes",
-                int(torch.cuda.memory_allocated(normalized_input.device)),
+                k_weight=k_weight,
+                v_weight=v_weight,
+                k_bias=k_bias,
+                v_bias=v_bias,
             )
-        else:
-            setattr(attention_module, "_vit_last_attention_memory_bytes", 0)
+            _update_memory_peak()
+            current_packed_bytes = 0
+
+            if runtime_config.quantize_k:
+                packed_key_block = pack_tensor_4bit(
+                    key_block,
+                    group_size=runtime_config.group_size,
+                    token_axis=-2,
+                    residual_mode=runtime_config.residual_mode,
+                    qjl_dim=runtime_config.qjl_dim,
+                )
+                key_packed_bytes = int(packed_key_block.storage_size_bytes())
+                packed_storage_bytes += key_packed_bytes
+                current_packed_bytes += key_packed_bytes
+                peak_packed_resident_bytes = max(
+                    peak_packed_resident_bytes,
+                    current_packed_bytes,
+                )
+                key_block = unpack_tensor_4bit_block(
+                    packed_key_block,
+                    start=0,
+                    end=int(key_block.shape[-2]),
+                    axis=packed_key_block.token_axis,
+                    dtype=resolved_compute_dtype,
+                )
+                _update_memory_peak()
+                del packed_key_block
+            else:
+                key_block = key_block.to(dtype=resolved_compute_dtype)
+
+            if runtime_config.quantize_v:
+                packed_value_block = pack_tensor_4bit(
+                    value_block,
+                    group_size=runtime_config.group_size,
+                    token_axis=-2,
+                    residual_mode=runtime_config.residual_mode,
+                    qjl_dim=runtime_config.qjl_dim,
+                )
+                value_packed_bytes = int(packed_value_block.storage_size_bytes())
+                packed_storage_bytes += value_packed_bytes
+                current_packed_bytes += value_packed_bytes
+                peak_packed_resident_bytes = max(
+                    peak_packed_resident_bytes,
+                    current_packed_bytes,
+                )
+                value_block = unpack_tensor_4bit_block(
+                    packed_value_block,
+                    start=0,
+                    end=int(value_block.shape[-2]),
+                    axis=packed_value_block.token_axis,
+                    dtype=resolved_compute_dtype,
+                )
+                _update_memory_peak()
+                del packed_value_block
+            else:
+                value_block = value_block.to(dtype=resolved_compute_dtype)
+
+            logits_block = torch.matmul(query_compute, key_block.transpose(-2, -1)) * scale_tensor
+            running_max, running_denom, running_weighted_values = online_softmax_update(
+                logits_block=logits_block,
+                value_block=value_block,
+                running_max=running_max,
+                running_denom=running_denom,
+                running_weighted_values=running_weighted_values,
+            )
+            _update_memory_peak()
+
+        setattr(attention_module, "_vit_last_packed_kv_size_bytes", packed_storage_bytes)
+        setattr(attention_module, "_vit_last_packed_kv_resident_bytes", peak_packed_resident_bytes)
+        attended = running_weighted_values / running_denom.clamp_min(1e-12)
+        _update_memory_peak()
+        setattr(attention_module, "_vit_last_attention_memory_bytes", local_peak_bytes)
 
         merged = _merge_attention_heads(attended).to(dtype=normalized_input.dtype)
+        _update_memory_peak()
         return attention_module.out_proj(merged)
 
     return _adapter

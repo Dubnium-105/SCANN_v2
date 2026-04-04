@@ -322,7 +322,7 @@ scripts/
 
 ## 11. ViT Full-Resolution Packed-KV 路线补充
 
-截至 2026-04-03，旧数据集实验框架已经补齐一条可运行的 `ViT-B/16` 与 `ViT-H/14` full-resolution packed-KV attention 压缩路线，当前能力边界如下：
+截至 2026-04-04，旧数据集实验框架已经补齐一条可运行的 `ViT-B/16` 与 `ViT-H/14` full-resolution packed-KV attention 压缩路线，并完成一轮面向现有 `224 x 224` checkpoint 的重构版兼容复测，当前能力边界如下：
 
 - 支持 `vit_b_16` 与 `vit_h_14` 的 full-resolution square 输入。
 - 支持 `PackedKV4Bit` 的真实 `uint8` 打包存储，而不是逻辑量化后立即恢复全精度。
@@ -330,6 +330,9 @@ scripts/
 - 支持 `all / first_n / last_n / middle / explicit_indices` 五类 layer selector。
 - 支持 `K only`、`V only`、`K/V both` 三类压缩目标。
 - 支持 `preserve_cls_token` 与 `qjl_sign_norm` residual correction 作为可选增强分支。
+- 已修复 benchmark 串行运行导致的显存峰值污染。
+- 已修复 packed-KV 路径先生成整块 dense `K/V` 再压缩的问题，改为按 token block 投影与压缩。
+- 已支持导出并重新加载压缩 checkpoint 版本，包括 `custom_int8_weight_only` 与 `packed_int4_weight_only`。
 
 当前推荐配置文件：
 
@@ -346,6 +349,7 @@ scripts/
 
 - 单 checkpoint benchmark：`scann_v2/scripts/experiments/benchmark_legacy_checkpoint.py`
 - 全模块消融矩阵：`scann_v2/scripts/experiments/benchmark_vit_attention_ablation.py`
+- 压缩 checkpoint 导出：`scann_v2/scripts/experiments/export_legacy_compressed_checkpoint.py`
 - 轻量回归检查：`scann_v2/scripts/experiments/validate_vit_attention_workflow.py`
 
 当前结果字段补充：
@@ -368,6 +372,15 @@ scripts/
   - `materialize_attention_matrix`
   - `residual_mode`
   - `qjl_dim`
+
+2026-04-04 兼容复测摘要：
+
+- 使用 `legacy_vit_b16_pretrained_gpu_best.pt` 与 `legacy_vit_b16_exp8_refactored_ablation.json` 对重构版路径做 `224 x 224` 复测。
+- `baseline_dense` 与 `all_layers_kv_4bit` 的测试集 F1 都约为 `0.9496`。
+- 修复统计口径后，`all_layers_kv_4bit` 的真实 GPU 峰值显存约为 `466.29 MB`，与 baseline 的 `465.66 MB` 基本持平。
+- 已导出两组压缩 checkpoint：
+  - `custom_int8_weight_only`：约 `145.34 MB`
+  - `packed_int4_weight_only`：约 `114.96 MB`
 
 当前推荐先跑顺序：
 

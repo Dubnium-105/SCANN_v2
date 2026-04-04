@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import csv
+import gc
 import io
 import importlib.util
 import json
@@ -999,6 +1000,65 @@ def _collect_attention_runtime_stats(model: nn.Module) -> dict[str, float]:
         "token_count": int(token_count),
         "num_patched_layers": int(len(getattr(model, "_vit_attention_patched_indices", []))),
     }
+
+
+def _cleanup_inference_memory(device: torch.device | None = None) -> None:
+    gc.collect()
+    if device is None or device.type != "cuda" or not torch.cuda.is_available():
+        return
+    try:
+        torch.cuda.synchronize(device)
+    except Exception:
+        pass
+    torch.cuda.empty_cache()
+
+
+def _estimate_file_size_mb(path: str | Path) -> float:
+    return float(Path(path).resolve().stat().st_size) / (1024.0 * 1024.0)
+
+
+def _normalize_checkpoint_compression_mode(mode: str | None) -> str:
+    normalized = str(mode or "none").strip().lower()
+    if normalized in {"", "none"}:
+        return "none"
+    if normalized in {"custom_int4_weight_only", "custom_int8_weight_only", "packed_int4_weight_only"}:
+        return normalized
+    raise ValueError(f"Unsupported checkpoint_compression_mode: {mode}")
+
+
+def _apply_checkpoint_compression_to_model(
+    model: nn.Module,
+    *,
+    checkpoint_compression_mode: str,
+) -> nn.Module:
+    normalized_mode = _normalize_checkpoint_compression_mode(checkpoint_compression_mode)
+    if normalized_mode == "none":
+        return model
+    if normalized_mode == "custom_int4_weight_only":
+        return create_int4_weight_only_model(model)
+    if normalized_mode == "custom_int8_weight_only":
+        return create_int8_weight_only_model(model)
+    if normalized_mode == "packed_int4_weight_only":
+        return create_packed_int4_weight_only_model(model)
+    raise ValueError(f"Unsupported checkpoint_compression_mode: {checkpoint_compression_mode}")
+
+
+def _create_model_for_checkpoint(
+    model_name: str,
+    *,
+    pretrained: bool,
+    image_size: int | list[int] | str = 224,
+    checkpoint_compression_mode: str = "none",
+) -> nn.Module:
+    model = create_experiment_model(
+        model_name,
+        pretrained=pretrained,
+        image_size=image_size,
+    )
+    return _apply_checkpoint_compression_to_model(
+        model,
+        checkpoint_compression_mode=checkpoint_compression_mode,
+    )
 
 
 def _criterion_from_config(config: LegacyExperimentConfig) -> nn.Module:
@@ -2370,6 +2430,110 @@ class Int4WeightOnlyLinear(nn.Module):
         return self.qweight.to(torch.float32) * self.scale
 
 
+class Int8WeightOnlyLinear(nn.Module):
+    """A lightweight pluggable INT8-style weight-only linear layer for checkpoint export."""
+
+    def __init__(self, qweight: torch.Tensor, scale: torch.Tensor, bias: torch.Tensor | None) -> None:
+        super().__init__()
+        self.register_buffer("qweight", qweight.to(torch.int8))
+        self.register_buffer("scale", scale.to(torch.float32))
+        if bias is None:
+            self.bias = None
+        else:
+            self.register_buffer("bias", bias.to(torch.float32))
+
+    @classmethod
+    def from_float(cls, module: nn.Linear) -> "Int8WeightOnlyLinear":
+        weight = module.weight.detach().to(torch.float32)
+        scale = weight.abs().amax(dim=1, keepdim=True).clamp_min(1e-8) / 127.0
+        qweight = torch.clamp(torch.round(weight / scale), min=-128, max=127).to(torch.int8)
+        bias = None if module.bias is None else module.bias.detach().clone()
+        return cls(qweight=qweight, scale=scale, bias=bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        weight = self.qweight.to(dtype=x.dtype) * self.scale.to(device=x.device, dtype=x.dtype)
+        bias = None if self.bias is None else self.bias.to(device=x.device, dtype=x.dtype)
+        return nn.functional.linear(x, weight, bias)
+
+    @property
+    def weight(self) -> torch.Tensor:
+        return self.qweight.to(torch.float32) * self.scale
+
+
+class PackedInt4WeightOnlyLinear(nn.Module):
+    """A portable packed-INT4 weight-only Linear layer backed by uint8 nibble storage."""
+
+    def __init__(
+        self,
+        *,
+        packed_codes: torch.Tensor,
+        scales: torch.Tensor,
+        bias: torch.Tensor | None,
+        original_shape: tuple[int, int],
+        padded_shape: tuple[int, int],
+        group_size: int,
+        groups_per_token: int,
+    ) -> None:
+        super().__init__()
+        self.register_buffer("packed_codes", packed_codes.to(torch.uint8))
+        self.register_buffer("scales", scales.to(torch.float32))
+        if bias is None:
+            self.bias = None
+        else:
+            self.register_buffer("bias", bias.to(torch.float32))
+        self.original_shape = tuple(int(value) for value in original_shape)
+        self.padded_shape = tuple(int(value) for value in padded_shape)
+        self.group_size = int(group_size)
+        self.groups_per_token = int(groups_per_token)
+
+    @classmethod
+    def from_float(cls, module: nn.Linear) -> "PackedInt4WeightOnlyLinear":
+        from .packed_kv import pack_tensor_4bit
+
+        weight = module.weight.detach().to(torch.float32)
+        packed = pack_tensor_4bit(
+            weight,
+            group_size=max(1, int(weight.shape[-1])),
+            token_axis=0,
+        )
+        bias = None if module.bias is None else module.bias.detach().clone()
+        return cls(
+            packed_codes=packed.packed_codes,
+            scales=packed.scales,
+            bias=bias,
+            original_shape=tuple(int(value) for value in packed.original_shape),
+            padded_shape=tuple(int(value) for value in packed.padded_shape),
+            group_size=int(packed.group_size),
+            groups_per_token=int(packed.groups_per_token),
+        )
+
+    def _packed_weight(self) -> Any:
+        from .packed_kv import PackedTensor4Bit
+
+        return PackedTensor4Bit(
+            packed_codes=self.packed_codes,
+            scales=self.scales,
+            original_shape=tuple(self.original_shape),
+            padded_shape=tuple(self.padded_shape),
+            group_size=int(self.group_size),
+            groups_per_token=int(self.groups_per_token),
+            token_axis=0,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        from .packed_kv import unpack_tensor_4bit
+
+        weight = unpack_tensor_4bit(self._packed_weight(), dtype=x.dtype).to(device=x.device)
+        bias = None if self.bias is None else self.bias.to(device=x.device, dtype=x.dtype)
+        return nn.functional.linear(x, weight, bias)
+
+    @property
+    def weight(self) -> torch.Tensor:
+        from .packed_kv import unpack_tensor_4bit
+
+        return unpack_tensor_4bit(self._packed_weight(), dtype=torch.float32)
+
+
 def _replace_modules(
     module: nn.Module,
     *,
@@ -2393,6 +2557,110 @@ def create_int4_weight_only_model(model: nn.Module) -> nn.Module:
     )
 
 
+def create_int8_weight_only_model(model: nn.Module) -> nn.Module:
+    cloned = copy.deepcopy(model).cpu().eval()
+    return _replace_modules(
+        cloned,
+        target_type=nn.Linear,
+        replace_fn=Int8WeightOnlyLinear.from_float,
+    )
+
+
+def create_packed_int4_weight_only_model(model: nn.Module) -> nn.Module:
+    cloned = copy.deepcopy(model).cpu().eval()
+    return _replace_modules(
+        cloned,
+        target_type=nn.Linear,
+        replace_fn=PackedInt4WeightOnlyLinear.from_float,
+    )
+
+
+def export_legacy_compressed_checkpoint(
+    checkpoint_path: str | Path,
+    *,
+    checkpoint_compression_mode: str,
+    output_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Export a legacy checkpoint using a portable compressed Linear-only model variant."""
+
+    checkpoint_file = Path(checkpoint_path).resolve()
+    checkpoint = torch.load(checkpoint_file, map_location="cpu")
+    source_mode = _normalize_checkpoint_compression_mode(checkpoint.get("checkpoint_compression_mode"))
+    if source_mode != "none":
+        raise ValueError("export_legacy_compressed_checkpoint expects a dense source checkpoint")
+
+    config = load_experiment_config(checkpoint.get("config") or {})
+    model_name = checkpoint.get("model_name", config.model_name)
+    base_model = create_experiment_model(
+        model_name,
+        pretrained=False,
+        image_size=config.image_size,
+    )
+    base_model.load_state_dict(checkpoint["state_dict"])
+
+    resolved_mode = _normalize_checkpoint_compression_mode(checkpoint_compression_mode)
+    compressed_model = _apply_checkpoint_compression_to_model(
+        base_model,
+        checkpoint_compression_mode=resolved_mode,
+    )
+
+    destination = (
+        Path(output_path).resolve()
+        if output_path is not None
+        else checkpoint_file.with_name(f"{checkpoint_file.stem}_{resolved_mode}.pt")
+    )
+    exported_checkpoint = dict(checkpoint)
+    exported_checkpoint["state_dict"] = compressed_model.state_dict()
+    exported_checkpoint["checkpoint_compression_mode"] = resolved_mode
+    exported_checkpoint["source_checkpoint_path"] = str(checkpoint_file)
+    exported_checkpoint["source_checkpoint_compression_mode"] = source_mode
+    exported_checkpoint["source_model_state_size_mb"] = _estimate_model_state_size_mb(base_model)
+    exported_checkpoint["compressed_model_state_size_mb"] = _estimate_model_state_size_mb(compressed_model)
+    exported_checkpoint["created_at"] = datetime.now(timezone.utc).isoformat()
+    torch.save(exported_checkpoint, destination)
+
+    return {
+        "checkpoint_path": str(destination),
+        "checkpoint_compression_mode": resolved_mode,
+        "source_checkpoint_path": str(checkpoint_file),
+        "source_model_state_size_mb": float(exported_checkpoint["source_model_state_size_mb"]),
+        "compressed_model_state_size_mb": float(exported_checkpoint["compressed_model_state_size_mb"]),
+        "source_checkpoint_file_size_mb": _estimate_file_size_mb(checkpoint_file),
+        "compressed_checkpoint_file_size_mb": _estimate_file_size_mb(destination),
+    }
+
+
+def export_legacy_compressed_checkpoint_variants(
+    checkpoint_path: str | Path,
+    *,
+    checkpoint_compression_modes: list[str] | None = None,
+    output_dir: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    resolved_modes = checkpoint_compression_modes or [
+        "custom_int8_weight_only",
+        "packed_int4_weight_only",
+    ]
+    destination_dir = (
+        Path(output_dir).resolve()
+        if output_dir is not None
+        else Path(checkpoint_path).resolve().parent
+    )
+    destination_dir.mkdir(parents=True, exist_ok=True)
+
+    results: list[dict[str, Any]] = []
+    for mode in resolved_modes:
+        normalized_mode = _normalize_checkpoint_compression_mode(mode)
+        output_path = destination_dir / f"{Path(checkpoint_path).resolve().stem}_{normalized_mode}.pt"
+        results.append(
+            export_legacy_compressed_checkpoint(
+                checkpoint_path,
+                checkpoint_compression_mode=normalized_mode,
+                output_path=output_path,
+            )
+        )
+    return results
+
+
 def _load_legacy_checkpoint_bundle(
     checkpoint_path: str | Path,
     *,
@@ -2406,10 +2674,14 @@ def _load_legacy_checkpoint_bundle(
         config = config_override
     else:
         config = load_experiment_config(config_override)
-    model = create_experiment_model(
+    checkpoint_compression_mode = _normalize_checkpoint_compression_mode(
+        checkpoint.get("checkpoint_compression_mode")
+    )
+    model = _create_model_for_checkpoint(
         checkpoint.get("model_name", config.model_name),
         pretrained=False,
         image_size=config.image_size,
+        checkpoint_compression_mode=checkpoint_compression_mode,
     )
     model.load_state_dict(checkpoint["state_dict"])
     model = _apply_attention_compression_from_config(model, config, for_training=False)
@@ -2462,6 +2734,8 @@ def benchmark_legacy_model_inference(
     dataset, loader = _build_eval_loader_for_split(config, split=split)
     if clone_model:
         model = copy.deepcopy(model)
+    if runtime_device.type == "cuda":
+        _cleanup_inference_memory(runtime_device)
     model = model.to(runtime_device).eval()
 
     process = psutil.Process() if psutil is not None else None
@@ -2520,6 +2794,7 @@ def benchmark_legacy_model_inference(
                 peak_gpu_memory_mb,
                 float(torch.cuda.max_memory_allocated(runtime_device)) / (1024.0 * 1024.0),
             )
+        del x, y, logits, probs
     total_seconds = time.perf_counter() - start_time
 
     if not probs_list:
@@ -2541,6 +2816,8 @@ def benchmark_legacy_model_inference(
     metrics["labels"] = labels
     metrics["probs"] = probs
     metrics["entries"] = [dataset.entry(index) for index in range(len(dataset))]
+    if runtime_device.type == "cuda":
+        _cleanup_inference_memory(runtime_device)
     return metrics
 
 
@@ -2573,6 +2850,10 @@ def benchmark_legacy_checkpoint(
     metrics["experiment_name"] = str(config.experiment_name)
     metrics["model_name"] = _normalize_model_name(checkpoint.get("model_name", config.model_name))
     metrics["attention_compression_mode"] = str(config.attention_compression_mode)
+    metrics["checkpoint_compression_mode"] = _normalize_checkpoint_compression_mode(
+        checkpoint.get("checkpoint_compression_mode")
+    )
+    metrics["checkpoint_file_size_mb"] = _estimate_file_size_mb(checkpoint_path)
     metrics["threshold"] = float(resolved_threshold)
     metrics["residual_mode"] = str(config.residual_mode)
     metrics["qjl_dim"] = int(config.qjl_dim)
@@ -2671,8 +2952,11 @@ def run_vit_attention_ablation(
 
     variant_configs = _build_vit_attention_ablation_variants(experiment_config, variants=variants)
     comparison_rows: list[dict[str, Any]] = []
+    benchmark_device = torch.device(device)
 
     for variant in variant_configs:
+        if benchmark_device.type == "cuda":
+            _cleanup_inference_memory(benchmark_device)
         run_config = asdict(experiment_config)
         run_config["attention_compression_mode"] = variant["attention_compression_mode"]
         run_config["attention_layer_selector"] = variant["attention_layer_selector"]
@@ -2722,6 +3006,9 @@ def run_vit_attention_ablation(
                     notes=str(exc),
                 )
             )
+        finally:
+            if benchmark_device.type == "cuda":
+                _cleanup_inference_memory(benchmark_device)
 
     _write_rows_csv(csv_path, VIT_ATTENTION_ABLATION_COLUMNS, comparison_rows)
     completed_rows = [row for row in comparison_rows if row["status"] == "completed"]
@@ -3706,10 +3993,13 @@ def evaluate_legacy_checkpoint(
         pin_memory=torch.cuda.is_available(),
     )
 
-    model = create_experiment_model(
+    model = _create_model_for_checkpoint(
         checkpoint.get("model_name", config.model_name),
         pretrained=False,
         image_size=config.image_size,
+        checkpoint_compression_mode=_normalize_checkpoint_compression_mode(
+            checkpoint.get("checkpoint_compression_mode")
+        ),
     )
     model.load_state_dict(checkpoint["state_dict"])
     model = _apply_attention_compression_from_config(model, config, for_training=False)

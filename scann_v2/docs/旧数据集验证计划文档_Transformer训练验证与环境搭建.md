@@ -807,6 +807,73 @@ dataset/
 - `scann_v2/experiments/results/legacy_swin_t_pretrained_gpu_quantization_smoke_summary.json`
 - `scann_v2/experiments/results/turboquant_cache/`
 
+### Exp-8 补充更新（2026-04-04，重构版 ViT packed-KV 路线）
+
+背景：
+
+- 为替换旧 `Swin-T + TurboQuant` 运行时压缩分支，使用重构后的 `ViT packed-KV` 路线对 Exp-8 再做一次独立复测。
+- 现有 `legacy_vit_b16_pretrained_gpu_best.pt` 是 `224 x 224` 训练 checkpoint，不能直接套用 `1024 x 1024 full-resolution` 配置；本轮复测使用兼容现有 checkpoint 的 `224 x 224` 配置 `legacy_vit_b16_exp8_refactored_ablation.json`。
+
+本轮修复并验证的 4 个问题：
+
+- 修复 benchmark 变体串行执行导致的 GPU 峰值统计污染。
+- 修复 packed-KV 路径先生成整块 dense `K/V` 再压缩的问题，改为 `Q` 一次投影、`K/V` 按 token block 投影并可选 pack / unpack。
+- 修复 `peak_gpu_memory_attention_only_mb` 记录整个进程当前显存而非 attention 模块局部峰值的问题。
+- 补齐可导出的压缩 checkpoint 版本，允许直接评估真实 checkpoint 文件体积。
+
+修复后核心结果（test split, `cuda`）：
+
+- `baseline_dense`
+  - Accuracy：`0.9555`
+  - F1-score：`0.9496`
+  - GPU 推理时间：`4.25 ms / image`
+  - GPU 峰值显存：`465.66 MB`
+- `all_layers_kv_4bit`
+  - Accuracy：`0.9555`
+  - F1-score：`0.9496`
+  - GPU 推理时间：`7.48 ms / image`
+  - GPU 峰值显存：`466.29 MB`
+  - `peak_gpu_memory_attention_only_mb`：`25.46 MB`
+  - `packed_kv_size_mb`：`34.63 MB`
+- `all_layers_kv_4bit_qjl`
+  - Accuracy：`0.9542`
+  - F1-score：`0.9483`
+  - GPU 推理时间：`13.21 ms / image`
+  - GPU 峰值显存：`466.29 MB`
+  - `peak_gpu_memory_attention_only_mb`：`25.58 MB`
+  - `packed_kv_size_mb`：`43.29 MB`
+
+补充结论：
+
+- 之前出现的 `1126 MB / 2508 MB` 级别显存峰值主要来自 benchmark 污染；修复后 `K/V 4-bit` 与 baseline 的真实峰值显存基本持平。
+- 在 `224 x 224`、`197` token 的 `ViT-B/16` 上，重构后的 packed-KV 路线已经基本不伤精度，但速度仍慢于优化后的 dense baseline。
+- `QJL` 分支当前主要引入额外元数据与计算开销，在这组 `224 x 224` 复测上没有带来额外精度收益。
+
+新增压缩 checkpoint 版本（同一 `ViT-B/16` 基线 checkpoint 导出）：
+
+- dense baseline checkpoint
+  - 文件：`legacy_vit_b16_pretrained_gpu_best.pt`
+  - 文件体积：`327.37 MB`
+- `custom_int8_weight_only`
+  - 文件：`legacy_vit_b16_pretrained_gpu_best_custom_int8_weight_only.pt`
+  - 文件体积：`145.34 MB`
+  - Test F1：`0.9510`
+  - GPU 推理时间：`4.31 ms / image`
+  - GPU 峰值显存：`284.15 MB`
+- `packed_int4_weight_only`
+  - 文件：`legacy_vit_b16_pretrained_gpu_best_packed_int4_weight_only.pt`
+  - 文件体积：`114.96 MB`
+  - Test F1：`0.9493`
+  - GPU 推理时间：`4.59 ms / image`
+  - GPU 峰值显存：`258.54 MB`
+
+本轮新增输出：
+
+- `scann_v2/experiments/configs/legacy_vit_b16_exp8_refactored_ablation.json`
+- `scann_v2/experiments/results/vit_attention_ablation_exp8_refactored_fixed.csv`
+- `scann_v2/experiments/checkpoints/legacy_vit_b16_pretrained_gpu_best_custom_int8_weight_only.pt`
+- `scann_v2/experiments/checkpoints/legacy_vit_b16_pretrained_gpu_best_packed_int4_weight_only.pt`
+
 ---
 
 ## 10. 实验优先级
@@ -1068,6 +1135,10 @@ project/
 - `PackedKV4Bit` 已实现真实 `uint8` 打包与 block decode。
 - `ViT` attention 已支持按层选择、按 token block 流式解码与运行时统计。
 - `QJL sign-norm residual` 已作为可选分支接入 packed-KV 路线。
+- benchmark 在 variant 之间已增加显式显存清理，不再把前一个变体的残留显存错误计入下一个变体。
+- packed-KV attention 已改为 `Q` 一次投影、`K/V` 按 token block 投影与压缩，不再先常驻整块 dense `K/V`。
+- `peak_gpu_memory_attention_only_mb` 已改为记录 attention 模块局部峰值增量，而不是模块结束时的进程当前显存。
+- 已支持导出并直接 benchmark 压缩 checkpoint 版本，包括 `custom_int8_weight_only` 与 `packed_int4_weight_only`。
 
 建议直接使用的配置与脚本：
 
@@ -1083,7 +1154,13 @@ project/
 - 脚本：
   - `scann_v2/scripts/experiments/benchmark_legacy_checkpoint.py`
   - `scann_v2/scripts/experiments/benchmark_vit_attention_ablation.py`
+  - `scann_v2/scripts/experiments/export_legacy_compressed_checkpoint.py`
   - `scann_v2/scripts/experiments/validate_vit_attention_workflow.py`
+
+若需要在现有 `224 x 224` checkpoint 上复测重构版路线，可直接使用：
+
+- 配置：`scann_v2/experiments/configs/legacy_vit_b16_exp8_refactored_ablation.json`
+- 结果：`scann_v2/experiments/results/vit_attention_ablation_exp8_refactored_fixed.csv`
 
 新增结果字段：
 
@@ -1112,6 +1189,13 @@ project/
 2. 再跑 full-module `K/V 4-bit` benchmark
 3. 再跑 `qjl_sign_norm` residual 增强版本
 4. 最后跑 full-module ablation matrix
+
+2026-04-04 补充验证结论：
+
+- `baseline_dense` 与 `all_layers_kv_4bit` 在 `ViT-B/16 224 x 224` 上的测试集 F1 都约为 `0.9496`，说明重构后的 packed-KV 路线在这组设置下已基本不伤精度。
+- 修复 benchmark 污染后，`all_layers_kv_4bit` 的真实 GPU 峰值显存约为 `466.29 MB`，与 baseline 的 `465.66 MB` 基本持平；attention 局部峰值约为 `25.46 MB`。
+- `all_layers_kv_4bit_qjl` 在这组 `224 x 224` 复测上的 F1 为 `0.9483`，速度慢于纯 `K/V 4-bit`，因此当前更适合作为可选增强而不是默认配置。
+- 若目标是评估真实 checkpoint 压缩比，现已可直接使用导出的 `custom_int8_weight_only` 与 `packed_int4_weight_only` checkpoint。
 
 当前仍属于后续工作而非本阶段目标：
 

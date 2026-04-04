@@ -589,6 +589,8 @@ docs(experiments): document vit huge fullres kv compression workflow and result 
 - `PackedKV4Bit` 真实使用 `uint8` 打包
 - attention 采用分块解码，而非整块重建
 - benchmark 表中能比较 baseline / 局部压缩 / 全模块压缩 / QJL 可选增强
+- benchmark 显存统计不会被串行 variant 污染，且 `peak_gpu_memory_attention_only_mb` 记录的是 attention 模块局部峰值
+- 支持导出至少一组真实可加载的压缩 checkpoint 版本，用于评估文件体积与部署可行性
 
 ---
 
@@ -604,3 +606,14 @@ docs(experiments): document vit huge fullres kv compression workflow and result 
 - 增加 `ViT-Huge + full-resolution + packed KV` 路线说明
 - 增加“全模块消融保留”说明
 - 增加结果表字段说明
+- 增加 2026-04-04 的重构版兼容复测结论
+- 增加显存统计修复说明与压缩 checkpoint 导出入口
+
+## 10. 2026-04-04 回写补充
+
+基于旧数据集 `ViT-B/16` checkpoint 的重构版 packed-KV 复测，当前已经额外确认：
+
+- packed-KV 路径已改为 `Q` 一次投影、`K/V` 按 token block 投影与压缩，不再先常驻整块 dense `K/V`
+- benchmark variant 之间已增加显存清理，避免出现虚高的 GPU 峰值结果
+- `all_layers_kv_4bit` 在 `224 x 224` 的兼容复测上与 baseline 基本等精度，但仍慢于优化后的 dense baseline
+- 已支持导出 `custom_int8_weight_only` 与 `packed_int4_weight_only` 两组压缩 checkpoint，用于真实文件体积评估与直接 benchmark
