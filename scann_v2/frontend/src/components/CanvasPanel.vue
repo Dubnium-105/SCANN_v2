@@ -6,17 +6,17 @@
           <div class="space-y-3">
             <div class="space-y-2">
               <div class="flex items-center justify-between gap-2">
-                <p class="text-xs text-slate-200">浠诲姟鍒囨崲</p>
+                <p class="text-xs text-slate-200">任务切换</p>
                 <button
                   data-testid="task-catalog-open"
                   class="text-[10px] px-2 py-0.5 rounded border border-slate-700 text-slate-300"
                   @click="openTaskCatalog"
                 >
-                  鎬讳换鍔＄洰褰?
+                  任务目录
                 </button>
               </div>
-              <p class="text-[11px] text-slate-400">{{ activeTask?.task_id || '鏆傛棤浠诲姟' }}</p>
-              <p class="text-[10px] text-slate-500">杩涘害 {{ taskProgressText }}</p>
+              <p class="text-[11px] text-slate-400">{{ activeTask?.task_id || '暂无任务' }}</p>
+              <p class="text-[10px] text-slate-500">进度 {{ taskProgressText }}</p>
               <p
                 v-if="taskLockNotice"
                 data-testid="task-lock-status"
@@ -38,7 +38,7 @@
                   :disabled="!hasPrevTask || isLoading || isSubmitting"
                   @click="goToPreviousTask"
                 >
-                  涓婁竴浠诲姟
+                  上一任务
                 </button>
                 <button
                   data-testid="task-next"
@@ -46,14 +46,14 @@
                   :disabled="!hasNextTask || isLoading || isSubmitting"
                   @click="goToNextTask"
                 >
-                  涓嬩竴浠诲姟
+                  下一任务
                 </button>
               </div>
-              <p class="text-[10px] text-slate-500">蹇嵎閿細Q / E 鍒囨崲浠诲姟</p>
+              <p class="text-[10px] text-slate-500">快捷键：Q / E 切换任务</p>
             </div>
 
             <div class="space-y-2">
-              <p class="text-xs text-slate-200">浠诲姟瑙嗗浘鍒囨崲</p>
+              <p class="text-xs text-slate-200">任务视图切换</p>
               <div class="grid grid-cols-3 gap-2">
                 <button
                   data-testid="switch-view-new"
@@ -61,7 +61,7 @@
                   :class="currentView === 'new' ? 'border-sky-400 text-sky-300' : 'border-slate-700 text-slate-300'"
                   @click="switchToView('new')"
                 >
-                  鏂板浘
+                  新图
                 </button>
                 <button
                   data-testid="switch-view-new-marked"
@@ -69,7 +69,7 @@
                   :class="currentView === 'new_marked' ? 'border-sky-400 text-sky-300' : 'border-slate-700 text-slate-300'"
                   @click="switchToView('new_marked')"
                 >
-                  鏂板浘鏍囪
+                  新图标记
                 </button>
                 <button
                   data-testid="switch-view-old"
@@ -77,14 +77,14 @@
                   :class="currentView === 'old' ? 'border-sky-400 text-sky-300' : 'border-slate-700 text-slate-300'"
                   @click="switchToView('old')"
                 >
-                  鏃у浘
+                  旧图
                 </button>
               </div>
-              <p class="text-[10px] text-slate-400">蹇嵎閿細Space 鍒囨崲瑙嗗浘 / Tab 寮€鍏抽棯鐑?</p>
+              <p class="text-[10px] text-slate-400">快捷键：Space 切换视图 / Tab 开关闪烁</p>
             </div>
 
             <div class="space-y-2">
-              <p class="text-xs text-slate-200">闂儊 (Blink)</p>
+              <p class="text-xs text-slate-200">闪烁 (Blink)</p>
               <button
                 data-testid="blink-toggle"
                 class="w-full text-xs px-2 py-1.5 rounded border"
@@ -94,7 +94,7 @@
                 {{ blinkEnabled ? 'Stop Blink' : 'Start Blink' }}
               </button>
               <div class="space-y-1">
-                <label class="text-[10px] text-slate-400">闂撮殧: {{ (blinkInterval / 1000).toFixed(1) }}s</label>
+                <label class="text-[10px] text-slate-400">间隔: {{ (blinkInterval / 1000).toFixed(1) }}s</label>
                 <input
                   data-testid="blink-interval-slider"
                   type="range"
@@ -109,7 +109,7 @@
             </div>
 
             <div class="space-y-2">
-              <p class="text-xs text-slate-200">宸ュ叿</p>
+              <p class="text-xs text-slate-200">工具</p>
               <div class="grid grid-cols-2 gap-2">
                 <button
                   data-testid="tool-move"
@@ -117,7 +117,7 @@
                   :class="toolMode === 'move' ? 'border-sky-400 text-sky-300' : 'border-slate-700 text-slate-300'"
                   @click="setToolMode('move')"
                 >
-                  绉诲姩
+                  移动
                 </button>
                 <button
                   data-testid="tool-bbox"
@@ -125,7 +125,7 @@
                   :class="toolMode === 'bbox' ? 'border-emerald-400 text-emerald-300' : 'border-slate-700 text-slate-300'"
                   @click="setToolMode('bbox')"
                 >
-                  鐭╁舰
+                  矩形
                 </button>
                 <button
                   data-testid="tool-point"
@@ -133,7 +133,7 @@
                   :class="toolMode === 'point' ? 'border-amber-400 text-amber-300' : 'border-slate-700 text-slate-300'"
                   @click="setToolMode('point')"
                 >
-                  鐐?
+                  点
                 </button>
                 <button
                   data-testid="tool-polygon"
@@ -141,7 +141,7 @@
                   :class="toolMode === 'polygon' ? 'border-violet-400 text-violet-300' : 'border-slate-700 text-slate-300'"
                   @click="setToolMode('polygon')"
                 >
-                  澶氳竟褰?
+                  多边形
                 </button>
               </div>
               <button
@@ -150,13 +150,13 @@
                 class="w-full text-xs px-2 py-1 rounded border border-violet-700 text-violet-200"
                 @click="finishPolygon"
               >
-                瀹屾垚澶氳竟褰?
+                完成多边形
               </button>
             </div>
 
             <div class="space-y-2">
               <div class="flex items-center justify-between gap-2">
-                <p class="text-[11px] text-slate-200">鎷変几</p>
+                <p class="text-[11px] text-slate-200">拉伸</p>
                 <label class="text-[10px] text-slate-300 inline-flex items-center gap-1">
                   <input
                     data-testid="auto-stretch-toggle"
@@ -164,7 +164,7 @@
                     :checked="autoStretchEnabled"
                     @change="onAutoStretchToggle"
                   >
-                  鑷姩鎷変几
+                  自动拉伸
                 </label>
               </div>
               <div class="space-y-1">
@@ -199,7 +199,7 @@
                 :disabled="!activeTask || !activeFitsNode"
                 @click="onMatchGroupStretch"
               >
-                鍖归厤鍙﹀涓ゅ浘 (M)
+                匹配其余视图 (M)
               </button>
               <p class="text-[10px] text-slate-500">Shortcut: M syncs the current stretch to the other views in this task.</p>
               <label class="text-[11px] text-slate-300 inline-flex items-center gap-2">
@@ -209,14 +209,14 @@
                   :checked="invertDisplay"
                   @change="onInvertChange"
                 >
-                鍙嶈浆
+                反转
               </label>
             </div>
 
             <div class="space-y-2">
-              <p class="text-[11px] text-slate-200">鏍囨敞鏍峰紡缁熶竴璁剧疆</p>
+              <p class="text-[11px] text-slate-200">标注样式统一设置</p>
               <div class="space-y-1">
-                <label class="text-[10px] text-slate-400">BBox 绾垮: {{ bboxStrokeWidth.toFixed(1) }}</label>
+                <label class="text-[10px] text-slate-400">BBox 线宽: {{ bboxStrokeWidth.toFixed(1) }}</label>
                 <input
                   data-testid="bbox-stroke-width-slider"
                   type="range"
@@ -229,7 +229,7 @@
                 >
               </div>
               <div class="space-y-1">
-                <label class="text-[10px] text-slate-400">鐐瑰崐寰? {{ pointRadius.toFixed(1) }}</label>
+                <label class="text-[10px] text-slate-400">点半径: {{ pointRadius.toFixed(1) }}</label>
                 <input
                   data-testid="point-radius-slider"
                   type="range"
@@ -242,7 +242,7 @@
                 >
               </div>
               <div class="space-y-1">
-                <label class="text-[10px] text-slate-400">澶氳竟褰㈢嚎瀹? {{ polygonStrokeWidth.toFixed(1) }}</label>
+                <label class="text-[10px] text-slate-400">多边形线宽: {{ polygonStrokeWidth.toFixed(1) }}</label>
                 <input
                   data-testid="polygon-stroke-width-slider"
                   type="range"
@@ -273,7 +273,7 @@
               class="text-xs px-2 py-1 rounded border border-slate-700 text-slate-300"
               @click="closeTaskCatalog"
             >
-              鍏抽棴
+              关闭
             </button>
           </div>
           <input
@@ -281,7 +281,7 @@
             data-testid="task-catalog-search"
             type="text"
             class="w-full text-xs bg-slate-900 text-slate-200 border border-slate-700 rounded px-2 py-1"
-            placeholder="鎼滅储浠诲姟ID..."
+            placeholder="搜索任务 ID..."
           >
           <p class="text-[11px] text-slate-500">Showing {{ filteredTaskCatalog.length }} / {{ taskList.length }} tasks</p>
           <ul class="flex-1 min-h-0 overflow-auto space-y-1" data-testid="task-catalog-list">
@@ -465,7 +465,7 @@
           v-else-if="!activeTask"
           class="absolute inset-0 flex items-center justify-center text-sm text-slate-400 bg-slate-950/65"
         >
-          绛夊緟浠诲姟...
+          等待任务...
         </div>
       </div>
 
@@ -478,7 +478,7 @@
               :disabled="isSubmitting || !activeTask || !hasTaskLock"
               @click="submitCurrentAnnotations"
             >
-              {{ isSubmitting ? '鎻愪氦涓?..' : '鎻愪氦' }}
+              {{ isSubmitting ? '提交中...' : '提交' }}
             </button>
             <p
               v-if="saveMessage"
@@ -502,7 +502,7 @@
               </button>
             </div>
 
-            <p class="text-[11px] text-slate-200">鏍囨敞鍒楄〃</p>
+            <p class="text-[11px] text-slate-200">标注列表</p>
             <ul data-testid="annotation-list" class="max-h-28 overflow-auto space-y-1">
               <li v-for="ann in annotations" :key="`list-${ann.id}`">
                 <div class="flex items-center gap-1">
@@ -523,7 +523,7 @@
                           :style="{ backgroundColor: getAnnotationColor(ann) }"
                         />
                         <span class="font-semibold">{{ ann.display_id }}</span>
-                        <span>{{ ann.type }} 路 {{ ann.detail_type ? ann.detail_type : ann.label }}</span>
+                        <span>{{ ann.type }} · {{ ann.detail_type ? ann.detail_type : ann.label }}</span>
                       </span>
                   </button>
                   <button
@@ -533,14 +533,14 @@
                     title="Delete annotation"
                     @click.stop="removeAnnotation(ann.id)"
                   >
-                    {{ pendingDeleteAnnotationId === ann.id ? '纭鍒犻櫎' : '鍒犻櫎' }}
+                    {{ pendingDeleteAnnotationId === ann.id ? '确认删除' : '删除' }}
                   </button>
                 </div>
               </li>
             </ul>
 
             <label class="text-[11px] text-slate-300 block">
-              鐩爣绫诲瀷
+              目标类型
               <select
                 data-testid="annotation-label-select"
                 class="mt-1 w-full text-xs bg-slate-800 text-slate-200 border border-slate-700 rounded px-2 py-1"
@@ -549,16 +549,16 @@
                 @change="onSelectedLabelChange"
               >
                 <option value="Unlabeled">Unlabeled</option>
-                <optgroup label="鐪熷疄鐩爣">
+                <optgroup label="真实目标">
                   <option value="real:asteroid">Asteroid</option>
                   <option value="real:supernova">Supernova</option>
-                  <option value="real:variable_star">鍙樻槦</option>
+                  <option value="real:variable_star">变星</option>
                 </optgroup>
                 <optgroup label="False Positives">
-                  <option value="bogus:satellite_trail">鍗槦杞ㄨ抗</option>
-                  <option value="bogus:noise">鍣０</option>
+                  <option value="bogus:satellite_trail">卫星轨迹</option>
+                  <option value="bogus:noise">噪声</option>
                   <option value="bogus:diffraction_spike">Diffraction Spike</option>
-                  <option value="bogus:cmos_condensation">CMOS缁撻湶</option>
+                  <option value="bogus:cmos_condensation">CMOS结露</option>
                   <option value="bogus:corresponding">Corresponding Source</option>
                 </optgroup>
               </select>
@@ -1147,7 +1147,7 @@ async function loadLatestRevisionAnnotations(taskId) {
       setCurrentView(detail.source_view)
     }
   } catch {
-    // 鍘嗗彶璇诲彇澶辫触鏃朵繚鎸佺┖鐘舵€侊紝閬垮厤闃诲浠诲姟鍒囨崲銆?
+    // 历史读取失败时保持空状态，避免阻塞任务切换。
   }
 }
 
@@ -1454,7 +1454,7 @@ function removeAnnotation(annotationId) {
   if (pendingDeleteAnnotationId.value !== annotationId) {
     clearPendingDeleteState()
     pendingDeleteAnnotationId.value = annotationId
-    undoDeleteMessage.value = `璇峰湪2绉掑唴鍐嶆鐐瑰嚮鈥滃垹闄も€濅互纭鍒犻櫎 ${target.display_id}`
+    undoDeleteMessage.value = `请在 2 秒内再次点击“删除”以确认删除 ${target.display_id}`
     pendingDeleteTimerId = setTimeout(() => {
       clearPendingDeleteState()
       if (!undoDeleteVisible.value) {
@@ -1482,7 +1482,7 @@ function removeAnnotation(annotationId) {
   }
 
   undoDeleteVisible.value = true
-  undoDeleteMessage.value = `宸插垹闄?${target.display_id}`
+  undoDeleteMessage.value = `已删除 ${target.display_id}`
 }
 
 function undoRemoveAnnotation() {
@@ -1776,7 +1776,7 @@ async function submitCurrentAnnotations() {
     }
 
     saveMessage.value = movedToNextTask
-      ? `Saved ${response.saved_count} annotations 路 switched to next task`
+      ? `Saved ${response.saved_count} annotations · switched to next task`
       : `Saved ${response.saved_count} annotations`
 
     if (!movedToNextTask) {
