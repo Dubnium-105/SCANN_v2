@@ -4,7 +4,7 @@ import logging
 import os
 import shutil
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime
@@ -31,6 +31,7 @@ _MATCH_HIGHLIGHT_SIGMA = 5.0
 _MATCH_ADAPTIVE_HIGH_PERCENTILE = False
 _TASK_MANIFEST_FILE = "preprocessed_tasks.json"
 _TASK_MANIFEST_VERSION = "1.0"
+_PREPROCESS_ALIGN_METHOD = "siril"
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,22 @@ class DatasetPreprocessService:
         self._read_fits = read_fits_fn
         self._write_fits = write_fits_fn
         self._max_workers = max_workers
+        self._progress_callback: Optional[Callable[[int, int, str], None]] = None
+
+    def set_progress_callback(
+        self,
+        callback: Optional[Callable[[int, int, str], None]],
+    ) -> None:
+        """注册预处理进度回调。"""
+        self._progress_callback = callback
+
+    def _emit_progress(self, current: int, total: int, message: str) -> None:
+        callback = self._progress_callback
+        if callback is None:
+            return
+        safe_total = max(1, int(total))
+        safe_current = max(0, min(int(current), safe_total))
+        callback(safe_current, safe_total, message)
 
     @staticmethod
     def _dataset_storage(root: Path) -> DatasetStorage:
@@ -240,7 +257,12 @@ class DatasetPreprocessService:
                 )
         return assets
 
-    def _migrate_legacy_inputs_to_raw(self, root: Path) -> int:
+    def _migrate_legacy_inputs_to_raw(
+        self,
+        root: Path,
+        *,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    ) -> int:
         dataset_root = Path(root)
         raw_root = dataset_root / "dataset_raw"
         folder_names = ("new", "old", "new_marked")
@@ -256,7 +278,25 @@ class DatasetPreprocessService:
                 if not self._should_standardize_file(file_path):
                     continue
                 jobs.append((file_path, raw_dir, work_dir))
-        return sum(self._run_jobs(jobs, self._standardize_single_file))
+        def _on_job_progress(current: int, total: int, job: object) -> None:
+            if progress_callback is None:
+                return
+            if not isinstance(job, tuple) or not job:
+                progress_callback(current, total, "unknown")
+                return
+            src_path = job[0]
+            if not isinstance(src_path, Path):
+                progress_callback(current, total, str(src_path))
+                return
+            progress_callback(current, total, src_path.name)
+
+        return sum(
+            self._run_jobs(
+                jobs,
+                self._standardize_single_file,
+                on_progress_detail=_on_job_progress,
+            )
+        )
 
     @staticmethod
     def _date_token_from_asset(asset: RawAssetRecord) -> str | None:
@@ -332,18 +372,86 @@ class DatasetPreprocessService:
 
     def prepare_dataset(self, root: Path) -> DatasetPreprocessReport:
         dataset_root = Path(root)
+        logger.info("开始预处理数据集: %s", dataset_root)
+        self._emit_progress(0, 100, f"预处理初始化: {dataset_root}")
         self._ensure_dataset_dirs(dataset_root)
-        standardized_files = self.standardize_dataset_by_date_obs(dataset_root)
-        brightness_matched_files = self.apply_initial_brightness_match(dataset_root)
-        reused_aligned_pairs, generated_aligned_pairs, generated_marked_crops = (
-            self.ensure_aligned_crop_files(dataset_root)
+        self._emit_progress(5, 100, "目录检查完成")
+
+        self._emit_progress(6, 100, "开始标准化原始数据")
+
+        def _standardize_progress(current: int, total: int, item_name: str) -> None:
+            step_total = max(1, total)
+            percent = 6 + int((current / step_total) * 19)
+            self._emit_progress(
+                percent,
+                100,
+                f"标准化迁移处理中: {current}/{step_total} · {item_name}",
+            )
+            logger.info(
+                "标准化迁移进度: %d/%d, 文件=%s",
+                current,
+                step_total,
+                item_name,
+            )
+
+        standardized_files = self.standardize_dataset_by_date_obs(
+            dataset_root,
+            progress_callback=_standardize_progress,
         )
+        self._emit_progress(30, 100, f"标准化完成: {standardized_files} 文件")
+        logger.info("标准化完成: %s, 文件数=%d", dataset_root, standardized_files)
+
+        self._emit_progress(31, 100, "开始亮度匹配")
+        brightness_matched_files = self.apply_initial_brightness_match(dataset_root)
+        self._emit_progress(40, 100, f"亮度匹配完成: {brightness_matched_files} 文件")
+        logger.info("亮度匹配完成: %s, 文件数=%d", dataset_root, brightness_matched_files)
+
+        def _aligned_progress(current: int, total: int, task_id: str) -> None:
+            step_total = max(1, total)
+            percent = 40 + int((current / step_total) * 45)
+            self._emit_progress(
+                percent,
+                100,
+                f"对齐裁剪处理中: {current}/{step_total} · {task_id}",
+            )
+            logger.info(
+                "对齐裁剪进度: %d/%d, 任务=%s",
+                current,
+                step_total,
+                task_id,
+            )
+
+        reused_aligned_pairs, generated_aligned_pairs, generated_marked_crops = (
+            self.ensure_aligned_crop_files(dataset_root, progress_callback=_aligned_progress)
+        )
+        self._emit_progress(90, 100, "对齐裁剪阶段完成")
+        logger.info(
+            "对齐裁剪完成: %s, 复用=%d, 新生成=%d, 标注裁剪=%d",
+            dataset_root,
+            reused_aligned_pairs,
+            generated_aligned_pairs,
+            generated_marked_crops,
+        )
+        self._emit_progress(92, 100, "汇总任务状态")
         task_rows = self._dataset_storage(dataset_root).list_tasks(active_only=True)
         tasks = self.collect_preprocessed_tasks(dataset_root)
+        self._emit_progress(95, 100, f"任务清单生成完成: {len(tasks)}")
         self.write_task_manifest(dataset_root, tasks)
         task_count = len(tasks)
         total_task_count = len(task_rows)
         align_failed_count = sum(1 for task in task_rows if task.preprocess_status == "align_failed")
+        self._emit_progress(
+            100,
+            100,
+            f"预处理完成: 总任务 {total_task_count}, 就绪 {task_count}, 对齐失败 {align_failed_count}",
+        )
+        logger.info(
+            "预处理完成: %s, 总任务=%d, 就绪=%d, 对齐失败=%d",
+            dataset_root,
+            total_task_count,
+            task_count,
+            align_failed_count,
+        )
         return DatasetPreprocessReport(
             standardized_files=standardized_files,
             brightness_matched_files=brightness_matched_files,
@@ -355,19 +463,37 @@ class DatasetPreprocessService:
             align_failed_count=align_failed_count,
         )
 
-    def standardize_dataset_by_date_obs(self, root: Path) -> int:
+    def standardize_dataset_by_date_obs(
+        self,
+        root: Path,
+        *,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    ) -> int:
         self._ensure_dataset_dirs(root)
-        migrated = self._migrate_legacy_inputs_to_raw(root)
+        migrated = self._migrate_legacy_inputs_to_raw(root, progress_callback=progress_callback)
         assets = self._scan_raw_assets(root)
         self._dataset_storage(root).upsert_raw_assets(assets)
         self._plan_tasks(root)
         return migrated if migrated > 0 else len(assets)
 
-    def ensure_aligned_crop_files(self, root: Path) -> tuple[int, int, int]:
+    def ensure_aligned_crop_files(
+        self,
+        root: Path,
+        *,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    ) -> tuple[int, int, int]:
         planned_tasks = self._plan_tasks(root)
+
+        def _on_task_progress(current: int, total: int, task: object) -> None:
+            if progress_callback is None:
+                return
+            task_id = task.task_id if isinstance(task, _PlannedTask) else str(task)
+            progress_callback(current, total, task_id)
+
         results = self._run_jobs(
             planned_tasks,
             lambda task: self._ensure_planned_task(root, task),
+            on_progress_detail=_on_task_progress,
         )
         reused_aligned_pairs = sum(item[0] for item in results)
         generated_aligned_pairs = sum(item[1] for item in results)
@@ -730,10 +856,15 @@ class DatasetPreprocessService:
 
         h, w = new_data.shape[:2]
         fallback_max_shift = max(100, int(min(h, w) * 0.45))
+        logger.info(
+            "任务对齐使用 Siril: task_id=%s, max_shift=%s",
+            task.task_id,
+            fallback_max_shift,
+        )
         result = self._align(
             new_data,
             old_data_for_align,
-            method="auto",
+            method=_PREPROCESS_ALIGN_METHOD,
             max_shift=fallback_max_shift,
         )
         if not getattr(result, "success", False) or getattr(result, "aligned_old", None) is None:
@@ -883,10 +1014,15 @@ class DatasetPreprocessService:
 
         h, w = new_data.shape[:2]
         fallback_max_shift = max(100, int(min(h, w) * 0.45))
+        logger.info(
+            "配对对齐使用 Siril: pair=%s, max_shift=%s",
+            pair.name,
+            fallback_max_shift,
+        )
         result = self._align(
             new_fits.data,
             old_fits.data,
-            method="auto",
+            method=_PREPROCESS_ALIGN_METHOD,
             max_shift=fallback_max_shift,
         )
 
@@ -1047,16 +1183,46 @@ class DatasetPreprocessService:
         default_workers = min(32, (os.cpu_count() or 1) + 4)
         return max(1, min(job_count, default_workers))
 
-    def _run_jobs(self, jobs: list, worker: Callable) -> list:
+    def _run_jobs(
+        self,
+        jobs: list,
+        worker: Callable,
+        *,
+        on_progress: Optional[Callable[[int, int], None]] = None,
+        on_progress_detail: Optional[Callable[[int, int, object], None]] = None,
+    ) -> list:
         if not jobs:
             return []
 
+        total = len(jobs)
+
         max_workers = self._resolve_max_workers(len(jobs))
         if max_workers <= 1:
-            return [worker(job) for job in jobs]
+            results: list = []
+            for index, job in enumerate(jobs, start=1):
+                results.append(worker(job))
+                if on_progress is not None:
+                    on_progress(index, total)
+                if on_progress_detail is not None:
+                    on_progress_detail(index, total, job)
+            return results
 
         with ThreadPoolExecutor(
             max_workers=max_workers,
             thread_name_prefix="scann-preprocess",
         ) as executor:
-            return list(executor.map(worker, jobs))
+            future_to_index = {
+                executor.submit(worker, job): idx
+                for idx, job in enumerate(jobs)
+            }
+            results: list = [None] * total
+            completed = 0
+            for future in as_completed(future_to_index):
+                idx = future_to_index[future]
+                results[idx] = future.result()
+                completed += 1
+                if on_progress is not None:
+                    on_progress(completed, total)
+                if on_progress_detail is not None:
+                    on_progress_detail(completed, total, jobs[idx])
+            return results

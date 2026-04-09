@@ -179,6 +179,7 @@ class MainWindow(QMainWindow):
         self._stretch_state_by_view: dict[str, dict[str, float]] = {}
 
         # ── 文件管理 ──
+        self._enable_async_preprocess: bool = True
         self._new_folder: str = ""
         self._old_folder: str = ""
         self._dataset_root: str = ""

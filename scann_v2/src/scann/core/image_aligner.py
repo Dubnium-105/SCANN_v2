@@ -194,12 +194,27 @@ def _alignment_quality(
 def _is_quality_improved(
     before: float,
     after: float,
+    *,
+    dx: float = 0.0,
+    dy: float = 0.0,
     min_delta: float = 5e-4,
     min_after: float = 5e-2,
+    small_shift_px: float = 1.0,
+    max_drop_small_shift: float = 2e-2,
 ) -> bool:
     if not np.isfinite(before) or not np.isfinite(after):
         return False
-    return after >= min_after and after > before + min_delta
+    if after < min_after:
+        return False
+
+    if after > before + min_delta:
+        return True
+
+    shift = float(np.hypot(dx, dy))
+    if shift <= small_shift_px and after >= before - max_drop_small_shift:
+        return True
+
+    return False
 
 
 def _match_intensity_scale(aligned: np.ndarray, reference: np.ndarray) -> np.ndarray:
@@ -294,7 +309,7 @@ def _align_phase_correlation(
     aligned = _warp_translate(old_image, dx, dy)
     before, _ = _alignment_quality(new_image, old_image, aligned, dx, dy)
 
-    if not _is_quality_improved(before, after):
+    if not _is_quality_improved(before, after, dx=dx, dy=dy):
         return AlignResult(
             aligned_old=None,
             dx=dx,
@@ -370,7 +385,7 @@ def _align_ecc(
                 )
 
                 before, after = _alignment_quality(new_image, old_image, aligned, dx, dy)
-                if not _is_quality_improved(before, after):
+                if not _is_quality_improved(before, after, dx=dx, dy=dy):
                     last_error = (
                         f"ECC 质量不足: before={before:.4f}, after={after:.4f}, motion={motion}"
                     )
@@ -607,7 +622,7 @@ def _align_siril(
             return AlignResult(
                 aligned_old=None,
                 success=False,
-                error_message="Siril 缁撴灉鏃犳硶浼拌鐩稿鏂板浘鍋忕Щ",
+                error_message="Siril 结果无法估计相对新图偏移",
             )
 
         dx, dy = estimated_shift
@@ -618,20 +633,32 @@ def _align_siril(
                 dx=dx,
                 dy=dy,
                 success=False,
-                error_message=f"Siril 鍋忕Щ閲忚繃澶? dx={dx:.3f}, dy={dy:.3f}",
+                error_message=f"Siril 偏移量过大: dx={dx:.3f}, dy={dy:.3f}",
             )
 
         before, after = _alignment_quality(new_image, old_image, aligned, dx, dy)
-        if not _is_quality_improved(before, after):
-            return AlignResult(
-                aligned_old=None,
-                dx=dx,
-                dy=dy,
-                success=False,
-                error_message=(
-                    f"Siril 璐ㄩ噺涓嶈冻: before={before:.4f}, after={after:.4f}, "
-                    f"dx={dx:.3f}, dy={dy:.3f}"
-                ),
+        if not _is_quality_improved(before, after, dx=dx, dy=dy):
+            # Siril 在天文场景下可能存在大位移/低纹理区域，ZNCC 指标并不总是可靠。
+            # 这里放宽为“非灾难性下降可接受”，避免误判大量失败样本。
+            quality_drop = before - after
+            if not np.isfinite(after) or after < -0.20 or quality_drop > 0.20:
+                return AlignResult(
+                    aligned_old=None,
+                    dx=dx,
+                    dy=dy,
+                    success=False,
+                    error_message=(
+                        f"Siril 质量不足: before={before:.4f}, after={after:.4f}, "
+                        f"drop={quality_drop:.4f}, dx={dx:.3f}, dy={dy:.3f}"
+                    ),
+                )
+            logger.warning(
+                "Siril 质量检查放宽通过: before=%.4f, after=%.4f, drop=%.4f, dx=%.3f, dy=%.3f",
+                before,
+                after,
+                quality_drop,
+                dx,
+                dy,
             )
 
         return AlignResult(
@@ -725,7 +752,7 @@ def _align_feature_matching(
         )
 
         before, after = _alignment_quality(new_image, old_image, aligned, dx, dy)
-        if not _is_quality_improved(before, after):
+        if not _is_quality_improved(before, after, dx=dx, dy=dy):
             last_error = (
                 f"{detector_name} 质量不足: before={before:.4f}, after={after:.4f}, "
                 f"inliers={inliers}/{len(matches)}"

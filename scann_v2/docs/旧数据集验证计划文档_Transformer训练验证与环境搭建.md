@@ -1197,6 +1197,29 @@ project/
 - `all_layers_kv_4bit_qjl` 在这组 `224 x 224` 复测上的 F1 为 `0.9483`，速度慢于纯 `K/V 4-bit`，因此当前更适合作为可选增强而不是默认配置。
 - 若目标是评估真实 checkpoint 压缩比，现已可直接使用导出的 `custom_int8_weight_only` 与 `packed_int4_weight_only` checkpoint。
 
+是否支持“训练到推理全流程压缩”：
+
+- 结论：当前还不支持完整的“训练态到推理态”全流程压缩。
+- 当前已支持的部分：
+  - 推理态运行时 `K/V` 激活压缩：`attention_compression_mode=vit_packed_kv`
+  - 推理前导出压缩 checkpoint：`custom_int8_weight_only`、`packed_int4_weight_only`
+- 当前未支持的部分：
+  - 训练态 packed-KV attention
+  - 在训练阶段直接使用压缩权重继续优化
+  - 优化器状态、梯度、激活缓存的统一压缩
+  - 训练期与部署期共用同一套压缩表示并端到端保持低比特驻留
+- 代码侧现状也已明确限制：
+  - `attention_compression_mode` 当前是 inference-only，训练路径会直接拒绝
+  - `train_legacy_classifier` 当前只允许先训练 dense baseline checkpoint，再做 benchmark 或导出压缩 checkpoint
+- 因此，这一方法目前属于“两段式压缩”：
+  - 第一段：dense 训练
+  - 第二段：推理态 packed-KV 压缩，或训练后导出压缩 checkpoint 再推理
+- 若后续目标是实现真正的全流程压缩，至少还需要补齐：
+  - 训练态 packed-KV forward / backward
+  - 可训练的低比特权重表示或 QAT
+  - 优化器状态与梯度压缩
+  - 训练 checkpoint、部署 checkpoint 与推理 runtime 三者统一格式
+
 当前仍属于后续工作而非本阶段目标：
 
 - 非 square ViT 正式支持

@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PyQt5.QtWidgets import QFileDialog
+from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5.QtWidgets import QApplication, QFileDialog
 
 from scann.core.dataset_storage import DatasetStorage
 from scann.data.file_manager import FitsImagePair
@@ -14,6 +15,39 @@ from scann.services.pair_service import PairService
 
 if TYPE_CHECKING:
     from scann.gui.main_window import MainWindow
+
+
+class DatasetPreprocessWorker(QThread):
+    """后台执行数据集预处理，避免阻塞主线程。"""
+
+    progress = pyqtSignal(int, int, str)
+    finished_with_report = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(
+        self,
+        preprocess_service: DatasetPreprocessService,
+        dataset_root: Path,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self._preprocess_service = preprocess_service
+        self._dataset_root = Path(dataset_root)
+
+    def run(self) -> None:
+        try:
+            if hasattr(self._preprocess_service, "set_progress_callback"):
+                self._preprocess_service.set_progress_callback(self._emit_progress)
+            report = self._preprocess_service.prepare_dataset(self._dataset_root)
+            self.finished_with_report.emit(report)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+        finally:
+            if hasattr(self._preprocess_service, "set_progress_callback"):
+                self._preprocess_service.set_progress_callback(None)
+
+    def _emit_progress(self, current: int, total: int, message: str) -> None:
+        self.progress.emit(int(current), int(total), str(message))
 
 
 class PairController:
@@ -30,6 +64,11 @@ class PairController:
         self._preprocess_service = preprocess_service or DatasetPreprocessService(
             pair_service=pair_service
         )
+        self._last_preprocess_logged_percent = -1
+        self._last_preprocess_log_message: str = ""
+        self._preprocess_worker: DatasetPreprocessWorker | None = None
+        self._preprocess_dataset_root: Path | None = None
+        self._preprocess_message_prefix: str = ""
 
     @property
     def pair_service(self) -> PairService:
@@ -141,7 +180,15 @@ class PairController:
         created: list[str] | None = None,
         message_prefix: str,
     ) -> None:
+        if self._preprocess_worker is not None and self._preprocess_worker.isRunning():
+            self._window._show_message("已有预处理任务正在运行，请稍候", 3000, level="WARNING")
+            return
+
         self._reset_loaded_dataset_state()
+        self._last_preprocess_logged_percent = -1
+        self._last_preprocess_log_message = ""
+        self._preprocess_dataset_root = dataset_root
+        self._preprocess_message_prefix = message_prefix
 
         if created:
             created_desc = ", ".join(created)
@@ -150,17 +197,128 @@ class PairController:
                 5000,
             )
 
-        self._window._show_message(f"正在预处理数据集: {dataset_root}", 2000)
-        report = self._preprocess_service.prepare_dataset(dataset_root)
+        self._set_preprocess_ui_busy(True)
+        self._apply_progress(0, 100, f"正在预处理数据集: {dataset_root}", force_log=True)
+
+        if getattr(self._window, "_enable_async_preprocess", False):
+            self._start_async_preprocess(dataset_root)
+            return
+
+        self._run_sync_preprocess(dataset_root)
+
+    def _format_progress_bar(self, current: int, total: int) -> str:
+        total_safe = max(1, total)
+        ratio = max(0.0, min(1.0, current / total_safe))
+        slots = 20
+        filled = int(round(ratio * slots))
+        return f"[{'#' * filled}{'-' * (slots - filled)}]"
+
+    def _apply_progress(self, current: int, total: int, message: str, *, force_log: bool = False) -> None:
+        safe_total = max(1, int(total))
+        safe_current = max(0, min(int(current), safe_total))
+        percent = int((safe_current / safe_total) * 100)
+
+        progress_bar = getattr(self._window, "progress_bar", None)
+        if progress_bar is not None:
+            try:
+                progress_bar.setVisible(True)
+                progress_bar.setMaximum(safe_total)
+                progress_bar.setValue(safe_current)
+                progress_bar.setFormat(f"预处理: {percent}%")
+            except Exception:
+                pass
+
+        should_log = (
+            force_log
+            or safe_current == safe_total
+            or message != self._last_preprocess_log_message
+            or percent > self._last_preprocess_logged_percent
+        )
+        if should_log:
+            self._last_preprocess_logged_percent = percent
+            self._last_preprocess_log_message = message
+            bar_text = self._format_progress_bar(safe_current, safe_total)
+            self._window._show_message(f"{message} {bar_text} {percent}%", 0)
+
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
+
+    def _set_preprocess_ui_busy(self, busy: bool) -> None:
+        progress_bar = getattr(self._window, "progress_bar", None)
+        if progress_bar is not None:
+            try:
+                progress_bar.setVisible(True if busy else False)
+            except Exception:
+                pass
+
+        for attr_name in (
+            "btn_new_folder",
+            "btn_preprocess_dataset",
+            "btn_align",
+            "btn_detect",
+            "act_open_new",
+            "act_preprocess_dataset",
+        ):
+            control = getattr(self._window, attr_name, None)
+            if control is None:
+                continue
+            try:
+                control.setEnabled(not busy)
+            except Exception:
+                pass
+
+    def _start_async_preprocess(self, dataset_root: Path) -> None:
+        worker = DatasetPreprocessWorker(self._preprocess_service, dataset_root, parent=self._window)
+        worker.progress.connect(self._on_preprocess_progress)
+        worker.finished_with_report.connect(self._on_preprocess_finished)
+        worker.failed.connect(self._on_preprocess_failed)
+        worker.finished.connect(self._on_preprocess_worker_finished)
+        self._preprocess_worker = worker
+        worker.start()
+
+    def _run_sync_preprocess(self, dataset_root: Path) -> None:
+        if hasattr(self._preprocess_service, "set_progress_callback"):
+            self._preprocess_service.set_progress_callback(self._on_preprocess_progress)
+        try:
+            report = self._preprocess_service.prepare_dataset(dataset_root)
+            self._on_preprocess_finished(report)
+        except Exception as exc:
+            self._on_preprocess_failed(str(exc))
+        finally:
+            if hasattr(self._preprocess_service, "set_progress_callback"):
+                self._preprocess_service.set_progress_callback(None)
+
+    def _on_preprocess_progress(self, current: int, total: int, message: str) -> None:
+        self._apply_progress(current, total, message)
+
+    def _on_preprocess_finished(self, report) -> None:
+        dataset_root = self._preprocess_dataset_root
+        if dataset_root is None:
+            self._on_preprocess_failed("预处理完成但未找到数据集路径")
+            return
+
+        self._apply_progress(100, 100, "数据集预处理完成", force_log=True)
         pair_count, only_new_count, only_old_count = self._refresh_dataset_listing(dataset_root)
+        self._set_preprocess_ui_busy(False)
 
         self._window._show_message(
-            f"{message_prefix}: "
+            f"{self._preprocess_message_prefix}: "
             f"{dataset_root} · 总任务 {report.total_task_count} · "
             f"就绪 {report.task_count} · 对齐失败 {report.align_failed_count} · "
             f"配对 {pair_count} · 仅新图 {only_new_count} · 仅旧图 {only_old_count}",
             5000,
         )
+
+    def _on_preprocess_failed(self, message: str) -> None:
+        self._set_preprocess_ui_busy(False)
+        self._window._show_message(f"数据集预处理失败: {message}", 5000, level="ERROR")
+
+    def _on_preprocess_worker_finished(self) -> None:
+        worker = self._preprocess_worker
+        self._preprocess_worker = None
+        if worker is not None:
+            worker.deleteLater()
 
     def open_dataset(self) -> None:
         folder = QFileDialog.getExistingDirectory(self._window, "选择项目根目录或数据集目录")
