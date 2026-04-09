@@ -15,6 +15,7 @@ def test_canonicalize_device_request_maps_domestic_aliases():
     assert device_utils.canonicalize_device_request("ascend") == "npu"
     assert device_utils.canonicalize_device_request("cambricon") == "mlu"
     assert device_utils.canonicalize_device_request("mthreads") == "musa"
+    assert device_utils.canonicalize_device_request("k100_ai") == "dcu"
 
 
 def test_resolve_device_auto_can_select_domestic_accelerator(monkeypatch):
@@ -34,6 +35,24 @@ def test_resolve_device_auto_can_select_domestic_accelerator(monkeypatch):
 
     assert resolved.backend == "npu"
     assert resolved.resolved.spec == "npu:0"
+    assert resolved.used_fallback is False
+
+
+def test_resolve_device_dcu_uses_cuda_runtime(monkeypatch):
+    monkeypatch.setattr(device_utils.torch, "device", _fake_device)
+
+    def fake_info(spec_or_key):
+        key = getattr(spec_or_key, "key", spec_or_key)
+        if key == "dcu":
+            return AcceleratorInfo(key="dcu", label="DCU / Hygon", available=True, device_count=1)
+        return AcceleratorInfo(key=str(key), label=str(key), available=False)
+
+    monkeypatch.setattr(device_utils, "get_accelerator_info", fake_info)
+
+    resolved = device_utils.resolve_device("dcu")
+
+    assert resolved.backend == "dcu"
+    assert resolved.resolved.spec == "cuda:0"
     assert resolved.used_fallback is False
 
 
@@ -84,6 +103,7 @@ def test_device_choice_lists_include_domestic_backends():
     settings_values = {value for _label, value in device_utils.get_settings_device_choices()}
     training_labels = [label for label, _value in device_utils.get_training_device_choices()]
 
-    assert {"npu", "mlu", "musa"}.issubset(settings_values)
+    assert {"dcu", "npu", "mlu", "musa"}.issubset(settings_values)
+    assert any("DCU" in label for label in training_labels)
     assert any("NPU" in label for label in training_labels)
     assert any("MLU" in label for label in training_labels)
