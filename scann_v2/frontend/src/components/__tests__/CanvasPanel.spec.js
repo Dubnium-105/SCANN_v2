@@ -1,6 +1,16 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import CanvasPanel from '../CanvasPanel.vue'
 
+function createTask(taskId, overrides = {}) {
+  return {
+    task_id: taskId,
+    old_path: `old/${taskId}.fts`,
+    new_path: `new/${taskId}.fts`,
+    new_marked_path: `new_marked/${taskId}.fts`,
+    ...overrides,
+  }
+}
+
 function makeCard(keyword, value) {
   let line = keyword.padEnd(8, ' ')
   if (value !== undefined) {
@@ -37,21 +47,16 @@ function createFitsBuffer(values = [0, 0.5, 0.75, 1]) {
   return merged.buffer
 }
 
-function mockImageFetch(pathValues = {}) {
+function mockImageFetch(pathValues = {}, options = {}) {
+  const tasks = options.tasks || [createTask('PGC 17069')]
+  const nextTaskId = options.nextTaskId || tasks[0]?.task_id || 'PGC 17069'
   const calls = []
   globalThis.fetch = vi.fn((url, options) => {
     calls.push({ url, options })
-    if (url === '/api/tasks') {
+    if (url === '/api/tasks' || String(url).startsWith('/api/tasks?')) {
       return Promise.resolve({
         ok: true,
-        json: async () => [
-          {
-            task_id: 'PGC 17069',
-            old_path: 'old/PGC 17069.fts',
-            new_path: 'new/PGC 17069.fts',
-            new_marked_path: 'new_marked/PGC 17069.fts',
-          },
-        ],
+        json: async () => tasks,
       })
     }
 
@@ -59,10 +64,7 @@ function mockImageFetch(pathValues = {}) {
       return Promise.resolve({
         ok: true,
         json: async () => ({
-          task_id: 'PGC 17069',
-          old_path: 'old/PGC 17069.fts',
-          new_path: 'new/PGC 17069.fts',
-          new_marked_path: 'new_marked/PGC 17069.fts',
+          ...createTask(nextTaskId),
           client_id: 'test-client',
           lock_expires_at: '2026-03-19T21:30:00+00:00',
         }),
@@ -74,10 +76,7 @@ function mockImageFetch(pathValues = {}) {
       return Promise.resolve({
         ok: true,
         json: async () => ({
-          task_id: taskId,
-          old_path: `old/${taskId}.fts`,
-          new_path: `new/${taskId}.fts`,
-          new_marked_path: `new_marked/${taskId}.fts`,
+          ...createTask(taskId),
           client_id: 'test-client',
           lock_expires_at: '2026-03-19T21:30:00+00:00',
         }),
@@ -427,5 +426,33 @@ describe('CanvasPanel', () => {
 
     const countAfterUndo = wrapper.findAll('[data-testid="annotation-item"]').length
     expect(countAfterUndo).toBe(countBeforeDelete)
+  })
+
+  it('shows lock status in task catalog only for occupied task groups', async () => {
+    fetchCalls = mockImageFetch({}, {
+      tasks: [
+        createTask('PGC 17069', {
+          lock_expires_at: '2026-03-19T21:30:00+00:00',
+          locked_by_current_client: true,
+        }),
+        createTask('PGC 35671'),
+      ],
+      nextTaskId: 'PGC 17069',
+    })
+
+    const wrapper = mount(CanvasPanel, {
+      global: {
+        stubs: globalStubs,
+      },
+    })
+
+    await flushPromises()
+
+    await wrapper.get('[data-testid="task-catalog-open"]').trigger('click')
+    await flushPromises()
+
+    const lockBadges = wrapper.findAll('[data-testid="task-catalog-lock-status"]')
+    expect(lockBadges).toHaveLength(1)
+    expect(lockBadges[0].text()).toBe('当前会话占用')
   })
 })

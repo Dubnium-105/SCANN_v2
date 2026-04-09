@@ -41,6 +41,11 @@ class TaskClaimResponse(TaskSession):
     lock_expires_at: str
 
 
+class TaskListResponse(TaskSession):
+    lock_expires_at: Optional[str] = None
+    locked_by_current_client: Optional[bool] = None
+
+
 class TaskLockHeartbeatResponse(BaseModel):
     task_id: str
     client_id: str
@@ -170,11 +175,25 @@ def register(payload: RegisterRequest) -> TokenResponse:
     )
 
 
-@api_router.get("/tasks", response_model=list[TaskSession])
-def list_tasks(current_user: AuthUser = Depends(get_current_user)) -> list[TaskSession]:
+@api_router.get("/tasks", response_model=list[TaskListResponse], response_model_exclude_none=True)
+def list_tasks(
+    client_id: Optional[str] = Query(None),
+    current_user: AuthUser = Depends(get_current_user),
+) -> list[TaskListResponse]:
     _ = current_user
     service = get_dataset_service()
-    return service.list_tasks()
+    lock_service = get_task_lock_service()
+    normalized_client_id = client_id.strip() if client_id and client_id.strip() else None
+    responses: list[TaskListResponse] = []
+    for task in service.list_tasks():
+        task_payload = task.model_dump()
+        lock = lock_service.get_task_lock(task.task_id)
+        if lock is not None:
+            task_payload["lock_expires_at"] = lock.expires_at.isoformat(timespec="seconds")
+            if normalized_client_id is not None:
+                task_payload["locked_by_current_client"] = lock.client_id == normalized_client_id
+        responses.append(TaskListResponse(**task_payload))
+    return responses
 
 
 @api_router.post("/dataset/preprocess", response_model=DatasetPreprocessResponse)

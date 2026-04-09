@@ -137,6 +137,40 @@ def test_claim_specific_task_blocks_other_clients_and_save_requires_owner(tmp_pa
     assert release_owner.status_code == 200
 
 
+def test_tasks_endpoint_includes_lock_summary_for_claimed_tasks(tmp_path, monkeypatch) -> None:
+    dataset_root = tmp_path / "dataset"
+
+    _touch(dataset_root / "new" / "PGC 17069.fts")
+    _touch(dataset_root / "old" / "PGC 17069.fts")
+    _touch(dataset_root / "new_marked" / "PGC 17069.fts")
+    _touch(dataset_root / "new" / "PGC 35671.fts")
+    _touch(dataset_root / "old" / "PGC 35671.fts")
+    _touch(dataset_root / "new_marked" / "PGC 35671.fts")
+
+    monkeypatch.setenv("SCANN_NATIVE_DATASET_ROOT", str(dataset_root))
+    client = TestClient(app)
+    headers = _auth_headers(client)
+
+    claim_a = client.post("/api/tasks/PGC 17069/claim", params={"client_id": "client-a"}, headers=headers)
+    assert claim_a.status_code == 200
+
+    response_for_owner = client.get("/api/tasks", params={"client_id": "client-a"}, headers=headers)
+    assert response_for_owner.status_code == 200
+    owner_tasks = response_for_owner.json()
+    assert owner_tasks[0]["task_id"] == "PGC 17069"
+    assert owner_tasks[0]["locked_by_current_client"] is True
+    assert owner_tasks[0]["lock_expires_at"]
+    assert "locked_by_current_client" not in owner_tasks[1]
+    assert "lock_expires_at" not in owner_tasks[1]
+
+    response_for_other = client.get("/api/tasks", params={"client_id": "client-b"}, headers=headers)
+    assert response_for_other.status_code == 200
+    other_tasks = response_for_other.json()
+    assert other_tasks[0]["task_id"] == "PGC 17069"
+    assert other_tasks[0]["locked_by_current_client"] is False
+    assert other_tasks[0]["lock_expires_at"]
+
+
 def test_release_endpoint_releases_lock_for_next_client(tmp_path, monkeypatch) -> None:
     dataset_root = tmp_path / "dataset"
 

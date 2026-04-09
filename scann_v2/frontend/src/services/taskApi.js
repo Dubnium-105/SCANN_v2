@@ -40,8 +40,13 @@ export function getTaskClientId() {
   return created
 }
 
-export async function fetchTasks(fetchImpl = authFetch) {
-  const response = await fetchImpl('/api/tasks')
+export async function fetchTasks(clientId = '', fetchImpl = authFetch) {
+  const params = new URLSearchParams()
+  if (clientId) {
+    params.set('client_id', clientId)
+  }
+  const url = params.size > 0 ? `/api/tasks?${params.toString()}` : '/api/tasks'
+  const response = await fetchImpl(url)
   if (!response.ok) {
     throw new Error('Failed to load tasks')
   }

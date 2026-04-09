@@ -294,7 +294,23 @@
                 :class="currentTaskIndex === item.index ? 'border-sky-500 text-sky-200 bg-sky-950/20' : 'border-slate-700 text-slate-300'"
                 @click="jumpToTaskIndex(item.index)"
               >
-                {{ item.task.task_id }}
+                <span class="flex items-center justify-between gap-2">
+                  <span class="truncate">{{ item.task.task_id }}</span>
+                  <span
+                    v-if="item.task.lock_expires_at"
+                    data-testid="task-catalog-lock-status"
+                    class="shrink-0 rounded border px-1.5 py-0.5 text-[10px]"
+                    :class="item.task.locked_by_current_client ? 'border-emerald-700 text-emerald-300 bg-emerald-950/30' : 'border-amber-700 text-amber-300 bg-amber-950/30'"
+                  >
+                    {{ item.task.locked_by_current_client ? '当前会话占用' : '占用中' }}
+                  </span>
+                </span>
+                <span
+                  v-if="item.task.lock_expires_at"
+                  class="mt-1 block text-[10px] text-slate-500"
+                >
+                  占用至 {{ formatTaskLockExpiry(item.task.lock_expires_at) }}
+                </span>
               </button>
             </li>
           </ul>
@@ -689,6 +705,21 @@ const filteredTaskCatalog = computed(() => {
   }
   return mapped.filter((item) => String(item.task.task_id || '').toLowerCase().includes(keyword))
 })
+
+function formatTaskLockExpiry(value) {
+  if (!value) {
+    return '--'
+  }
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) {
+    return '--'
+  }
+  return parsed.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+}
 
 const revisionOverlayItems = computed(() => props.revisionOverlay?.changed_items || [])
 
@@ -1151,6 +1182,34 @@ async function loadLatestRevisionAnnotations(taskId) {
   }
 }
 
+async function refreshTaskList() {
+  const currentTaskId = String(activeTask.value?.task_id || '')
+  const tasks = await fetchTasks(taskClientId)
+  taskList.value = tasks
+
+  if (tasks.length === 0) {
+    currentTaskIndex.value = -1
+    return tasks
+  }
+
+  if (currentTaskId) {
+    const currentIndex = tasks.findIndex((task) => task.task_id === currentTaskId)
+    if (currentIndex >= 0) {
+      currentTaskIndex.value = currentIndex
+      if (activeTask.value?.task_id === currentTaskId) {
+        activeTask.value = {
+          ...activeTask.value,
+          ...tasks[currentIndex],
+        }
+      }
+      return tasks
+    }
+  }
+
+  currentTaskIndex.value = Math.max(0, Math.min(currentTaskIndex.value, tasks.length - 1))
+  return tasks
+}
+
 async function goToTaskByOffset(offset) {
   if (taskList.value.length === 0 || currentTaskIndex.value < 0) {
     return
@@ -1172,9 +1231,14 @@ async function goToNextTask() {
   await goToTaskByOffset(1)
 }
 
-function openTaskCatalog() {
+async function openTaskCatalog() {
   taskCatalogQuery.value = ''
   taskCatalogVisible.value = true
+  try {
+    await refreshTaskList()
+  } catch {
+    // Keep the current catalog contents if the refresh fails.
+  }
 }
 
 function closeTaskCatalog() {
@@ -1794,8 +1858,7 @@ async function submitCurrentAnnotations() {
 
 async function loadInitialTask() {
   try {
-    const tasks = await fetchTasks()
-    taskList.value = tasks
+    const tasks = await refreshTaskList()
     activeTask.value = null
     claimedTaskId.value = ''
     taskLockExpiresAt.value = ''
