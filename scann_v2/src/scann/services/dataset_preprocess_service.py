@@ -257,6 +257,43 @@ class DatasetPreprocessService:
                 )
         return assets
 
+    def _scan_annotation_assets(self, root: Path) -> list[RawAssetRecord]:
+        dataset_root = Path(root)
+        assets: list[RawAssetRecord] = []
+        for role in ("new", "old", "new_marked"):
+            work_dir = dataset_root / role
+            if not work_dir.is_dir():
+                continue
+            for file_path in sorted(work_dir.iterdir()):
+                if not file_path.is_file() or file_path.suffix.lower() not in _FITS_EXTS:
+                    continue
+                try:
+                    stat = file_path.stat()
+                except OSError:
+                    continue
+                field_name = DatasetStorage.normalize_field_name(file_path.stem)
+                field_key = DatasetStorage.normalize_field_key(file_path.stem)
+                capture_key = DatasetStorage.normalize_capture_key(file_path.stem)
+                date_obs = self.extract_datetime_prefix(file_path.stem)
+                assets.append(
+                    RawAssetRecord(
+                        asset_id=uuid.uuid5(uuid.NAMESPACE_URL, file_path.relative_to(dataset_root).as_posix()).hex,
+                        asset_role=role,
+                        field_key=field_key,
+                        field_name=field_name or file_path.stem,
+                        capture_key=capture_key,
+                        relpath=file_path.relative_to(dataset_root).as_posix(),
+                        file_name=file_path.name,
+                        file_stem=file_path.stem,
+                        suffix=file_path.suffix.lower(),
+                        date_obs=date_obs,
+                        size_bytes=int(stat.st_size),
+                        modified_time=float(stat.st_mtime),
+                        metadata={"native_annotation": True},
+                    )
+                )
+        return assets
+
     def _migrate_legacy_inputs_to_raw(
         self,
         root: Path,
@@ -461,6 +498,33 @@ class DatasetPreprocessService:
             task_count=task_count,
             total_task_count=total_task_count,
             align_failed_count=align_failed_count,
+        )
+
+    def prepare_annotation_dataset(self, root: Path) -> DatasetPreprocessReport:
+        dataset_root = Path(root)
+        logger.info("开始为原生标注准备数据集: %s", dataset_root)
+        self._ensure_dataset_dirs(dataset_root)
+
+        storage = self._dataset_storage(dataset_root)
+        annotation_assets = self._scan_annotation_assets(dataset_root)
+        storage.upsert_raw_assets(annotation_assets)
+
+        planned_tasks = self._plan_tasks(dataset_root)
+        for task in planned_tasks:
+            storage.update_task_preprocess_state(task.task_id, preprocess_status="ready")
+
+        task_rows = storage.list_tasks(active_only=True)
+        tasks = self.collect_preprocessed_tasks(dataset_root)
+        self.write_task_manifest(dataset_root, tasks)
+        return DatasetPreprocessReport(
+            standardized_files=0,
+            brightness_matched_files=0,
+            reused_aligned_pairs=0,
+            generated_aligned_pairs=0,
+            generated_marked_crops=0,
+            task_count=len(tasks),
+            total_task_count=len(task_rows),
+            align_failed_count=0,
         )
 
     def standardize_dataset_by_date_obs(

@@ -664,18 +664,24 @@ class DatasetStorage:
                 """
                 SELECT
                     t.task_id AS task_id,
-                    an.relpath AS new_path,
-                    ao.relpath AS old_path,
-                    am.relpath AS new_marked_path
+                    COALESCE(an.relpath, rn.relpath) AS new_path,
+                    COALESCE(ao.relpath, ro.relpath) AS old_path,
+                    COALESCE(am.relpath, rm.relpath) AS new_marked_path
                 FROM tasks t
+                LEFT JOIN raw_assets rn
+                    ON rn.asset_id = t.new_asset_id AND rn.status = 'active'
+                LEFT JOIN raw_assets ro
+                    ON ro.asset_id = t.old_asset_id AND ro.status = 'active'
+                LEFT JOIN raw_assets rm
+                    ON rm.asset_id = t.new_marked_asset_id AND rm.status = 'active'
                 LEFT JOIN task_artifacts an
                     ON an.task_id = t.task_id AND an.artifact_role = 'aligned_new'
                 LEFT JOIN task_artifacts ao
                     ON ao.task_id = t.task_id AND ao.artifact_role = 'aligned_old'
                 LEFT JOIN task_artifacts am
                     ON am.task_id = t.task_id AND am.artifact_role = 'aligned_new_marked'
-                WHERE t.preprocess_status IN ('ready', 'annotated', 'claimed', 'viewed')
-                  AND an.relpath IS NOT NULL
+                WHERE t.preprocess_status IN ('ready', 'annotated', 'claimed', 'viewed', 'align_failed')
+                  AND COALESCE(an.relpath, rn.relpath) IS NOT NULL
                 ORDER BY t.task_id
                 """
             ).fetchall()
@@ -955,10 +961,16 @@ class DatasetStorage:
                     t.current_detail_type,
                     t.current_ai_suggestion,
                     t.current_ai_confidence,
-                    an.relpath AS new_path,
-                    ao.relpath AS old_path,
-                    am.relpath AS new_marked_path
+                    COALESCE(an.relpath, rn.relpath) AS new_path,
+                    COALESCE(ao.relpath, ro.relpath) AS old_path,
+                    COALESCE(am.relpath, rm.relpath) AS new_marked_path
                 FROM tasks t
+                LEFT JOIN raw_assets rn
+                    ON rn.asset_id = t.new_asset_id AND rn.status = 'active'
+                LEFT JOIN raw_assets ro
+                    ON ro.asset_id = t.old_asset_id AND ro.status = 'active'
+                LEFT JOIN raw_assets rm
+                    ON rm.asset_id = t.new_marked_asset_id AND rm.status = 'active'
                 LEFT JOIN task_artifacts an
                     ON an.task_id = t.task_id AND an.artifact_role = 'aligned_new'
                 LEFT JOIN task_artifacts ao
@@ -1006,6 +1018,8 @@ class DatasetStorage:
                 "file": paths["new"] or "",
                 "paths": paths,
             }
+            if row["current_source_view"] is not None:
+                record["source_view"] = str(row["current_source_view"])
             if row["current_label"] is not None:
                 record["label"] = str(row["current_label"])
             if row["current_detail_type"] is not None:

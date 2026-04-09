@@ -166,7 +166,7 @@ def preprocess_dataset(
 ) -> DatasetPreprocessResponse:
     _ = current_user
     dataset_root = get_dataset_root()
-    report = get_dataset_preprocess_service().prepare_dataset(dataset_root)
+    report = get_dataset_preprocess_service().prepare_annotation_dataset(dataset_root)
     return DatasetPreprocessResponse(
         dataset_root=str(dataset_root),
         standardized_files=report.standardized_files,
@@ -312,7 +312,10 @@ def get_annotation_history(
 ) -> AnnotationHistoryResponse:
     _ = current_user
     service = get_annotation_service()
-    return service.list_history(task_id)
+    try:
+        return service.list_history(task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @api_router.get("/annotations/{task_id}/history/{revision_id}", response_model=AnnotationRevisionDetail)

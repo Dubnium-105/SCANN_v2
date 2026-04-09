@@ -133,12 +133,37 @@ class AnnotationService:
             revision_id=revision.revision_id,
         )
 
-    def _ensure_task_exists(self, task_id: str) -> None:
-        if self._storage.get_task_by_id(task_id) is not None:
-            return
-        DatasetPreprocessService().prepare_dataset(self.dataset_root)
-        if self._storage.get_task_by_id(task_id) is None:
-            raise ValueError("task not found")
+    @staticmethod
+    def _candidate_task_ids(task_id: str) -> list[str]:
+        candidates: list[str] = []
+
+        def _append(value: str) -> None:
+            normalized = value.strip()
+            if not normalized or normalized in candidates:
+                return
+            candidates.append(normalized)
+
+        _append(task_id)
+        stripped = DatasetPreprocessService.strip_aligned_crop_suffix(task_id)
+        _append(stripped)
+
+        date_token = DatasetPreprocessService.extract_datetime_prefix(stripped)
+        field_name = DatasetStorage.normalize_field_name(stripped)
+        if date_token and field_name:
+            _append(f"{date_token}__{field_name}")
+        if field_name:
+            _append(field_name)
+        return candidates
+
+    def _ensure_task_exists(self, task_id: str) -> str:
+        for candidate in self._candidate_task_ids(task_id):
+            if self._storage.get_task_by_id(candidate) is not None:
+                return candidate
+        DatasetPreprocessService().prepare_annotation_dataset(self.dataset_root)
+        for candidate in self._candidate_task_ids(task_id):
+            if self._storage.get_task_by_id(candidate) is not None:
+                return candidate
+        raise ValueError("task not found")
 
     def _read_revisions(self, task_id: str) -> list[AnnotationRevision]:
         revisions = self._storage.list_annotation_revisions(task_id)
@@ -315,7 +340,7 @@ class AnnotationService:
 
     def list_history(self, task_id: str) -> AnnotationHistoryResponse:
         task_id = self._validate_task_id(task_id)
-        self._ensure_task_exists(task_id)
+        task_id = self._ensure_task_exists(task_id)
         revisions = self._read_revisions(task_id)
         items: list[AnnotationHistoryItem] = []
         for revision in reversed(revisions):
@@ -340,7 +365,7 @@ class AnnotationService:
 
     def get_revision(self, task_id: str, revision_id: str) -> AnnotationRevisionDetail:
         task_id = self._validate_task_id(task_id)
-        self._ensure_task_exists(task_id)
+        task_id = self._ensure_task_exists(task_id)
         revisions = self._read_revisions(task_id)
         revision = self._find_revision(revisions, revision_id)
         parent = self._parent_revision(revisions, revision)
@@ -361,7 +386,7 @@ class AnnotationService:
         submitted_by: str,
     ) -> AnnotationRollbackResponse:
         task_id = self._validate_task_id(task_id)
-        self._ensure_task_exists(task_id)
+        task_id = self._ensure_task_exists(task_id)
         revisions = self._read_revisions(task_id)
         target_revision = self._find_revision(revisions, revision_id)
         latest_revision = revisions[-1] if revisions else None
@@ -403,7 +428,7 @@ class AnnotationService:
         submitted_by: str = "system",
     ) -> AnnotationSaveResponse:
         task_id = self._validate_task_id(task_id)
-        self._ensure_task_exists(task_id)
+        task_id = self._ensure_task_exists(task_id)
         existing_revisions = self._read_revisions(task_id)
         parent_revision = existing_revisions[-1] if existing_revisions else None
         saved_at = datetime.now(timezone.utc).isoformat(timespec="seconds")

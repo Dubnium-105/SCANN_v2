@@ -5,6 +5,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
+from scann.core.dataset_storage import DatasetStorage
 from scann.services.dataset_preprocess_service import DatasetPreprocessService
 
 
@@ -39,11 +40,28 @@ class DatasetService:
         for file_path in directory.iterdir():
             if not file_path.is_file() or not self._is_fits_file(file_path):
                 continue
-            result[file_path.stem] = file_path.relative_to(self.dataset_root).as_posix()
+            task_id = self._normalize_task_id(file_path.stem)
+            if not task_id:
+                continue
+            if task_id in result and not file_path.stem.lower().endswith("__aligned_crop"):
+                continue
+            result[task_id] = file_path.relative_to(self.dataset_root).as_posix()
         return result
 
+    @staticmethod
+    def _normalize_task_id(stem: str) -> str:
+        normalized = stem.strip()
+        if not normalized:
+            return normalized
+        date_token = DatasetPreprocessService.extract_datetime_prefix(normalized)
+        field_name = DatasetStorage.normalize_field_name(normalized)
+        if date_token and field_name:
+            return f"{date_token}__{field_name}"
+        stripped = DatasetPreprocessService.strip_aligned_crop_suffix(normalized)
+        return field_name or stripped
+
     def list_tasks(self) -> list[TaskSession]:
-        self._preprocess_service.prepare_dataset(self.dataset_root)
+        self._preprocess_service.prepare_annotation_dataset(self.dataset_root)
         prepared_tasks = self._preprocess_service.collect_preprocessed_tasks(self.dataset_root)
         if prepared_tasks:
             tasks: list[TaskSession] = []

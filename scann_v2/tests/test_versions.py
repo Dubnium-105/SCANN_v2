@@ -137,3 +137,29 @@ def test_admin_only_rollback_and_creates_new_revision(tmp_path, monkeypatch) -> 
     assert len(revisions) == 3
     images = document.get("images", [])
     assert any(item.get("id") == "PGC 17069" for item in images if isinstance(item, dict))
+
+
+def test_annotation_history_accepts_uploaded_aligned_crop_task_id(tmp_path, monkeypatch) -> None:
+    dataset_root = tmp_path / "dataset"
+    suffixed_task_id = "20260203T134946__NGC 918__aligned_crop"
+    canonical_task_id = "20260203T134946__NGC 918"
+
+    _touch(dataset_root / "new" / f"{suffixed_task_id}.fts")
+    _touch(dataset_root / "old" / f"{suffixed_task_id}.fts")
+
+    monkeypatch.setenv("SCANN_NATIVE_DATASET_ROOT", str(dataset_root))
+    client = TestClient(app)
+    headers = _auth_headers(client, username="annotator", password="scann123")
+
+    save_response = client.post(
+        f"/api/annotations/{suffixed_task_id}",
+        json=_payload("A-label"),
+        headers=headers,
+    )
+    assert save_response.status_code == 200
+    assert save_response.json()["task_id"] == canonical_task_id
+
+    history_response = client.get(f"/api/annotations/{suffixed_task_id}/history", headers=headers)
+    assert history_response.status_code == 200
+    assert history_response.json()["task_id"] == canonical_task_id
+    assert len(history_response.json()["revisions"]) == 1

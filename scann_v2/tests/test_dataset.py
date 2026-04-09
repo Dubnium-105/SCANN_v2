@@ -83,7 +83,7 @@ def test_api_tasks_aggregates_triplet_paths(tmp_path, monkeypatch) -> None:
     ]
 
 
-def test_api_dataset_preprocess_exposes_aligned_tasks(tmp_path, monkeypatch) -> None:
+def test_api_dataset_preprocess_exposes_uploaded_annotation_views(tmp_path, monkeypatch) -> None:
     from scann.native_annotation import routes as native_routes
     from scann.native_annotation.dataset_service import DatasetService
     from scann.services.dataset_preprocess_service import DatasetPreprocessService
@@ -122,9 +122,9 @@ def test_api_dataset_preprocess_exposes_aligned_tasks(tmp_path, monkeypatch) -> 
 
     assert preprocess.status_code == 200
     payload = preprocess.json()
-    assert payload["standardized_files"] == 3
-    assert payload["generated_aligned_pairs"] == 1
-    assert payload["generated_marked_crops"] == 1
+    assert payload["standardized_files"] == 0
+    assert payload["generated_aligned_pairs"] == 0
+    assert payload["generated_marked_crops"] == 0
     assert payload["task_count"] == 1
 
     tasks = client.get("/api/tasks", headers=headers)
@@ -132,9 +132,33 @@ def test_api_dataset_preprocess_exposes_aligned_tasks(tmp_path, monkeypatch) -> 
     assert tasks.status_code == 200
     assert tasks.json() == [
         {
-            "task_id": "20260115T203000__field_001",
-            "new_path": "new/20260115T203000__field_001__aligned_crop.fts",
-            "old_path": "old/20260115T203000__field_001__aligned_crop.fts",
-            "new_marked_path": "new_marked/20260115T203000__field_001__aligned_crop.fts",
+            "task_id": "field_001",
+            "new_path": "new/field_001.fits",
+            "old_path": "old/field_001.fits",
+            "new_marked_path": "new_marked/field_001.fits",
+        }
+    ]
+
+
+def test_api_tasks_normalize_preprocessed_aligned_crop_task_ids(tmp_path, monkeypatch) -> None:
+    dataset_root = tmp_path / "dataset"
+
+    _touch(dataset_root / "new" / "20260203T134946__NGC 918__aligned_crop.fts")
+    _touch(dataset_root / "old" / "20260203T134946__NGC 918__aligned_crop.fts")
+    _touch(dataset_root / "new_marked" / "20260203T134946__NGC 918__aligned_crop.fts")
+
+    monkeypatch.setenv("SCANN_NATIVE_DATASET_ROOT", str(dataset_root))
+    client = TestClient(app)
+    headers = _auth_headers(client)
+
+    response = client.get("/api/tasks", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "task_id": "20260203T134946__NGC 918",
+            "new_path": "new/20260203T134946__NGC 918__aligned_crop.fts",
+            "old_path": "old/20260203T134946__NGC 918__aligned_crop.fts",
+            "new_marked_path": "new_marked/20260203T134946__NGC 918__aligned_crop.fts",
         }
     ]
