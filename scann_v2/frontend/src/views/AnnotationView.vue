@@ -1,6 +1,6 @@
 <template>
   <div class="h-full grid grid-rows-[56px_1fr]">
-    <HeaderBar :username="authState.username" @logout="onLogout" />
+    <HeaderBar :username="authState.username" :token="authState.token" @logout="onLogout" />
     <main
       ref="mainRef"
       class="flex flex-col lg:flex-row gap-3 p-3 min-h-0"

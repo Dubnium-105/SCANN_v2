@@ -541,6 +541,44 @@
             >
               {{ isSubmitting ? 'Submitting...' : 'Submit' }}
             </button>
+            <div class="space-y-2 rounded border border-slate-800 bg-slate-950/60 p-2">
+              <div class="flex items-center justify-between gap-2">
+                <label class="inline-flex items-center gap-2 text-[11px] text-slate-200">
+                  <input
+                    data-testid="auto-submit-toggle"
+                    type="checkbox"
+                    :checked="autoSubmitEnabled"
+                    @change="onAutoSubmitToggle"
+                  >
+                  自动提交
+                </label>
+                <span data-testid="auto-submit-countdown" class="text-[10px] text-slate-500">
+                  {{ autoSubmitCountdownText }}
+                </span>
+              </div>
+              <label class="space-y-1 block">
+                <span class="text-[10px] text-slate-400">间隔（秒）</span>
+                <input
+                  data-testid="auto-submit-interval"
+                  type="number"
+                  class="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-200"
+                  min="30"
+                  max="3600"
+                  step="30"
+                  :value="autoSubmitIntervalSeconds"
+                  @input="onAutoSubmitIntervalInput"
+                >
+              </label>
+              <p class="text-[10px] text-slate-500">自动提交只保存当前任务，不自动切换任务。</p>
+              <p
+                v-if="autoSubmitStatusMessage"
+                data-testid="auto-submit-status"
+                class="text-[10px] px-2 py-1 rounded"
+                :class="autoSubmitStatusClass"
+              >
+                {{ autoSubmitStatusMessage }}
+              </p>
+            </div>
             <p
               v-if="saveMessage"
               data-testid="save-message"
@@ -699,6 +737,12 @@ const taskList = ref([])
 const currentTaskIndex = ref(-1)
 const isSubmitting = ref(false)
 const saveMessage = ref('')
+const autoSubmitEnabled = ref(false)
+const autoSubmitIntervalSeconds = ref(300)
+const autoSubmitStatusMessage = ref('')
+const autoSubmitInFlight = ref(false)
+const autoSubmitNowMs = ref(Date.now())
+const autoSubmitNextRunAtMs = ref(0)
 const selectedAnnotationId = ref('')
 const selectedLabel = ref('Unlabeled')
 const taskCatalogVisible = ref(false)
@@ -734,7 +778,10 @@ const pointRadius = ref(4)
 const polygonStrokeWidth = ref(2)
 let hostResizeObserver = null
 let taskHeartbeatTimerId = null
+let autoSubmitTimerId = null
 const taskClientId = getTaskClientId()
+const AUTO_SUBMIT_MIN_SECONDS = 30
+const AUTO_SUBMIT_MAX_SECONDS = 3600
 
 const taskProgressText = computed(() => {
   if (taskList.value.length === 0 || currentTaskIndex.value < 0) {
@@ -759,6 +806,46 @@ const blinkQueueText = computed(() => (
     ? blinkQueueViews.value.map((view) => blinkViewLabels[view] || view).join(' -> ')
     : '未选择视图'
 ))
+
+function formatDurationFromMs(ms) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  return [hours, minutes, seconds]
+    .map((value) => String(value).padStart(2, '0'))
+    .join(':')
+}
+
+const autoSubmitCountdownText = computed(() => {
+  if (!autoSubmitEnabled.value) {
+    return '已关闭'
+  }
+  if (!activeTask.value) {
+    return '等待任务'
+  }
+  if (autoSubmitInFlight.value) {
+    return '提交中...'
+  }
+  if (!autoSubmitNextRunAtMs.value) {
+    return '等待启动'
+  }
+  return `下次 ${formatDurationFromMs(autoSubmitNextRunAtMs.value - autoSubmitNowMs.value)}`
+})
+
+const autoSubmitStatusClass = computed(() => {
+  const message = autoSubmitStatusMessage.value
+  if (!message) {
+    return 'bg-slate-900 text-slate-300'
+  }
+  if (message.includes('失败') || message.includes('未被本会话持有')) {
+    return 'bg-rose-950/30 text-rose-300'
+  }
+  if (message.includes('跳过')) {
+    return 'bg-amber-950/30 text-amber-200'
+  }
+  return 'bg-slate-900 text-emerald-300'
+})
 
 const filteredTaskCatalog = computed(() => {
   const keyword = String(taskCatalogQuery.value || '').trim().toLowerCase()
@@ -1082,6 +1169,76 @@ function onBlinkViewToggle(view, event) {
   }
 }
 
+function clampAutoSubmitInterval(value) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) {
+    return autoSubmitIntervalSeconds.value
+  }
+  return Math.max(
+    AUTO_SUBMIT_MIN_SECONDS,
+    Math.min(AUTO_SUBMIT_MAX_SECONDS, Math.round(numeric)),
+  )
+}
+
+function stopAutoSubmitTimer() {
+  if (autoSubmitTimerId) {
+    window.clearInterval(autoSubmitTimerId)
+    autoSubmitTimerId = null
+  }
+}
+
+function resetAutoSubmitSchedule(baseMs = Date.now()) {
+  autoSubmitNowMs.value = baseMs
+  if (!autoSubmitEnabled.value || !activeTask.value) {
+    autoSubmitNextRunAtMs.value = 0
+    return
+  }
+  autoSubmitNextRunAtMs.value = baseMs + autoSubmitIntervalSeconds.value * 1000
+}
+
+function stopAutoSubmit() {
+  stopAutoSubmitTimer()
+  autoSubmitNowMs.value = Date.now()
+  autoSubmitNextRunAtMs.value = 0
+}
+
+function startAutoSubmitTimer() {
+  stopAutoSubmitTimer()
+  if (!autoSubmitEnabled.value || !activeTask.value) {
+    autoSubmitNextRunAtMs.value = 0
+    return
+  }
+
+  resetAutoSubmitSchedule(Date.now())
+  autoSubmitTimerId = window.setInterval(() => {
+    const now = Date.now()
+    autoSubmitNowMs.value = now
+    if (
+      autoSubmitNextRunAtMs.value > 0
+      && now >= autoSubmitNextRunAtMs.value
+      && !isSubmitting.value
+      && !autoSubmitInFlight.value
+    ) {
+      void runAutoSubmit()
+    }
+  }, 1000)
+}
+
+function onAutoSubmitToggle(event) {
+  autoSubmitEnabled.value = Boolean(event?.target?.checked)
+  if (!autoSubmitEnabled.value) {
+    autoSubmitStatusMessage.value = ''
+  }
+}
+
+function onAutoSubmitIntervalInput(event) {
+  const nextValue = clampAutoSubmitInterval(event?.target?.value)
+  autoSubmitIntervalSeconds.value = nextValue
+  if (event?.target) {
+    event.target.value = String(nextValue)
+  }
+}
+
 function onDragEnd(event) {
   const position = event?.target?.position?.()
   if (!position) {
@@ -1181,6 +1338,7 @@ async function activateTask(task, index, options = {}) {
   taskLockError.value = ''
   taskLockNotice.value = 'Current task is locked by this client'
   taskSwitchError.value = ''
+  autoSubmitStatusMessage.value = ''
 
   setCurrentView('new')
   await preloadTaskFits(task)
@@ -1512,6 +1670,94 @@ function setToolMode(mode) {
   }
   if (mode !== 'polygon') {
     currentPolygonPoints.value = []
+  }
+}
+
+function getSubmittableBboxAnnotations() {
+  return annotations.value.filter(
+    (ann) => ann.type === 'bbox' && ann.label !== 'Unlabeled'
+  )
+}
+
+function buildAnnotationPayload(bboxAnnotations) {
+  return {
+    source_view: currentView.value,
+    metadata: {
+      tool: 'bbox',
+      format_version: 'v2',
+    },
+    annotations: bboxAnnotations.map((ann) => ({
+      x: ann.x,
+      y: ann.y,
+      width: ann.width,
+      height: ann.height,
+      label: ann.label,
+      detail_type: ann.detail_type,
+    })),
+  }
+}
+
+async function saveActiveTaskAnnotations(options = {}) {
+  if (!hasTaskLock.value) {
+    throw new Error('Current task is not locked by this client')
+  }
+
+  if (!activeTask.value) {
+    throw new Error('No active task')
+  }
+
+  const bboxAnnotations = getSubmittableBboxAnnotations()
+  if (bboxAnnotations.length === 0) {
+    throw new Error('No valid bbox annotations to submit')
+  }
+
+  const savedTaskId = activeTask.value.task_id
+  const response = await submitAnnotations(savedTaskId, buildAnnotationPayload(bboxAnnotations), {
+    clientId: taskClientId,
+    releaseAfterSave: Boolean(options.releaseAfterSave),
+  })
+
+  return {
+    response,
+    savedTaskId,
+  }
+}
+
+function formatAutoSubmitError(err) {
+  const message = err instanceof Error ? err.message : 'Failed to submit annotations'
+  if (message === 'Current task is not locked by this client') {
+    return '自动提交已跳过：当前任务未被本会话持有'
+  }
+  if (message === 'No active task') {
+    return '自动提交等待任务'
+  }
+  if (message === 'No valid bbox annotations to submit') {
+    return '自动提交已跳过：暂无可提交标注'
+  }
+  return `自动提交失败：${message}`
+}
+
+async function runAutoSubmit() {
+  if (isSubmitting.value || autoSubmitInFlight.value) {
+    return
+  }
+
+  autoSubmitInFlight.value = true
+  isSubmitting.value = true
+  autoSubmitStatusMessage.value = '正在自动提交当前任务...'
+
+  try {
+    const { response, savedTaskId } = await saveActiveTaskAnnotations({
+      releaseAfterSave: false,
+    })
+    autoSubmitStatusMessage.value = `自动提交成功：已保存 ${response.saved_count} 条标注`
+    emit('annotations-saved', savedTaskId)
+  } catch (err) {
+    autoSubmitStatusMessage.value = formatAutoSubmitError(err)
+  } finally {
+    autoSubmitInFlight.value = false
+    isSubmitting.value = false
+    resetAutoSubmitSchedule(Date.now())
   }
 }
 
@@ -1888,41 +2134,12 @@ function onStageMouseUp(event) {
 
 async function submitCurrentAnnotations() {
   saveMessage.value = ''
-  const bboxAnnotations = annotations.value.filter(
-    (ann) => ann.type === 'bbox' && ann.label !== 'Unlabeled'
-  )
+  autoSubmitStatusMessage.value = ''
 
-  if (!hasTaskLock.value) {
-    saveMessage.value = 'Current task is not locked by this client'
-    return
-  }
-
-  if (!activeTask.value || bboxAnnotations.length === 0) {
-    saveMessage.value = 'No valid bbox annotations to submit'
-    return
-  }
-
-  isSubmitting.value = true
   try {
-    const savedTaskId = activeTask.value.task_id
+    isSubmitting.value = true
     const shouldReleaseAfterSave = hasNextTask.value
-    const payload = {
-      source_view: currentView.value,
-      metadata: {
-        tool: 'bbox',
-        format_version: 'v2',
-      },
-      annotations: bboxAnnotations.map((ann) => ({
-        x: ann.x,
-        y: ann.y,
-        width: ann.width,
-        height: ann.height,
-        label: ann.label,
-        detail_type: ann.detail_type,
-      })),
-    }
-    const response = await submitAnnotations(activeTask.value.task_id, payload, {
-      clientId: taskClientId,
+    const { response, savedTaskId } = await saveActiveTaskAnnotations({
       releaseAfterSave: shouldReleaseAfterSave,
     })
 
@@ -1948,6 +2165,7 @@ async function submitCurrentAnnotations() {
     }
 
     emit('annotations-saved', savedTaskId)
+    resetAutoSubmitSchedule(Date.now())
   } catch (err) {
     saveMessage.value = err instanceof Error ? err.message : 'Failed to submit annotations'
   } finally {
@@ -2023,6 +2241,17 @@ watch(
     redrawFitsCanvas()
   },
   { immediate: true },
+)
+
+watch(
+  [autoSubmitEnabled, autoSubmitIntervalSeconds, () => activeTask.value?.task_id || ''],
+  () => {
+    if (!autoSubmitEnabled.value) {
+      stopAutoSubmit()
+      return
+    }
+    startAutoSubmitTimer()
+  },
 )
 
 function onKeyDown(event) {
@@ -2118,6 +2347,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   void releaseActiveTask()
   stopTaskHeartbeat()
+  stopAutoSubmit()
   stopMiddlePan()
   clearPendingDeleteState()
   clearUndoState()

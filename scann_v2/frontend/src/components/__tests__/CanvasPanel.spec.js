@@ -343,6 +343,47 @@ describe('CanvasPanel', () => {
     })
   })
 
+  it('auto-submits current task at the configured interval', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-04-09T00:00:00.000Z'))
+
+    const wrapper = mount(CanvasPanel, {
+      global: {
+        stubs: globalStubs,
+      },
+    })
+
+    await flushPromises()
+
+    await wrapper.get('[data-testid="tool-bbox"]').trigger('click')
+    const stage = wrapper.get('[data-testid="stage"]')
+    await stage.trigger('mousedown', { clientX: 20, clientY: 30 })
+    await stage.trigger('mousemove', { clientX: 60, clientY: 90 })
+    await stage.trigger('mouseup', { clientX: 60, clientY: 90 })
+    await flushPromises()
+
+    const item = wrapper.findAll('[data-testid="annotation-item"]')[0]
+    await item.trigger('click')
+    await wrapper.get('[data-testid="annotation-label-select"]').setValue('real:asteroid')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="auto-submit-interval"]').setValue('30')
+    await wrapper.get('[data-testid="auto-submit-toggle"]').setValue(true)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="auto-submit-countdown"]').text()).toContain('00:00:30')
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    await flushPromises()
+
+    const submitCalls = fetchCalls.filter(
+      (item) => String(item.url).startsWith('/api/annotations/') && item.options?.method === 'POST',
+    )
+    expect(submitCalls).toHaveLength(1)
+    expect(String(submitCalls[0].url)).toContain('release_after_save=false')
+    expect(wrapper.get('[data-testid="auto-submit-status"]').text()).toContain('自动提交成功')
+  })
+
   it('updates rendered rgba with stretch sliders and invert toggle', async () => {
     const wrapper = mount(CanvasPanel, {
       global: {
