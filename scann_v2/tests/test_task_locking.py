@@ -74,7 +74,7 @@ def test_annotation_submit_releases_lock_for_next_client(tmp_path, monkeypatch) 
 
     save_resp = client.post(
         "/api/annotations/PGC 17069",
-        params={"client_id": "client-a"},
+        params={"client_id": "client-a", "release_after_save": "true"},
         json=_annotation_payload(),
         headers=headers,
     )
@@ -83,6 +83,58 @@ def test_annotation_submit_releases_lock_for_next_client(tmp_path, monkeypatch) 
     claim_b = client.get("/api/tasks/next", params={"client_id": "client-b"}, headers=headers)
     assert claim_b.status_code == 200
     assert claim_b.json()["task_id"] == "PGC 17069"
+
+
+def test_claim_specific_task_blocks_other_clients_and_save_requires_owner(tmp_path, monkeypatch) -> None:
+    dataset_root = tmp_path / "dataset"
+
+    _touch(dataset_root / "new" / "PGC 17069.fts")
+    _touch(dataset_root / "old" / "PGC 17069.fts")
+    _touch(dataset_root / "new_marked" / "PGC 17069.fts")
+
+    monkeypatch.setenv("SCANN_NATIVE_DATASET_ROOT", str(dataset_root))
+    client = TestClient(app)
+    headers = _auth_headers(client)
+
+    claim_a = client.post("/api/tasks/PGC 17069/claim", params={"client_id": "client-a"}, headers=headers)
+    assert claim_a.status_code == 200
+    assert claim_a.json()["task_id"] == "PGC 17069"
+
+    claim_b = client.post("/api/tasks/PGC 17069/claim", params={"client_id": "client-b"}, headers=headers)
+    assert claim_b.status_code == 409
+    assert claim_b.json()["detail"] == "Task locked by another client"
+
+    save_without_owner = client.post(
+        "/api/annotations/PGC 17069",
+        json=_annotation_payload(),
+        headers=headers,
+    )
+    assert save_without_owner.status_code == 409
+    assert save_without_owner.json()["detail"] == "Task locked by another client"
+
+    save_wrong_owner = client.post(
+        "/api/annotations/PGC 17069",
+        params={"client_id": "client-b"},
+        json=_annotation_payload(),
+        headers=headers,
+    )
+    assert save_wrong_owner.status_code == 409
+    assert save_wrong_owner.json()["detail"] == "Task locked by another client"
+
+    save_owner = client.post(
+        "/api/annotations/PGC 17069",
+        params={"client_id": "client-a", "release_after_save": "false"},
+        json=_annotation_payload(),
+        headers=headers,
+    )
+    assert save_owner.status_code == 200
+
+    release_owner = client.post(
+        "/api/tasks/PGC 17069/release",
+        params={"client_id": "client-a"},
+        headers=headers,
+    )
+    assert release_owner.status_code == 200
 
 
 def test_release_endpoint_releases_lock_for_next_client(tmp_path, monkeypatch) -> None:

@@ -1,8 +1,16 @@
 import { authFetch } from './authStore'
 
-export async function submitAnnotations(taskId, payload, fetchImpl = authFetch) {
+export async function submitAnnotations(taskId, payload, options = {}, fetchImpl = authFetch) {
   const encodedTaskId = encodeURIComponent(taskId)
-  const response = await fetchImpl(`/api/annotations/${encodedTaskId}`, {
+  const params = new URLSearchParams()
+  if (options.clientId) {
+    params.set('client_id', options.clientId)
+  }
+  if (typeof options.releaseAfterSave === 'boolean') {
+    params.set('release_after_save', String(options.releaseAfterSave))
+  }
+  const suffix = params.size ? `?${params.toString()}` : ''
+  const response = await fetchImpl(`/api/annotations/${encodedTaskId}${suffix}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

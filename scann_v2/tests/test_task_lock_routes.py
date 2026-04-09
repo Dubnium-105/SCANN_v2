@@ -32,6 +32,33 @@ def test_claim_next_task_rejects_blank_client_id(tmp_path, monkeypatch) -> None:
     assert exc_info.value.detail == "client_id cannot be empty"
 
 
+def test_claim_task_route_rejects_other_client_for_locked_task(tmp_path, monkeypatch) -> None:
+    dataset_root = tmp_path / "dataset"
+
+    _touch(dataset_root / "new" / "PGC 17069.fts")
+    _touch(dataset_root / "old" / "PGC 17069.fts")
+    _touch(dataset_root / "new_marked" / "PGC 17069.fts")
+
+    monkeypatch.setenv("SCANN_NATIVE_DATASET_ROOT", str(dataset_root))
+
+    claimed = native_routes.claim_task(
+        task_id="PGC 17069",
+        client_id="client-a",
+        current_user=_annotator(),
+    )
+    assert claimed.task_id == "PGC 17069"
+
+    with pytest.raises(HTTPException) as exc_info:
+        native_routes.claim_task(
+            task_id="PGC 17069",
+            client_id="client-b",
+            current_user=_annotator(),
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "Task locked by another client"
+
+
 def test_release_task_lock_route_releases_task_for_next_client(tmp_path, monkeypatch) -> None:
     dataset_root = tmp_path / "dataset"
 

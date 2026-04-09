@@ -119,6 +119,23 @@ def _require_task_lock_owner(
     return normalized_client_id
 
 
+def _require_task_lock_for_save(
+    task_id: str,
+    client_id: Optional[str],
+    lock_service: TaskLockService,
+) -> Optional[str]:
+    lock = lock_service.get_task_lock(task_id)
+    if lock is None:
+        if client_id is None:
+            return None
+        normalized_client_id = client_id.strip()
+        return normalized_client_id or None
+
+    if client_id is None or not client_id.strip():
+        raise HTTPException(status_code=409, detail="Task locked by another client")
+    return _require_task_lock_owner(task_id=task_id, client_id=client_id, lock_service=lock_service)
+
+
 @api_router.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -191,6 +208,41 @@ def claim_next_task(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if task is None:
         raise HTTPException(status_code=404, detail="No available task")
+
+    lock = lock_service.get_task_lock(task.task_id)
+    if lock is None:
+        raise HTTPException(status_code=500, detail="Task lock not found")
+
+    return TaskClaimResponse(
+        **task.model_dump(),
+        client_id=lock.client_id,
+        lock_expires_at=lock.expires_at.isoformat(timespec="seconds"),
+    )
+
+
+@api_router.post("/tasks/{task_id}/claim", response_model=TaskClaimResponse)
+def claim_task(
+    task_id: str,
+    client_id: str = Query(..., min_length=1),
+    current_user: AuthUser = Depends(get_current_user),
+) -> TaskClaimResponse:
+    _ = current_user
+    dataset_service = get_dataset_service()
+    lock_service = get_task_lock_service()
+    tasks = dataset_service.list_tasks()
+    normalized_client_id = client_id.strip()
+    try:
+        task = lock_service.claim_task(task_id=task_id, client_id=client_id, tasks=tasks)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if task is None:
+        if not any(item.task_id == task_id for item in tasks):
+            raise HTTPException(status_code=404, detail="Task not found")
+        lock = lock_service.get_task_lock(task_id)
+        if lock is not None and lock.client_id != normalized_client_id:
+            raise HTTPException(status_code=409, detail="Task locked by another client")
+        raise HTTPException(status_code=409, detail="Task is not available")
 
     lock = lock_service.get_task_lock(task.task_id)
     if lock is None:
@@ -292,14 +344,20 @@ def save_annotations(
     task_id: str,
     payload: AnnotationSaveRequest,
     client_id: Optional[str] = Query(None),
+    release_after_save: bool = Query(True),
     current_user: AuthUser = Depends(get_current_user),
 ) -> AnnotationSaveResponse:
     service = get_annotation_service()
     lock_service = get_task_lock_service()
+    normalized_client_id = _require_task_lock_for_save(
+        task_id=task_id,
+        client_id=client_id,
+        lock_service=lock_service,
+    )
     try:
         result = service.save(task_id=task_id, payload=payload, submitted_by=current_user.username)
-        if client_id:
-            lock_service.release_task(task_id=task_id, client_id=client_id)
+        if normalized_client_id and release_after_save:
+            lock_service.release_task(task_id=task_id, client_id=normalized_client_id)
         return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

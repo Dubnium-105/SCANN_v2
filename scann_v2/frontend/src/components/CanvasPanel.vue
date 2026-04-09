@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <section class="rounded-lg border border-slate-800 bg-slate-900 p-3 h-full w-full min-h-0">
     <div class="h-full flex flex-col xl:flex-row gap-3 min-h-0">
       <Teleport v-if="hotkeysTeleportTarget" :to="hotkeysTeleportTarget">
@@ -6,17 +6,31 @@
           <div class="space-y-3">
             <div class="space-y-2">
               <div class="flex items-center justify-between gap-2">
-                <p class="text-xs text-slate-200">任务切换</p>
+                <p class="text-xs text-slate-200">浠诲姟鍒囨崲</p>
                 <button
                   data-testid="task-catalog-open"
                   class="text-[10px] px-2 py-0.5 rounded border border-slate-700 text-slate-300"
                   @click="openTaskCatalog"
                 >
-                  总任务目录
+                  鎬讳换鍔＄洰褰?
                 </button>
               </div>
-              <p class="text-[11px] text-slate-400">{{ activeTask?.task_id || '暂无任务' }}</p>
-              <p class="text-[10px] text-slate-500">进度 {{ taskProgressText }}</p>
+              <p class="text-[11px] text-slate-400">{{ activeTask?.task_id || '鏆傛棤浠诲姟' }}</p>
+              <p class="text-[10px] text-slate-500">杩涘害 {{ taskProgressText }}</p>
+              <p
+                v-if="taskLockNotice"
+                data-testid="task-lock-status"
+                class="text-[10px] text-emerald-300"
+              >
+                {{ taskLockNotice }}
+              </p>
+              <p
+                v-else-if="taskLockError"
+                data-testid="task-lock-error"
+                class="text-[10px] text-rose-300"
+              >
+                {{ taskLockError }}
+              </p>
               <div class="grid grid-cols-2 gap-2">
                 <button
                   data-testid="task-prev"
@@ -24,7 +38,7 @@
                   :disabled="!hasPrevTask || isLoading || isSubmitting"
                   @click="goToPreviousTask"
                 >
-                  上一任务
+                  涓婁竴浠诲姟
                 </button>
                 <button
                   data-testid="task-next"
@@ -32,14 +46,14 @@
                   :disabled="!hasNextTask || isLoading || isSubmitting"
                   @click="goToNextTask"
                 >
-                  下一任务
+                  涓嬩竴浠诲姟
                 </button>
               </div>
-              <p class="text-[10px] text-slate-500">快捷键：Q / E 切换任务</p>
+              <p class="text-[10px] text-slate-500">蹇嵎閿細Q / E 鍒囨崲浠诲姟</p>
             </div>
 
             <div class="space-y-2">
-              <p class="text-xs text-slate-200">任务视图切换</p>
+              <p class="text-xs text-slate-200">浠诲姟瑙嗗浘鍒囨崲</p>
               <div class="grid grid-cols-3 gap-2">
                 <button
                   data-testid="switch-view-new"
@@ -47,7 +61,7 @@
                   :class="currentView === 'new' ? 'border-sky-400 text-sky-300' : 'border-slate-700 text-slate-300'"
                   @click="switchToView('new')"
                 >
-                  新图
+                  鏂板浘
                 </button>
                 <button
                   data-testid="switch-view-new-marked"
@@ -55,7 +69,7 @@
                   :class="currentView === 'new_marked' ? 'border-sky-400 text-sky-300' : 'border-slate-700 text-slate-300'"
                   @click="switchToView('new_marked')"
                 >
-                  新图标记
+                  鏂板浘鏍囪
                 </button>
                 <button
                   data-testid="switch-view-old"
@@ -63,24 +77,24 @@
                   :class="currentView === 'old' ? 'border-sky-400 text-sky-300' : 'border-slate-700 text-slate-300'"
                   @click="switchToView('old')"
                 >
-                  旧图
+                  鏃у浘
                 </button>
               </div>
-              <p class="text-[10px] text-slate-400">快捷键：Space 切换视图 / Tab 开关闪烁</p>
+              <p class="text-[10px] text-slate-400">蹇嵎閿細Space 鍒囨崲瑙嗗浘 / Tab 寮€鍏抽棯鐑?</p>
             </div>
 
             <div class="space-y-2">
-              <p class="text-xs text-slate-200">闪烁 (Blink)</p>
+              <p class="text-xs text-slate-200">闂儊 (Blink)</p>
               <button
                 data-testid="blink-toggle"
                 class="w-full text-xs px-2 py-1.5 rounded border"
                 :class="blinkEnabled ? 'border-amber-500 text-amber-300 bg-amber-950/30' : 'border-slate-700 text-slate-300'"
                 @click="onBlinkToggle"
               >
-                {{ blinkEnabled ? '停止闪烁' : '开始闪烁' }}
+                {{ blinkEnabled ? 'Stop Blink' : 'Start Blink' }}
               </button>
               <div class="space-y-1">
-                <label class="text-[10px] text-slate-400">间隔: {{ (blinkInterval / 1000).toFixed(1) }}s</label>
+                <label class="text-[10px] text-slate-400">闂撮殧: {{ (blinkInterval / 1000).toFixed(1) }}s</label>
                 <input
                   data-testid="blink-interval-slider"
                   type="range"
@@ -95,7 +109,7 @@
             </div>
 
             <div class="space-y-2">
-              <p class="text-xs text-slate-200">工具</p>
+              <p class="text-xs text-slate-200">宸ュ叿</p>
               <div class="grid grid-cols-2 gap-2">
                 <button
                   data-testid="tool-move"
@@ -103,7 +117,7 @@
                   :class="toolMode === 'move' ? 'border-sky-400 text-sky-300' : 'border-slate-700 text-slate-300'"
                   @click="setToolMode('move')"
                 >
-                  移动
+                  绉诲姩
                 </button>
                 <button
                   data-testid="tool-bbox"
@@ -111,7 +125,7 @@
                   :class="toolMode === 'bbox' ? 'border-emerald-400 text-emerald-300' : 'border-slate-700 text-slate-300'"
                   @click="setToolMode('bbox')"
                 >
-                  矩形
+                  鐭╁舰
                 </button>
                 <button
                   data-testid="tool-point"
@@ -119,7 +133,7 @@
                   :class="toolMode === 'point' ? 'border-amber-400 text-amber-300' : 'border-slate-700 text-slate-300'"
                   @click="setToolMode('point')"
                 >
-                  点
+                  鐐?
                 </button>
                 <button
                   data-testid="tool-polygon"
@@ -127,7 +141,7 @@
                   :class="toolMode === 'polygon' ? 'border-violet-400 text-violet-300' : 'border-slate-700 text-slate-300'"
                   @click="setToolMode('polygon')"
                 >
-                  多边形
+                  澶氳竟褰?
                 </button>
               </div>
               <button
@@ -136,13 +150,13 @@
                 class="w-full text-xs px-2 py-1 rounded border border-violet-700 text-violet-200"
                 @click="finishPolygon"
               >
-                完成多边形
+                瀹屾垚澶氳竟褰?
               </button>
             </div>
 
             <div class="space-y-2">
               <div class="flex items-center justify-between gap-2">
-                <p class="text-[11px] text-slate-200">拉伸</p>
+                <p class="text-[11px] text-slate-200">鎷変几</p>
                 <label class="text-[10px] text-slate-300 inline-flex items-center gap-1">
                   <input
                     data-testid="auto-stretch-toggle"
@@ -150,7 +164,7 @@
                     :checked="autoStretchEnabled"
                     @change="onAutoStretchToggle"
                   >
-                  自动拉伸
+                  鑷姩鎷変几
                 </label>
               </div>
               <div class="space-y-1">
@@ -185,9 +199,9 @@
                 :disabled="!activeTask || !activeFitsNode"
                 @click="onMatchGroupStretch"
               >
-                匹配另外两图 (M)
+                鍖归厤鍙﹀涓ゅ浘 (M)
               </button>
-              <p class="text-[10px] text-slate-500">快捷键：M 将当前图亮度同步到同任务组另外两图</p>
+              <p class="text-[10px] text-slate-500">Shortcut: M syncs the current stretch to the other views in this task.</p>
               <label class="text-[11px] text-slate-300 inline-flex items-center gap-2">
                 <input
                   data-testid="invert-toggle"
@@ -195,14 +209,14 @@
                   :checked="invertDisplay"
                   @change="onInvertChange"
                 >
-                反转
+                鍙嶈浆
               </label>
             </div>
 
             <div class="space-y-2">
-              <p class="text-[11px] text-slate-200">标注样式统一设置</p>
+              <p class="text-[11px] text-slate-200">鏍囨敞鏍峰紡缁熶竴璁剧疆</p>
               <div class="space-y-1">
-                <label class="text-[10px] text-slate-400">BBox 线宽: {{ bboxStrokeWidth.toFixed(1) }}</label>
+                <label class="text-[10px] text-slate-400">BBox 绾垮: {{ bboxStrokeWidth.toFixed(1) }}</label>
                 <input
                   data-testid="bbox-stroke-width-slider"
                   type="range"
@@ -215,7 +229,7 @@
                 >
               </div>
               <div class="space-y-1">
-                <label class="text-[10px] text-slate-400">点半径: {{ pointRadius.toFixed(1) }}</label>
+                <label class="text-[10px] text-slate-400">鐐瑰崐寰? {{ pointRadius.toFixed(1) }}</label>
                 <input
                   data-testid="point-radius-slider"
                   type="range"
@@ -228,7 +242,7 @@
                 >
               </div>
               <div class="space-y-1">
-                <label class="text-[10px] text-slate-400">多边形线宽: {{ polygonStrokeWidth.toFixed(1) }}</label>
+                <label class="text-[10px] text-slate-400">澶氳竟褰㈢嚎瀹? {{ polygonStrokeWidth.toFixed(1) }}</label>
                 <input
                   data-testid="polygon-stroke-width-slider"
                   type="range"
@@ -253,13 +267,13 @@
       >
         <aside class="w-full max-w-xl rounded-lg border border-slate-700 bg-slate-950 p-3 space-y-3 max-h-[80vh] flex flex-col">
           <div class="flex items-center justify-between gap-2">
-            <p class="text-sm text-slate-200">总任务目录</p>
+            <p class="text-sm text-slate-200">Task Catalog</p>
             <button
               data-testid="task-catalog-close"
               class="text-xs px-2 py-1 rounded border border-slate-700 text-slate-300"
               @click="closeTaskCatalog"
             >
-              关闭
+              鍏抽棴
             </button>
           </div>
           <input
@@ -267,9 +281,9 @@
             data-testid="task-catalog-search"
             type="text"
             class="w-full text-xs bg-slate-900 text-slate-200 border border-slate-700 rounded px-2 py-1"
-            placeholder="搜索任务ID..."
+            placeholder="鎼滅储浠诲姟ID..."
           >
-          <p class="text-[11px] text-slate-500">共 {{ filteredTaskCatalog.length }} / {{ taskList.length }} 个任务</p>
+          <p class="text-[11px] text-slate-500">Showing {{ filteredTaskCatalog.length }} / {{ taskList.length }} tasks</p>
           <ul class="flex-1 min-h-0 overflow-auto space-y-1" data-testid="task-catalog-list">
             <li
               v-for="item in filteredTaskCatalog"
@@ -451,7 +465,7 @@
           v-else-if="!activeTask"
           class="absolute inset-0 flex items-center justify-center text-sm text-slate-400 bg-slate-950/65"
         >
-          等待任务...
+          绛夊緟浠诲姟...
         </div>
       </div>
 
@@ -461,10 +475,10 @@
             <button
               data-testid="submit-annotations"
               class="w-full text-xs px-2 py-2 rounded border border-emerald-600 text-emerald-300 disabled:opacity-50"
-              :disabled="isSubmitting || !activeTask"
+              :disabled="isSubmitting || !activeTask || !hasTaskLock"
               @click="submitCurrentAnnotations"
             >
-              {{ isSubmitting ? '提交中...' : '提交' }}
+              {{ isSubmitting ? '鎻愪氦涓?..' : '鎻愪氦' }}
             </button>
             <p
               v-if="saveMessage"
@@ -484,11 +498,11 @@
                 class="px-2 py-0.5 rounded border border-amber-500 text-amber-100"
                 @click="undoRemoveAnnotation"
               >
-                撤销
+                鎾ら攢
               </button>
             </div>
 
-            <p class="text-[11px] text-slate-200">标注列表</p>
+            <p class="text-[11px] text-slate-200">鏍囨敞鍒楄〃</p>
             <ul data-testid="annotation-list" class="max-h-28 overflow-auto space-y-1">
               <li v-for="ann in annotations" :key="`list-${ann.id}`">
                 <div class="flex items-center gap-1">
@@ -509,24 +523,24 @@
                           :style="{ backgroundColor: getAnnotationColor(ann) }"
                         />
                         <span class="font-semibold">{{ ann.display_id }}</span>
-                        <span>{{ ann.type }} · {{ ann.detail_type ? ann.detail_type : ann.label }}</span>
+                        <span>{{ ann.type }} 路 {{ ann.detail_type ? ann.detail_type : ann.label }}</span>
                       </span>
                   </button>
                   <button
                     data-testid="annotation-remove"
                     class="text-[10px] px-2 py-1 rounded border hover:bg-rose-900/20"
                     :class="pendingDeleteAnnotationId === ann.id ? 'border-rose-500 text-rose-100 bg-rose-900/30' : 'border-rose-800 text-rose-300'"
-                    title="删除该标注"
+                    title="Delete annotation"
                     @click.stop="removeAnnotation(ann.id)"
                   >
-                    {{ pendingDeleteAnnotationId === ann.id ? '确认删除' : '删除' }}
+                    {{ pendingDeleteAnnotationId === ann.id ? '纭鍒犻櫎' : '鍒犻櫎' }}
                   </button>
                 </div>
               </li>
             </ul>
 
             <label class="text-[11px] text-slate-300 block">
-              目标类型
+              鐩爣绫诲瀷
               <select
                 data-testid="annotation-label-select"
                 class="mt-1 w-full text-xs bg-slate-800 text-slate-200 border border-slate-700 rounded px-2 py-1"
@@ -534,18 +548,18 @@
                 :value="selectedLabel"
                 @change="onSelectedLabelChange"
               >
-                <option value="Unlabeled">未标记</option>
-                <optgroup label="真实目标">
-                  <option value="real:asteroid">小行星</option>
-                  <option value="real:supernova">超新星</option>
-                  <option value="real:variable_star">变星</option>
+                <option value="Unlabeled">Unlabeled</option>
+                <optgroup label="鐪熷疄鐩爣">
+                  <option value="real:asteroid">Asteroid</option>
+                  <option value="real:supernova">Supernova</option>
+                  <option value="real:variable_star">鍙樻槦</option>
                 </optgroup>
-                <optgroup label="伪目标">
-                  <option value="bogus:satellite_trail">卫星轨迹</option>
-                  <option value="bogus:noise">噪声</option>
-                  <option value="bogus:diffraction_spike">衍射芒</option>
-                  <option value="bogus:cmos_condensation">CMOS结露</option>
-                  <option value="bogus:corresponding">对应体</option>
+                <optgroup label="False Positives">
+                  <option value="bogus:satellite_trail">鍗槦杞ㄨ抗</option>
+                  <option value="bogus:noise">鍣０</option>
+                  <option value="bogus:diffraction_spike">Diffraction Spike</option>
+                  <option value="bogus:cmos_condensation">CMOS缁撻湶</option>
+                  <option value="bogus:corresponding">Corresponding Source</option>
                 </optgroup>
               </select>
             </label>
@@ -587,13 +601,24 @@ import {
 } from '../fits/brightnessMatch'
 import { fetchAnnotationHistory, fetchAnnotationRevision } from '../services/annotationHistoryApi'
 import { submitAnnotations } from '../services/annotationApi'
-import { fetchTasks } from '../services/taskApi'
+import {
+  claimNextTask,
+  claimTask,
+  fetchTasks,
+  getTaskClientId,
+  heartbeatTask,
+  releaseTask,
+} from '../services/taskApi'
 
 const emit = defineEmits(['task-changed', 'annotations-saved'])
 const props = defineProps({
   revisionOverlay: {
     type: Object,
     default: null,
+  },
+  taskRefreshKey: {
+    type: Number,
+    default: 0,
   },
 })
 
@@ -631,6 +656,10 @@ const inspectorTeleportTarget = ref(null)
 const activeTask = ref(null)
 const currentView = ref('new')
 const error = ref('')
+const claimedTaskId = ref('')
+const taskLockExpiresAt = ref('')
+const taskLockError = ref('')
+const taskLockNotice = ref('')
 const stretchRangeMin = ref(0)
 const stretchRangeMax = ref(1)
 const stretchMin = ref(0)
@@ -642,6 +671,8 @@ const bboxStrokeWidth = ref(2)
 const pointRadius = ref(4)
 const polygonStrokeWidth = ref(2)
 let hostResizeObserver = null
+let taskHeartbeatTimerId = null
+const taskClientId = getTaskClientId()
 
 const taskProgressText = computed(() => {
   if (taskList.value.length === 0 || currentTaskIndex.value < 0) {
@@ -699,6 +730,10 @@ const hasPrevTask = computed(() => currentTaskIndex.value > 0)
 const hasNextTask = computed(() => (
   currentTaskIndex.value >= 0 && currentTaskIndex.value < taskList.value.length - 1
 ))
+const hasTaskLock = computed(() => {
+  const taskId = String(activeTask.value?.task_id || '')
+  return Boolean(taskId) && claimedTaskId.value === taskId && !taskLockError.value
+})
 
 const stageConfig = computed(() => ({
   width: stageWidth.value,
@@ -732,6 +767,65 @@ const imageNodes = computed(() => (
     visible: node.view === currentView.value,
   }))
 ))
+
+function clearTaskLockMessages() {
+  taskLockError.value = ''
+  taskLockNotice.value = ''
+}
+
+function stopTaskHeartbeat() {
+  if (taskHeartbeatTimerId) {
+    window.clearInterval(taskHeartbeatTimerId)
+    taskHeartbeatTimerId = null
+  }
+}
+
+function startTaskHeartbeat(taskId) {
+  stopTaskHeartbeat()
+  if (!taskId) {
+    return
+  }
+
+  taskHeartbeatTimerId = window.setInterval(async () => {
+    try {
+      const refreshed = await heartbeatTask(taskId, taskClientId)
+      taskLockExpiresAt.value = String(refreshed.lock_expires_at || '')
+      taskLockNotice.value = 'Current task is locked by this client'
+      taskLockError.value = ''
+    } catch (err) {
+      claimedTaskId.value = ''
+      taskLockExpiresAt.value = ''
+      taskLockError.value = err instanceof Error ? err.message : 'Task lock expired'
+      taskLockNotice.value = ''
+      stopTaskHeartbeat()
+    }
+  }, 60_000)
+}
+
+async function releaseActiveTask(taskId = activeTask.value?.task_id) {
+  const normalizedTaskId = String(taskId || '')
+  if (!normalizedTaskId) {
+    claimedTaskId.value = ''
+    taskLockExpiresAt.value = ''
+    stopTaskHeartbeat()
+    return
+  }
+
+  const releasingCurrentTask = claimedTaskId.value === normalizedTaskId
+  if (releasingCurrentTask) {
+    stopTaskHeartbeat()
+  }
+  try {
+    await releaseTask(normalizedTaskId, taskClientId)
+  } catch {
+    // Ignore release failures; lock expiry still provides fallback protection.
+  } finally {
+    if (releasingCurrentTask && claimedTaskId.value === normalizedTaskId) {
+      claimedTaskId.value = ''
+      taskLockExpiresAt.value = ''
+    }
+  }
+}
 
 function setError(message) {
   error.value = message
@@ -959,13 +1053,16 @@ function clearPendingDeleteState() {
   }
 }
 
-async function loadTaskAtIndex(index) {
-  if (index < 0 || index >= taskList.value.length) {
-    return false
-  }
+async function activateTask(task, index, options = {}) {
+  const previousTaskId = String(activeTask.value?.task_id || '')
+  const shouldReleasePrevious = options.releasePrevious !== false
 
-  const task = taskList.value[index]
   activeTask.value = task
+  claimedTaskId.value = String(task.task_id || '')
+  taskLockExpiresAt.value = String(options.lockExpiresAt || '')
+  taskLockError.value = ''
+  taskLockNotice.value = 'Current task is locked by this client'
+
   setCurrentView('new')
   await preloadTaskFits(task)
   ensureTaskStretchPreset(task.task_id)
@@ -975,7 +1072,46 @@ async function loadTaskAtIndex(index) {
   resetAnnotationStates()
   await loadLatestRevisionAnnotations(task.task_id)
   emit('task-changed', task.task_id)
+  startTaskHeartbeat(task.task_id)
+
+  if (shouldReleasePrevious && previousTaskId && previousTaskId !== task.task_id) {
+    void releaseActiveTask(previousTaskId)
+  }
   return true
+}
+
+async function loadTaskAtIndex(index, options = {}) {
+  if (index < 0 || index >= taskList.value.length) {
+    return false
+  }
+
+  const task = taskList.value[index]
+  if (claimedTaskId.value === task.task_id && activeTask.value?.task_id === task.task_id) {
+    return activateTask(task, index, { releasePrevious: false, lockExpiresAt: taskLockExpiresAt.value })
+  }
+
+  clearTaskLockMessages()
+  try {
+    const claimed = await claimTask(task.task_id, taskClientId)
+    const claimedTask = {
+      ...task,
+      ...claimed,
+    }
+    return await activateTask(claimedTask, index, {
+      releasePrevious: options.releasePrevious !== false,
+      lockExpiresAt: claimed.lock_expires_at,
+      })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to claim task'
+    if (activeTask.value?.task_id && claimedTaskId.value === activeTask.value.task_id) {
+      taskLockNotice.value = 'Current task is locked by this client'
+      saveMessage.value = message
+    } else {
+      taskLockError.value = message
+      taskLockNotice.value = ''
+    }
+    return false
+  }
 }
 
 async function loadLatestRevisionAnnotations(taskId) {
@@ -1011,7 +1147,7 @@ async function loadLatestRevisionAnnotations(taskId) {
       setCurrentView(detail.source_view)
     }
   } catch {
-    // 历史读取失败时保持空状态，避免阻塞任务切换。
+    // 鍘嗗彶璇诲彇澶辫触鏃朵繚鎸佺┖鐘舵€侊紝閬垮厤闃诲浠诲姟鍒囨崲銆?
   }
 }
 
@@ -1318,7 +1454,7 @@ function removeAnnotation(annotationId) {
   if (pendingDeleteAnnotationId.value !== annotationId) {
     clearPendingDeleteState()
     pendingDeleteAnnotationId.value = annotationId
-    undoDeleteMessage.value = `请在2秒内再次点击“删除”以确认删除 ${target.display_id}`
+    undoDeleteMessage.value = `璇峰湪2绉掑唴鍐嶆鐐瑰嚮鈥滃垹闄も€濅互纭鍒犻櫎 ${target.display_id}`
     pendingDeleteTimerId = setTimeout(() => {
       clearPendingDeleteState()
       if (!undoDeleteVisible.value) {
@@ -1346,7 +1482,7 @@ function removeAnnotation(annotationId) {
   }
 
   undoDeleteVisible.value = true
-  undoDeleteMessage.value = `已删除 ${target.display_id}`
+  undoDeleteMessage.value = `宸插垹闄?${target.display_id}`
 }
 
 function undoRemoveAnnotation() {
@@ -1593,6 +1729,11 @@ async function submitCurrentAnnotations() {
     (ann) => ann.type === 'bbox' && ann.label !== 'Unlabeled'
   )
 
+  if (!hasTaskLock.value) {
+    saveMessage.value = 'Current task is not locked by this client'
+    return
+  }
+
   if (!activeTask.value || bboxAnnotations.length === 0) {
     saveMessage.value = 'No valid bbox annotations to submit'
     return
@@ -1601,6 +1742,7 @@ async function submitCurrentAnnotations() {
   isSubmitting.value = true
   try {
     const savedTaskId = activeTask.value.task_id
+    const shouldReleaseAfterSave = hasNextTask.value
     const payload = {
       source_view: currentView.value,
       metadata: {
@@ -1616,19 +1758,30 @@ async function submitCurrentAnnotations() {
         detail_type: ann.detail_type,
       })),
     }
-    const response = await submitAnnotations(activeTask.value.task_id, payload)
+    const response = await submitAnnotations(activeTask.value.task_id, payload, {
+      clientId: taskClientId,
+      releaseAfterSave: shouldReleaseAfterSave,
+    })
 
     let movedToNextTask = false
     if (hasNextTask.value) {
       movedToNextTask = await loadTaskAtIndex(currentTaskIndex.value + 1)
     }
 
+    if (!movedToNextTask && shouldReleaseAfterSave) {
+      const currentIndex = taskList.value.findIndex((task) => task.task_id === savedTaskId)
+      if (currentIndex >= 0) {
+        await loadTaskAtIndex(currentIndex, { releasePrevious: false })
+      }
+    }
+
     saveMessage.value = movedToNextTask
-      ? `Saved ${response.saved_count} annotations · switched to next task`
+      ? `Saved ${response.saved_count} annotations 路 switched to next task`
       : `Saved ${response.saved_count} annotations`
 
     if (!movedToNextTask) {
       resetAnnotationStates()
+      await loadLatestRevisionAnnotations(savedTaskId)
     }
 
     emit('annotations-saved', savedTaskId)
@@ -1644,13 +1797,38 @@ async function loadInitialTask() {
     const tasks = await fetchTasks()
     taskList.value = tasks
     activeTask.value = null
+    claimedTaskId.value = ''
+    taskLockExpiresAt.value = ''
+    clearTaskLockMessages()
     if (!tasks[0]) {
       return
     }
-    await loadTaskAtIndex(0)
+
+    const claimed = await claimNextTask(taskClientId)
+    const index = taskList.value.findIndex((task) => task.task_id === claimed.task_id)
+    if (index < 0) {
+      taskList.value = [...taskList.value, claimed]
+      await activateTask(claimed, taskList.value.length - 1, {
+        releasePrevious: false,
+        lockExpiresAt: claimed.lock_expires_at,
+      })
+      return
+    }
+    await activateTask(
+      {
+        ...taskList.value[index],
+        ...claimed,
+      },
+      index,
+      {
+        releasePrevious: false,
+        lockExpiresAt: claimed.lock_expires_at,
+      },
+    )
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to load initial task'
-    setError(message)
+    taskLockError.value = message
+    setError(message === 'No available task' ? '' : message)
   }
 }
 
@@ -1661,6 +1839,21 @@ watch(activeFitsNode, (node) => {
 watch(autoStretchEnabled, () => {
   applyStretchForNode(activeFitsNode.value)
 })
+
+watch(
+  () => props.taskRefreshKey,
+  async (value, oldValue) => {
+    if (value === oldValue) {
+      return
+    }
+    const taskId = String(activeTask.value?.task_id || '')
+    if (!taskId) {
+      return
+    }
+    resetAnnotationStates()
+    await loadLatestRevisionAnnotations(taskId)
+  },
+)
 
 watch(
   [stretchedRgba, activeFitsNode],
@@ -1749,6 +1942,8 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  void releaseActiveTask()
+  stopTaskHeartbeat()
   stopMiddlePan()
   clearPendingDeleteState()
   clearUndoState()

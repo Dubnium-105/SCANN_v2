@@ -71,6 +71,7 @@
       <div class="flex-1 min-w-0 min-h-0 flex">
         <CanvasPanel
           :revision-overlay="activeRevisionOverlay"
+          :task-refresh-key="taskRefreshKey"
           @task-changed="onTaskChanged"
           @annotations-saved="onAnnotationsSaved"
         />
@@ -123,6 +124,7 @@ import { authState } from '../services/authStore'
 const router = useRouter()
 const activeTaskId = ref('')
 const historyRefreshKey = ref(0)
+const taskRefreshKey = ref(0)
 const activeRevisionOverlay = ref(null)
 const mainRef = ref(null)
 
@@ -219,6 +221,8 @@ function onRevisionCleared() {
 
 function onHistoryMutated() {
   historyRefreshKey.value += 1
+  taskRefreshKey.value += 1
+  activeRevisionOverlay.value = null
 }
 
 function onLogout() {

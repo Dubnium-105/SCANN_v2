@@ -55,6 +55,59 @@ function mockImageFetch(pathValues = {}) {
       })
     }
 
+    if (String(url).startsWith('/api/tasks/next?')) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          task_id: 'PGC 17069',
+          old_path: 'old/PGC 17069.fts',
+          new_path: 'new/PGC 17069.fts',
+          new_marked_path: 'new_marked/PGC 17069.fts',
+          client_id: 'test-client',
+          lock_expires_at: '2026-03-19T21:30:00+00:00',
+        }),
+      })
+    }
+
+    if (String(url).includes('/api/tasks/') && String(url).includes('/claim?')) {
+      const taskId = decodeURIComponent(String(url).split('/api/tasks/')[1].split('/claim?')[0])
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          task_id: taskId,
+          old_path: `old/${taskId}.fts`,
+          new_path: `new/${taskId}.fts`,
+          new_marked_path: `new_marked/${taskId}.fts`,
+          client_id: 'test-client',
+          lock_expires_at: '2026-03-19T21:30:00+00:00',
+        }),
+      })
+    }
+
+    if (String(url).includes('/api/tasks/') && String(url).includes('/heartbeat?')) {
+      const taskId = decodeURIComponent(String(url).split('/api/tasks/')[1].split('/heartbeat?')[0])
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          task_id: taskId,
+          client_id: 'test-client',
+          lock_expires_at: '2026-03-19T21:30:00+00:00',
+        }),
+      })
+    }
+
+    if (String(url).includes('/api/tasks/') && String(url).includes('/release?')) {
+      const taskId = decodeURIComponent(String(url).split('/api/tasks/')[1].split('/release?')[0])
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          task_id: taskId,
+          client_id: 'test-client',
+          released: true,
+        }),
+      })
+    }
+
     if (String(url).startsWith('/api/fits/')) {
       const decodedUrl = decodeURIComponent(String(url))
       let fitsBuffer = createFitsBuffer()
@@ -103,6 +156,7 @@ describe('CanvasPanel', () => {
     URL.createObjectURL = vi.fn((blob) => `blob:${blob.type}`)
     URL.revokeObjectURL = vi.fn()
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => null)
+    sessionStorage.clear()
     fetchCalls = mockImageFetch()
   })
 
@@ -127,6 +181,7 @@ describe('CanvasPanel', () => {
       .map((item) => item.attributes('data-view'))
 
     expect(visibleViews).toEqual(['new'])
+    expect(fetchCalls.some((item) => String(item.url).startsWith('/api/tasks/next?'))).toBe(true)
   })
 
   it('cycles current view with Tab/Space keydown in new -> new_marked -> old order', async () => {
@@ -206,6 +261,8 @@ describe('CanvasPanel', () => {
     )
     expect(submitCall).toBeTruthy()
     expect(submitCall.options?.method).toBe('POST')
+    expect(String(submitCall.url)).toContain('client_id=')
+    expect(String(submitCall.url)).toContain('release_after_save=false')
 
     const payload = JSON.parse(submitCall.options?.body)
     expect(payload.source_view).toBe('new')

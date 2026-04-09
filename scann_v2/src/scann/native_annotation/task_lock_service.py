@@ -146,6 +146,45 @@ class TaskLockService:
 
         return None
 
+    def claim_task(self, task_id: str, client_id: str, tasks: list[TaskSession]) -> Optional[TaskSession]:
+        normalized_client_id = self._normalize_client_id(client_id)
+        self._cleanup_expired_locks()
+
+        tasks_by_id = self._task_by_id(tasks)
+        task = tasks_by_id.get(task_id)
+        if task is None:
+            return None
+
+        if self._storage is not None:
+            now = self._now()
+            existing = self._storage.get_task_by_id(task_id)
+            if existing is not None and existing.claim_client_id == normalized_client_id:
+                refreshed = self._build_lock(task_id, normalized_client_id, now=now)
+                self._storage.refresh_claim(
+                    task_id=task_id,
+                    client_id=normalized_client_id,
+                    expires_at=refreshed.expires_at.isoformat(timespec="seconds"),
+                )
+                return task
+
+            new_lock = self._build_lock(task_id=task_id, client_id=normalized_client_id, now=now)
+            claimed = self._storage.try_claim_task(
+                task_id=task_id,
+                client_id=normalized_client_id,
+                expires_at=new_lock.expires_at.isoformat(timespec="seconds"),
+                now_iso=now.isoformat(timespec="seconds"),
+            )
+            return task if claimed else None
+
+        lock = self._locks_by_task.get(task_id)
+        if lock is not None and lock.client_id != normalized_client_id:
+            return None
+
+        new_lock = self._build_lock(task_id=task_id, client_id=normalized_client_id)
+        self._locks_by_task[task_id] = new_lock
+        self._task_by_client[normalized_client_id] = task_id
+        return task
+
     def refresh_task(self, task_id: str, client_id: str) -> Optional[TaskLock]:
         normalized_client_id = self._normalize_client_id(client_id)
         self._cleanup_expired_locks()
