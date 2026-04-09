@@ -12,7 +12,7 @@
                   class="text-[10px] px-2 py-0.5 rounded border border-slate-700 text-slate-300"
                   @click="openTaskCatalog"
                 >
-                  任务目录
+                  总任务目录
                 </button>
               </div>
               <p class="text-[11px] text-slate-400">{{ activeTask?.task_id || '暂无任务' }}</p>
@@ -91,7 +91,7 @@
                 :class="blinkEnabled ? 'border-amber-500 text-amber-300 bg-amber-950/30' : 'border-slate-700 text-slate-300'"
                 @click="onBlinkToggle"
               >
-                {{ blinkEnabled ? 'Stop Blink' : 'Start Blink' }}
+                {{ blinkEnabled ? '停止闪烁' : '开始闪烁' }}
               </button>
               <div class="space-y-1">
                 <label class="text-[10px] text-slate-400">间隔: {{ (blinkInterval / 1000).toFixed(1) }}s</label>
@@ -199,9 +199,9 @@
                 :disabled="!activeTask || !activeFitsNode"
                 @click="onMatchGroupStretch"
               >
-                匹配其余视图 (M)
+                匹配另外两图 (M)
               </button>
-              <p class="text-[10px] text-slate-500">Shortcut: M syncs the current stretch to the other views in this task.</p>
+              <p class="text-[10px] text-slate-500">快捷键：M 将当前图亮度同步到同任务组另外两图</p>
               <label class="text-[11px] text-slate-300 inline-flex items-center gap-2">
                 <input
                   data-testid="invert-toggle"
@@ -267,7 +267,7 @@
       >
         <aside class="w-full max-w-xl rounded-lg border border-slate-700 bg-slate-950 p-3 space-y-3 max-h-[80vh] flex flex-col">
           <div class="flex items-center justify-between gap-2">
-            <p class="text-sm text-slate-200">Task Catalog</p>
+            <p class="text-sm text-slate-200">总任务目录</p>
             <button
               data-testid="task-catalog-close"
               class="text-xs px-2 py-1 rounded border border-slate-700 text-slate-300"
@@ -281,9 +281,9 @@
             data-testid="task-catalog-search"
             type="text"
             class="w-full text-xs bg-slate-900 text-slate-200 border border-slate-700 rounded px-2 py-1"
-            placeholder="搜索任务 ID..."
+            placeholder="搜索任务ID..."
           >
-          <p class="text-[11px] text-slate-500">Showing {{ filteredTaskCatalog.length }} / {{ taskList.length }} tasks</p>
+          <p class="text-[11px] text-slate-500">共 {{ filteredTaskCatalog.length }} / {{ taskList.length }} 个任务</p>
           <ul class="flex-1 min-h-0 overflow-auto space-y-1" data-testid="task-catalog-list">
             <li
               v-for="item in filteredTaskCatalog"
@@ -481,7 +481,7 @@
           v-else-if="!activeTask"
           class="absolute inset-0 flex items-center justify-center text-sm text-slate-400 bg-slate-950/65"
         >
-          等待任务...
+          Waiting for tasks...
         </div>
       </div>
 
@@ -494,7 +494,7 @@
               :disabled="isSubmitting || !activeTask || !hasTaskLock"
               @click="submitCurrentAnnotations"
             >
-              {{ isSubmitting ? '提交中...' : '提交' }}
+              {{ isSubmitting ? 'Submitting...' : 'Submit' }}
             </button>
             <p
               v-if="saveMessage"
@@ -514,11 +514,11 @@
                 class="px-2 py-0.5 rounded border border-amber-500 text-amber-100"
                 @click="undoRemoveAnnotation"
               >
-                鎾ら攢
+                Undo
               </button>
             </div>
 
-            <p class="text-[11px] text-slate-200">标注列表</p>
+            <p class="text-[11px] text-slate-200">Annotations</p>
             <ul data-testid="annotation-list" class="max-h-28 overflow-auto space-y-1">
               <li v-for="ann in annotations" :key="`list-${ann.id}`">
                 <div class="flex items-center gap-1">
@@ -546,7 +546,7 @@
                     data-testid="annotation-remove"
                     class="text-[10px] px-2 py-1 rounded border hover:bg-rose-900/20"
                     :class="pendingDeleteAnnotationId === ann.id ? 'border-rose-500 text-rose-100 bg-rose-900/30' : 'border-rose-800 text-rose-300'"
-                    title="Delete annotation"
+                    title="删除该标注"
                     @click.stop="removeAnnotation(ann.id)"
                   >
                     {{ pendingDeleteAnnotationId === ann.id ? '确认删除' : '删除' }}
@@ -556,7 +556,7 @@
             </ul>
 
             <label class="text-[11px] text-slate-300 block">
-              目标类型
+              Target Type (目标类型)
               <select
                 data-testid="annotation-label-select"
                 class="mt-1 w-full text-xs bg-slate-800 text-slate-200 border border-slate-700 rounded px-2 py-1"
@@ -564,18 +564,18 @@
                 :value="selectedLabel"
                 @change="onSelectedLabelChange"
               >
-                <option value="Unlabeled">Unlabeled</option>
-                <optgroup label="真实目标">
-                  <option value="real:asteroid">Asteroid</option>
-                  <option value="real:supernova">Supernova</option>
-                  <option value="real:variable_star">变星</option>
+                <option value="Unlabeled">Unlabeled (未标记)</option>
+                <optgroup label="Real (真实目标)">
+                  <option value="real:asteroid">Asteroid (小行星)</option>
+                  <option value="real:supernova">Supernova (超新星)</option>
+                  <option value="real:variable_star">Variable Star (变星)</option>
                 </optgroup>
-                <optgroup label="False Positives">
-                  <option value="bogus:satellite_trail">卫星轨迹</option>
-                  <option value="bogus:noise">噪声</option>
-                  <option value="bogus:diffraction_spike">Diffraction Spike</option>
-                  <option value="bogus:cmos_condensation">CMOS结露</option>
-                  <option value="bogus:corresponding">Corresponding Source</option>
+                <optgroup label="Bogus (伪目标)">
+                  <option value="bogus:satellite_trail">Satellite Trail (卫星轨迹)</option>
+                  <option value="bogus:noise">Noise (噪声)</option>
+                  <option value="bogus:diffraction_spike">Diffraction Spike (衍射芒)</option>
+                  <option value="bogus:cmos_condensation">CMOS Condensation (CMOS结露)</option>
+                  <option value="bogus:corresponding">Corresponding (对应体)</option>
                 </optgroup>
               </select>
             </label>
@@ -1518,7 +1518,7 @@ function removeAnnotation(annotationId) {
   if (pendingDeleteAnnotationId.value !== annotationId) {
     clearPendingDeleteState()
     pendingDeleteAnnotationId.value = annotationId
-    undoDeleteMessage.value = `请在 2 秒内再次点击“删除”以确认删除 ${target.display_id}`
+    undoDeleteMessage.value = `请在2秒内再次点击“删除”以确认删除 ${target.display_id}`
     pendingDeleteTimerId = setTimeout(() => {
       clearPendingDeleteState()
       if (!undoDeleteVisible.value) {
