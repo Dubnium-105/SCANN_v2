@@ -160,6 +160,7 @@ describe('CanvasPanel', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.restoreAllMocks()
   })
 
@@ -235,6 +236,44 @@ describe('CanvasPanel', () => {
 
     expect(moveButton().classes()).toContain('border-sky-400')
     expect(bboxButton().classes()).not.toContain('border-emerald-400')
+  })
+
+  it('blinks only checked views in queue order', async () => {
+    vi.useFakeTimers()
+
+    const wrapper = mount(CanvasPanel, {
+      global: {
+        stubs: globalStubs,
+      },
+    })
+
+    await flushPromises()
+
+    await wrapper.get('[data-testid="blink-queue-new-marked"]').setValue(false)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="blink-queue-text"]').text()).toContain('新图 -> 旧图')
+
+    const currentVisible = () =>
+      wrapper
+        .findAll('[data-testid="image-state-item"]')
+        .filter((item) => item.attributes('data-visible') === 'true')
+        .map((item) => item.attributes('data-view'))
+
+    expect(currentVisible()).toEqual(['new'])
+
+    await wrapper.get('[data-testid="blink-toggle"]').trigger('click')
+    await flushPromises()
+
+    vi.advanceTimersByTime(500)
+    await flushPromises()
+    expect(currentVisible()).toEqual(['old'])
+
+    vi.advanceTimersByTime(500)
+    await flushPromises()
+    expect(currentVisible()).toEqual(['new'])
+
+    wrapper.unmount()
   })
 
   it('creates a bbox annotation via mousedown/mousemove/mouseup in bbox mode', async () => {

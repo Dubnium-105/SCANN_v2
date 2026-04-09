@@ -87,6 +87,41 @@
                   旧图
                 </button>
               </div>
+              <div class="grid grid-cols-3 gap-2">
+                <label
+                  class="text-[10px] text-slate-400 inline-flex items-center justify-center gap-1 rounded border border-slate-800 px-2 py-1"
+                >
+                  <input
+                    data-testid="blink-queue-new"
+                    type="checkbox"
+                    :checked="blinkViewSelection.new"
+                    @change="onBlinkViewToggle('new', $event)"
+                  >
+                  闪烁
+                </label>
+                <label
+                  class="text-[10px] text-slate-400 inline-flex items-center justify-center gap-1 rounded border border-slate-800 px-2 py-1"
+                >
+                  <input
+                    data-testid="blink-queue-new-marked"
+                    type="checkbox"
+                    :checked="blinkViewSelection.new_marked"
+                    @change="onBlinkViewToggle('new_marked', $event)"
+                  >
+                  闪烁
+                </label>
+                <label
+                  class="text-[10px] text-slate-400 inline-flex items-center justify-center gap-1 rounded border border-slate-800 px-2 py-1"
+                >
+                  <input
+                    data-testid="blink-queue-old"
+                    type="checkbox"
+                    :checked="blinkViewSelection.old"
+                    @change="onBlinkViewToggle('old', $event)"
+                  >
+                  闪烁
+                </label>
+              </div>
               <p class="text-[10px] text-slate-400">快捷键：Space 切换视图 / Tab 开关闪烁</p>
             </div>
 
@@ -96,10 +131,12 @@
                 data-testid="blink-toggle"
                 class="w-full text-xs px-2 py-1.5 rounded border"
                 :class="blinkEnabled ? 'border-amber-500 text-amber-300 bg-amber-950/30' : 'border-slate-700 text-slate-300'"
+                :disabled="blinkQueueViews.length === 0"
                 @click="onBlinkToggle"
               >
                 {{ blinkEnabled ? '停止闪烁' : '开始闪烁' }}
               </button>
+              <p class="text-[10px] text-slate-500" data-testid="blink-queue-text">队列：{{ blinkQueueText }}</p>
               <div class="space-y-1">
                 <label class="text-[10px] text-slate-400">间隔: {{ (blinkInterval / 1000).toFixed(1) }}s</label>
                 <input
@@ -613,7 +650,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
-import { useBlinkControl } from '../composables/useBlinkControl'
+import { BLINK_VIEW_ORDER, useBlinkControl } from '../composables/useBlinkControl'
 import { useFitsImagePool } from '../composables/useFitsImagePool'
 import { renderStretchToRgba } from '../fits/stretchRenderer'
 import {
@@ -705,6 +742,23 @@ const taskProgressText = computed(() => {
   }
   return `${currentTaskIndex.value + 1} / ${taskList.value.length}`
 })
+
+const blinkViewLabels = {
+  new: '新图',
+  new_marked: '新图标记',
+  old: '旧图',
+}
+const blinkViewSelection = ref({
+  new: true,
+  new_marked: true,
+  old: true,
+})
+const blinkQueueViews = computed(() => BLINK_VIEW_ORDER.filter((view) => blinkViewSelection.value[view]))
+const blinkQueueText = computed(() => (
+  blinkQueueViews.value.length > 0
+    ? blinkQueueViews.value.map((view) => blinkViewLabels[view] || view).join(' -> ')
+    : '未选择视图'
+))
 
 const filteredTaskCatalog = computed(() => {
   const keyword = String(taskCatalogQuery.value || '').trim().toLowerCase()
@@ -1006,6 +1060,7 @@ const {
 } = useBlinkControl({
   currentView,
   setCurrentView,
+  blinkOrder: blinkQueueViews,
 })
 
 function onBlinkToggle() {
@@ -1018,6 +1073,13 @@ function onBlinkIntervalInput(event) {
     return
   }
   setBlinkInterval(value)
+}
+
+function onBlinkViewToggle(view, event) {
+  blinkViewSelection.value = {
+    ...blinkViewSelection.value,
+    [view]: Boolean(event?.target?.checked),
+  }
 }
 
 function onDragEnd(event) {
