@@ -209,6 +209,34 @@ describe('CanvasPanel', () => {
     expect(currentVisible()).toEqual(['old'])
   })
 
+  it('switches tools with H/C keyboard shortcuts', async () => {
+    const wrapper = mount(CanvasPanel, {
+      global: {
+        stubs: globalStubs,
+      },
+    })
+
+    await flushPromises()
+
+    const moveButton = () => wrapper.get('[data-testid="tool-move"]')
+    const bboxButton = () => wrapper.get('[data-testid="tool-bbox"]')
+
+    expect(moveButton().classes()).toContain('border-sky-400')
+    expect(bboxButton().classes()).not.toContain('border-emerald-400')
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'c' }))
+    await flushPromises()
+
+    expect(bboxButton().classes()).toContain('border-emerald-400')
+    expect(moveButton().classes()).not.toContain('border-sky-400')
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'H' }))
+    await flushPromises()
+
+    expect(moveButton().classes()).toContain('border-sky-400')
+    expect(bboxButton().classes()).not.toContain('border-emerald-400')
+  })
+
   it('creates a bbox annotation via mousedown/mousemove/mouseup in bbox mode', async () => {
     const wrapper = mount(CanvasPanel, {
       global: {
@@ -454,5 +482,34 @@ describe('CanvasPanel', () => {
     const lockBadges = wrapper.findAll('[data-testid="task-catalog-lock-status"]')
     expect(lockBadges).toHaveLength(1)
     expect(lockBadges[0].text()).toBe('当前会话占用')
+  })
+
+  it('blocks switching when target task group is occupied by another user', async () => {
+    fetchCalls = mockImageFetch({}, {
+      tasks: [
+        createTask('PGC 17069'),
+        createTask('PGC 35671', {
+          lock_expires_at: '2026-03-19T21:30:00+00:00',
+          locked_by_current_client: false,
+        }),
+      ],
+      nextTaskId: 'PGC 17069',
+    })
+
+    const wrapper = mount(CanvasPanel, {
+      global: {
+        stubs: globalStubs,
+      },
+    })
+
+    await flushPromises()
+
+    await wrapper.get('[data-testid="task-next"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="task-switch-error"]').text()).toContain('PGC 35671')
+    expect(wrapper.get('[data-testid="task-switch-error"]').text()).toContain('当前被其他用户占用')
+    expect(fetchCalls.some((item) => String(item.url).includes('/api/tasks/PGC%2035671/claim?'))).toBe(false)
+    expect(wrapper.text()).toContain('PGC 17069')
   })
 })

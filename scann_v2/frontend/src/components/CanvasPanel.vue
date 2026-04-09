@@ -31,6 +31,13 @@
               >
                 {{ taskLockError }}
               </p>
+              <p
+                v-if="taskSwitchError"
+                data-testid="task-switch-error"
+                class="text-[10px] text-amber-300"
+              >
+                {{ taskSwitchError }}
+              </p>
               <div class="grid grid-cols-2 gap-2">
                 <button
                   data-testid="task-prev"
@@ -152,6 +159,7 @@
               >
                 完成多边形
               </button>
+              <p class="text-[10px] text-slate-500">快捷键：H 切换移动工具 / C 切换矩形工具</p>
             </div>
 
             <div class="space-y-2">
@@ -676,6 +684,7 @@ const claimedTaskId = ref('')
 const taskLockExpiresAt = ref('')
 const taskLockError = ref('')
 const taskLockNotice = ref('')
+const taskSwitchError = ref('')
 const stretchRangeMin = ref(0)
 const stretchRangeMax = ref(1)
 const stretchMin = ref(0)
@@ -802,6 +811,22 @@ const imageNodes = computed(() => (
 function clearTaskLockMessages() {
   taskLockError.value = ''
   taskLockNotice.value = ''
+}
+
+function clearTaskSwitchError() {
+  taskSwitchError.value = ''
+}
+
+function isTaskLockedByOtherClient(task) {
+  return Boolean(task?.lock_expires_at) && task?.locked_by_current_client === false
+}
+
+function setTaskSwitchBlockedMessage(taskId) {
+  taskSwitchError.value = `任务组 ${taskId} 当前被其他用户占用，无法切换`
+}
+
+function setTaskSwitchFailureMessage(taskId, message) {
+  taskSwitchError.value = `切换到任务组 ${taskId} 失败：${message}`
 }
 
 function stopTaskHeartbeat() {
@@ -1093,6 +1118,7 @@ async function activateTask(task, index, options = {}) {
   taskLockExpiresAt.value = String(options.lockExpiresAt || '')
   taskLockError.value = ''
   taskLockNotice.value = 'Current task is locked by this client'
+  taskSwitchError.value = ''
 
   setCurrentView('new')
   await preloadTaskFits(task)
@@ -1117,6 +1143,13 @@ async function loadTaskAtIndex(index, options = {}) {
   }
 
   const task = taskList.value[index]
+  clearTaskSwitchError()
+
+  if (isTaskLockedByOtherClient(task)) {
+    setTaskSwitchBlockedMessage(task.task_id)
+    return false
+  }
+
   if (claimedTaskId.value === task.task_id && activeTask.value?.task_id === task.task_id) {
     return activateTask(task, index, { releasePrevious: false, lockExpiresAt: taskLockExpiresAt.value })
   }
@@ -1134,9 +1167,13 @@ async function loadTaskAtIndex(index, options = {}) {
       })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to claim task'
+    if (message === 'Task locked by another client') {
+      setTaskSwitchBlockedMessage(task.task_id)
+    } else {
+      setTaskSwitchFailureMessage(task.task_id, message)
+    }
     if (activeTask.value?.task_id && claimedTaskId.value === activeTask.value.task_id) {
       taskLockNotice.value = 'Current task is locked by this client'
-      saveMessage.value = message
     } else {
       taskLockError.value = message
       taskLockNotice.value = ''
@@ -1953,6 +1990,18 @@ function onKeyDown(event) {
   if (event.key === 'm' || event.key === 'M') {
     event.preventDefault()
     onMatchGroupStretch()
+    return
+  }
+
+  if (event.key === 'h' || event.key === 'H') {
+    event.preventDefault()
+    setToolMode('move')
+    return
+  }
+
+  if (event.key === 'c' || event.key === 'C') {
+    event.preventDefault()
+    setToolMode('bbox')
     return
   }
 
