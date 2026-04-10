@@ -17,5 +17,7 @@ set +a
 DATASET_DIR="${SCANN_DATASET_DIR:-./runtime/dataset}"
 mkdir -p "$DATASET_DIR/new" "$DATASET_DIR/old" "$DATASET_DIR/new_marked"
 
+export COMPOSE_BAKE="${COMPOSE_BAKE:-false}"
+
 docker compose --env-file .env up -d --build
 docker compose --env-file .env ps
