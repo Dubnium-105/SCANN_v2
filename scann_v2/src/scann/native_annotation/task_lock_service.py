@@ -180,6 +180,10 @@ class TaskLockService:
         if lock is not None and lock.client_id != normalized_client_id:
             return None
 
+        existing_task_id = self._task_by_client.get(normalized_client_id)
+        if existing_task_id and existing_task_id != task_id:
+            self._locks_by_task.pop(existing_task_id, None)
+
         new_lock = self._build_lock(task_id=task_id, client_id=normalized_client_id)
         self._locks_by_task[task_id] = new_lock
         self._task_by_client[normalized_client_id] = task_id

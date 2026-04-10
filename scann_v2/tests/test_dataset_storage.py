@@ -76,6 +76,60 @@ def test_current_annotation_status_distinguishes_local_and_online(tmp_path) -> N
     assert task.online_annotation_status == "annotated"
 
 
+def test_release_online_annotation_claim_keeps_annotated_status(tmp_path) -> None:
+    storage = DatasetStorage(tmp_path)
+    storage.ensure_schema()
+    storage.upsert_raw_assets(
+        [
+            RawAssetRecord(
+                asset_id="new-1",
+                asset_role="new",
+                field_key="field_001",
+                field_name="field_001",
+                capture_key="field_001",
+                relpath="dataset_raw/new/field_001.fits",
+                file_name="field_001.fits",
+                file_stem="field_001",
+                suffix=".fits",
+            ),
+        ]
+    )
+    storage.sync_tasks(
+        [
+            TaskRecord(
+                task_id="task-1",
+                field_key="field_001",
+                field_name="field_001",
+                capture_key="field_001",
+                new_asset_id="new-1",
+                preprocess_status="ready",
+            )
+        ]
+    )
+
+    storage.upsert_current_annotation(
+        task_id="task-1",
+        source_view="new",
+        label="real",
+        detail_type=None,
+        ai_suggestion=None,
+        ai_confidence=None,
+        annotations=[{"x": 1, "y": 2, "width": 3, "height": 4, "label": "real"}],
+        annotation_origin="online",
+    )
+    assert storage.try_claim_task(
+        task_id="task-1",
+        client_id="client-a",
+        expires_at="2026-04-11T00:30:00+00:00",
+        now_iso="2026-04-11T00:00:00+00:00",
+    )
+
+    assert storage.release_claim(task_id="task-1", client_id="client-a")
+    task = storage.get_task_by_id("task-1")
+    assert task is not None
+    assert task.preprocess_status == "annotated"
+
+
 def test_list_prepared_task_paths_skips_missing_files(tmp_path) -> None:
     storage = DatasetStorage(tmp_path)
     storage.ensure_schema()

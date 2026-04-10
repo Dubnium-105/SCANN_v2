@@ -83,6 +83,34 @@ def test_release_task_lock_route_releases_task_for_next_client(tmp_path, monkeyp
     assert reclaimed.task_id == "PGC 17069"
 
 
+def test_claiming_second_task_releases_previous_task_for_same_client(tmp_path, monkeypatch) -> None:
+    dataset_root = tmp_path / "dataset"
+
+    _touch(dataset_root / "new" / "PGC 17069.fts")
+    _touch(dataset_root / "new" / "PGC 35671.fts")
+
+    monkeypatch.setenv("SCANN_NATIVE_DATASET_ROOT", str(dataset_root))
+
+    first = native_routes.claim_task(
+        task_id="PGC 17069",
+        client_id="client-a",
+        current_user=_annotator(),
+    )
+    assert first.task_id == "PGC 17069"
+
+    second = native_routes.claim_task(
+        task_id="PGC 35671",
+        client_id="client-a",
+        current_user=_annotator(),
+    )
+    assert second.task_id == "PGC 35671"
+
+    tasks = native_routes.list_tasks(client_id="client-a", current_user=_annotator())
+    by_id = {task.task_id: task for task in tasks}
+    assert by_id["PGC 17069"].locked_by_current_client is None
+    assert by_id["PGC 35671"].locked_by_current_client is True
+
+
 def test_heartbeat_route_extends_lock_expiry(tmp_path, monkeypatch) -> None:
     dataset_root = tmp_path / "dataset"
 

@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sqlite3
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -86,6 +87,11 @@ class TaskArtifactRecord:
 
 
 class DatasetStorage:
+    _schema_ready_paths: set[str] = set()
+    _wal_ready_paths: set[str] = set()
+    _schema_ready_lock = threading.Lock()
+    _wal_ready_lock = threading.Lock()
+
     def __init__(
         self,
         dataset_root: Path,
@@ -98,7 +104,12 @@ class DatasetStorage:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(str(self.db_path), timeout=30)
         connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA journal_mode=WAL;")
+        db_key = str(self.db_path.resolve())
+        if db_key not in self._wal_ready_paths:
+            with self._wal_ready_lock:
+                if db_key not in self._wal_ready_paths:
+                    connection.execute("PRAGMA journal_mode=WAL;")
+                    self._wal_ready_paths.add(db_key)
         connection.execute("PRAGMA synchronous=NORMAL;")
         connection.execute("PRAGMA foreign_keys=ON;")
         return connection
@@ -108,6 +119,12 @@ class DatasetStorage:
             self._ensure_schema(connection)
 
     def _ensure_schema(self, connection: sqlite3.Connection) -> None:
+        db_key = str(self.db_path.resolve())
+        if db_key in self._schema_ready_paths:
+            return
+        with self._schema_ready_lock:
+            if db_key in self._schema_ready_paths:
+                return
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS raw_assets (
@@ -194,6 +211,12 @@ class DatasetStorage:
         )
         connection.execute(
             """
+            CREATE INDEX IF NOT EXISTS idx_tasks_claim_client
+            ON tasks(claim_client_id)
+            """
+        )
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS task_artifacts (
                 task_id TEXT NOT NULL,
                 artifact_role TEXT NOT NULL CHECK(
@@ -273,6 +296,7 @@ class DatasetStorage:
             """
         )
         connection.commit()
+        self._schema_ready_paths.add(db_key)
 
     @staticmethod
     def strip_explorer_copy_suffix(stem: str) -> tuple[str, int]:
@@ -1213,7 +1237,11 @@ class DatasetStorage:
                     claim_locked_at = NULL,
                     claim_expires_at = NULL,
                     preprocess_status = CASE
-                        WHEN preprocess_status = 'claimed' AND lower(coalesce(local_annotation_status, '')) = 'annotated'
+                        WHEN preprocess_status = 'claimed'
+                             AND (
+                                 lower(coalesce(local_annotation_status, '')) = 'annotated'
+                                 OR lower(coalesce(online_annotation_status, '')) = 'annotated'
+                             )
                             THEN 'annotated'
                         WHEN preprocess_status = 'claimed'
                             THEN 'ready'
@@ -1224,7 +1252,72 @@ class DatasetStorage:
                 """,
                 (now_iso, now_iso),
             )
+            connection.execute(
+                """
+                WITH ranked_claims AS (
+                    SELECT
+                        task_id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY claim_client_id
+                            ORDER BY claim_locked_at DESC, updated_at DESC, task_id DESC
+                        ) AS claim_rank
+                    FROM tasks
+                    WHERE claim_client_id IS NOT NULL
+                )
+                UPDATE tasks
+                SET claim_client_id = NULL,
+                    claim_locked_at = NULL,
+                    claim_expires_at = NULL,
+                    preprocess_status = CASE
+                        WHEN preprocess_status = 'claimed'
+                             AND (
+                                 lower(coalesce(local_annotation_status, '')) = 'annotated'
+                                 OR lower(coalesce(online_annotation_status, '')) = 'annotated'
+                             )
+                            THEN 'annotated'
+                        WHEN preprocess_status = 'claimed'
+                            THEN 'ready'
+                        ELSE preprocess_status
+                    END,
+                    updated_at = ?
+                WHERE task_id IN (
+                    SELECT task_id FROM ranked_claims WHERE claim_rank > 1
+                )
+                """,
+                (now_iso,),
+            )
             connection.commit()
+
+    @staticmethod
+    def _clear_other_claims_for_client(
+        connection: sqlite3.Connection,
+        *,
+        client_id: str,
+        keep_task_id: str,
+        now_iso: str,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE tasks
+            SET claim_client_id = NULL,
+                claim_locked_at = NULL,
+                claim_expires_at = NULL,
+                preprocess_status = CASE
+                    WHEN preprocess_status = 'claimed'
+                         AND (
+                             lower(coalesce(local_annotation_status, '')) = 'annotated'
+                             OR lower(coalesce(online_annotation_status, '')) = 'annotated'
+                         )
+                        THEN 'annotated'
+                    WHEN preprocess_status = 'claimed'
+                        THEN 'ready'
+                    ELSE preprocess_status
+                END,
+                updated_at = ?
+            WHERE claim_client_id = ? AND task_id != ?
+            """,
+            (now_iso, client_id, keep_task_id),
+        )
 
     def get_claimed_task_by_client(self, client_id: str) -> TaskRecord | None:
         with self._connect() as connection:
@@ -1285,6 +1378,13 @@ class DatasetStorage:
                 """,
                 (client_id, now_iso, expires_at, now_iso, task_id, client_id, now_iso),
             )
+            if int(result.rowcount or 0) > 0:
+                self._clear_other_claims_for_client(
+                    connection,
+                    client_id=client_id,
+                    keep_task_id=task_id,
+                    now_iso=now_iso,
+                )
             connection.commit()
         return int(result.rowcount or 0) > 0
 
@@ -1306,6 +1406,12 @@ class DatasetStorage:
                 WHERE task_id = ?
                 """,
                 (client_id, now, expires_at, now, task_id),
+            )
+            self._clear_other_claims_for_client(
+                connection,
+                client_id=client_id,
+                keep_task_id=task_id,
+                now_iso=now,
             )
             connection.commit()
         return True
@@ -1329,6 +1435,12 @@ class DatasetStorage:
                 """,
                 (expires_at, now, task_id),
             )
+            self._clear_other_claims_for_client(
+                connection,
+                client_id=client_id,
+                keep_task_id=task_id,
+                now_iso=now,
+            )
             connection.commit()
         return True
 
@@ -1337,7 +1449,11 @@ class DatasetStorage:
         with self._connect() as connection:
             self._ensure_schema(connection)
             row = connection.execute(
-                "SELECT claim_client_id, local_annotation_status FROM tasks WHERE task_id = ?",
+                """
+                SELECT claim_client_id, local_annotation_status, online_annotation_status
+                FROM tasks
+                WHERE task_id = ?
+                """,
                 (task_id,),
             ).fetchone()
             if row is None:
@@ -1345,8 +1461,9 @@ class DatasetStorage:
             stored_client = str(row["claim_client_id"] or "")
             if client_id is not None and stored_client and stored_client != client_id:
                 return False
-            annotation_status = str(row["local_annotation_status"] or "").strip().lower()
-            next_status = "annotated" if annotation_status == "annotated" else "ready"
+            local_status = str(row["local_annotation_status"] or "").strip().lower()
+            online_status = str(row["online_annotation_status"] or "").strip().lower()
+            next_status = "annotated" if "annotated" in {local_status, online_status} else "ready"
             connection.execute(
                 """
                 UPDATE tasks
