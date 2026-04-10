@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -8,7 +9,12 @@ import pytest
 from fastapi import HTTPException
 
 from scann.core.dataset_storage import DatasetStorage, RawAssetRecord, TaskRecord
-from scann.native_annotation.annotation_sync_service import AnnotationSyncConfig, AnnotationSyncService
+from scann.native_annotation.annotation_sync_service import (
+    AnnotationSyncConfig,
+    AnnotationSyncResult,
+    AnnotationSyncScheduler,
+    AnnotationSyncService,
+)
 from scann.native_annotation.auth_service import AuthUser
 from scann.native_annotation import routes as native_routes
 
@@ -205,3 +211,41 @@ def test_annotation_sync_routes_report_status_and_require_admin_config(tmp_path,
         native_routes.run_annotation_sync(request=request, full=True, current_user=admin)
     assert not_configured.value.status_code == 400
     assert not_configured.value.detail == "PostgreSQL sync is not configured"
+
+
+def test_annotation_sync_scheduler_runs_once_on_start() -> None:
+    run_started = threading.Event()
+
+    class FakeSyncService:
+        config = AnnotationSyncConfig(
+            enabled=True,
+            database_url="postgresql://example/scann",
+            dataset_id="test-dataset",
+            interval_seconds=3600,
+        )
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def sync_now(self, *, full: bool = False) -> AnnotationSyncResult:
+            self.calls += 1
+            run_started.set()
+            return AnnotationSyncResult(
+                success=True,
+                dataset_id=self.config.dataset_id,
+                started_at="2026-04-10T00:00:00+00:00",
+                finished_at="2026-04-10T00:00:00+00:00",
+                sync_mode="full" if full else "incremental",
+            )
+
+    service = FakeSyncService()
+    scheduler = AnnotationSyncScheduler(service)  # type: ignore[arg-type]
+
+    scheduler.start()
+    try:
+        assert run_started.wait(timeout=1)
+        assert service.calls == 1
+        assert scheduler.last_result is not None
+        assert scheduler.last_result.success is True
+    finally:
+        scheduler.stop()

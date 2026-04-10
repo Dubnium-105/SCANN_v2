@@ -716,6 +716,7 @@ class AnnotationSyncScheduler:
 
     def _run_loop(self) -> None:
         interval = max(1, self._service.config.interval_seconds)
+        self.run_once()
         while not self._stop_event.wait(interval):
             self.run_once()
 
