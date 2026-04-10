@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
@@ -15,6 +15,11 @@ from .annotation_service import (
     AnnotationSaveRequest,
     AnnotationSaveResponse,
     AnnotationService,
+)
+from .annotation_sync_service import (
+    AnnotationSyncResult,
+    AnnotationSyncStatus,
+    build_annotation_sync_service_from_env,
 )
 from .auth_service import (
     AuthUser,
@@ -105,6 +110,10 @@ def get_task_lock_service() -> TaskLockService:
 
 def get_annotation_service() -> AnnotationService:
     return AnnotationService(dataset_root=get_dataset_root())
+
+
+def get_annotation_sync_service():
+    return build_annotation_sync_service_from_env(get_dataset_root())
 
 
 def _require_task_lock_owner(
@@ -211,6 +220,43 @@ def preprocess_dataset(
         generated_marked_crops=report.generated_marked_crops,
         task_count=report.task_count,
     )
+
+
+@api_router.get("/annotation-sync/status", response_model=AnnotationSyncStatus)
+def get_annotation_sync_status(
+    request: Request,
+    current_user: AuthUser = Depends(get_current_user),
+) -> AnnotationSyncStatus:
+    _ = current_user
+    try:
+        service = get_annotation_sync_service()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    scheduler = getattr(request.app.state, "annotation_sync_scheduler", None)
+    return service.status(scheduler=scheduler)
+
+
+@api_router.post("/annotation-sync/run", response_model=AnnotationSyncResult)
+def run_annotation_sync(
+    request: Request,
+    full: bool = False,
+    current_user: AuthUser = Depends(get_current_user),
+) -> AnnotationSyncResult:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can sync annotations")
+
+    try:
+        service = get_annotation_sync_service()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not service.config.configured:
+        raise HTTPException(status_code=400, detail="PostgreSQL sync is not configured")
+
+    scheduler = getattr(request.app.state, "annotation_sync_scheduler", None)
+    if scheduler is not None and getattr(scheduler, "dataset_id", None) == service.dataset_id:
+        return scheduler.run_once(full=full)
+    return service.sync_now(full=full)
 
 
 @api_router.get("/tasks/next", response_model=TaskClaimResponse)

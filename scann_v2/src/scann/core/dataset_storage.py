@@ -949,6 +949,156 @@ class DatasetStorage:
             )
         return revisions
 
+    def list_all_annotation_revisions(self) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            rows = connection.execute(
+                """
+                SELECT
+                    rowid AS storage_rowid,
+                    revision_id,
+                    task_id,
+                    source_view,
+                    parent_revision_id,
+                    rollback_of_revision_id,
+                    submitted_by,
+                    origin,
+                    saved_at,
+                    metadata_json
+                FROM annotation_revisions
+                ORDER BY task_id ASC, rowid ASC
+                """
+            ).fetchall()
+            box_rows = connection.execute(
+                """
+                SELECT revision_id, box_index, x, y, width, height, label, detail_type, confidence
+                FROM annotation_revision_boxes
+                ORDER BY revision_id ASC, box_index ASC
+                """
+            ).fetchall()
+
+        annotations_by_revision: dict[str, list[dict[str, Any]]] = {}
+        for row in box_rows:
+            revision_id = str(row["revision_id"])
+            annotations_by_revision.setdefault(revision_id, []).append(
+                {
+                    "x": float(row["x"]),
+                    "y": float(row["y"]),
+                    "width": float(row["width"]),
+                    "height": float(row["height"]),
+                    "label": row["label"],
+                    "detail_type": row["detail_type"],
+                    "confidence": float(row["confidence"]) if row["confidence"] is not None else 1.0,
+                }
+            )
+
+        revisions: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                metadata = json.loads(str(row["metadata_json"] or "{}"))
+            except Exception:
+                metadata = {}
+            revision_id = str(row["revision_id"])
+            revisions.append(
+                {
+                    "storage_rowid": int(row["storage_rowid"]),
+                    "revision_id": revision_id,
+                    "task_id": str(row["task_id"]),
+                    "source_view": str(row["source_view"]) if row["source_view"] is not None else None,
+                    "parent_revision_id": (
+                        str(row["parent_revision_id"]) if row["parent_revision_id"] is not None else None
+                    ),
+                    "rollback_of_revision_id": (
+                        str(row["rollback_of_revision_id"]) if row["rollback_of_revision_id"] is not None else None
+                    ),
+                    "submitted_by": str(row["submitted_by"]),
+                    "origin": str(row["origin"]),
+                    "saved_at": str(row["saved_at"]),
+                    "metadata": metadata if isinstance(metadata, dict) else {},
+                    "annotations": annotations_by_revision.get(revision_id, []),
+                }
+            )
+        return revisions
+
+    def list_annotation_revisions_after_rowid(self, after_rowid: int = 0) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            rows = connection.execute(
+                """
+                SELECT
+                    rowid AS storage_rowid,
+                    revision_id,
+                    task_id,
+                    source_view,
+                    parent_revision_id,
+                    rollback_of_revision_id,
+                    submitted_by,
+                    origin,
+                    saved_at,
+                    metadata_json
+                FROM annotation_revisions
+                WHERE rowid > ?
+                ORDER BY rowid ASC
+                """,
+                (int(after_rowid),),
+            ).fetchall()
+            revision_ids = [str(row["revision_id"]) for row in rows]
+            box_rows: list[sqlite3.Row] = []
+            if revision_ids:
+                placeholders = ",".join("?" for _ in revision_ids)
+                box_rows = connection.execute(
+                    f"""
+                    SELECT revision_id, box_index, x, y, width, height, label, detail_type, confidence
+                    FROM annotation_revision_boxes
+                    WHERE revision_id IN ({placeholders})
+                    ORDER BY revision_id ASC, box_index ASC
+                    """,
+                    tuple(revision_ids),
+                ).fetchall()
+
+        annotations_by_revision: dict[str, list[dict[str, Any]]] = {}
+        for row in box_rows:
+            revision_id = str(row["revision_id"])
+            annotations_by_revision.setdefault(revision_id, []).append(
+                {
+                    "x": float(row["x"]),
+                    "y": float(row["y"]),
+                    "width": float(row["width"]),
+                    "height": float(row["height"]),
+                    "label": row["label"],
+                    "detail_type": row["detail_type"],
+                    "confidence": float(row["confidence"]) if row["confidence"] is not None else 1.0,
+                }
+            )
+
+        revisions: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                metadata = json.loads(str(row["metadata_json"] or "{}"))
+            except Exception:
+                metadata = {}
+            revision_id = str(row["revision_id"])
+            revisions.append(
+                {
+                    "storage_rowid": int(row["storage_rowid"]),
+                    "revision_id": revision_id,
+                    "task_id": str(row["task_id"]),
+                    "source_view": str(row["source_view"]) if row["source_view"] is not None else None,
+                    "parent_revision_id": (
+                        str(row["parent_revision_id"]) if row["parent_revision_id"] is not None else None
+                    ),
+                    "rollback_of_revision_id": (
+                        str(row["rollback_of_revision_id"]) if row["rollback_of_revision_id"] is not None else None
+                    ),
+                    "submitted_by": str(row["submitted_by"]),
+                    "origin": str(row["origin"]),
+                    "saved_at": str(row["saved_at"]),
+                    "metadata": metadata if isinstance(metadata, dict) else {},
+                    "annotations": annotations_by_revision.get(revision_id, []),
+                }
+            )
+        return revisions
+
     def list_current_annotations(self) -> dict[str, dict[str, Any]]:
         with self._connect() as connection:
             self._ensure_schema(connection)

@@ -34,6 +34,8 @@
   - 返回 FITS 原文件或渲染后的 PNG
 - `annotation_service.py`
   - 标注保存、历史查询、修订详情、回滚
+- `annotation_sync_service.py`
+  - 将当前标注与修订历史同步到 PostgreSQL，仅同步标注结构化数据，不同步 FITS 图像文件
 - `routes.py`
   - 对外 API 路由
 
@@ -55,6 +57,8 @@
 - `/api/annotations/{task_id}/history/{revision_id}`
 - `/api/annotations/{task_id}/rollback/{revision_id}`
 - `/api/dataset/preprocess`
+- `/api/annotation-sync/status`
+- `/api/annotation-sync/run`
 
 ## 4. 数据集与预处理
 
@@ -140,7 +144,67 @@
 
 这避免了不同入口各自扫目录、再按文件名猜任务的漂移问题。
 
-## 8. 本地启动
+## 8. PostgreSQL 标注备份与同步
+
+平台支持把数据集的标注信息同步到指定 PostgreSQL 数据库，目标是远端备份与多环境共享标注结果。同步范围是：
+
+- 新增的 revision 历史
+- 新增 revision 的 bbox 明细
+- 受新增 revision 影响的当前任务标注摘要
+- 受新增 revision 影响的当前 bbox 标注
+- 同步运行记录
+
+不会同步 FITS 图像二进制，也不会同步 `dataset_raw/*` 原始文件路径。
+
+同步默认借用标注平台的 revision 机制做增量备份。远端会在 `annotation_sync_state` 中记录当前数据集已经同步到的本地 `revision rowid`，后续定时或手动同步只上传这个游标之后新增的 revision。没有新增 revision 的定时同步不会反复写入全量标注数据。
+
+### 8.1 环境变量
+
+```powershell
+$env:SCANN_ANNOTATION_SYNC_DATABASE_URL = "postgresql://user:password@host:5432/scann"
+$env:SCANN_ANNOTATION_SYNC_DATASET_ID = "observatory-2026-04"
+$env:SCANN_ANNOTATION_SYNC_SCHEMA = "scann_backup"
+```
+
+可选启用定时同步：
+
+```powershell
+$env:SCANN_ANNOTATION_SYNC_ENABLED = "true"
+$env:SCANN_ANNOTATION_SYNC_INTERVAL_SECONDS = "300"
+```
+
+字段说明：
+
+- `SCANN_ANNOTATION_SYNC_DATABASE_URL`：PostgreSQL DSN，也可用 `SCANN_ANNOTATION_SYNC_PG_DSN`
+- `SCANN_ANNOTATION_SYNC_DATASET_ID`：远端数据集主键，生产部署建议显式设置
+- `SCANN_ANNOTATION_SYNC_SCHEMA`：远端 schema，默认 `public`
+- `SCANN_ANNOTATION_SYNC_ENABLED`：是否在后端启动时开启后台定时同步
+- `SCANN_ANNOTATION_SYNC_INTERVAL_SECONDS`：定时同步间隔，必须大于 `0` 才会启动后台线程
+- `SCANN_ANNOTATION_SYNC_CONNECT_TIMEOUT_SECONDS`：PG 连接超时，默认 `10`
+
+### 8.2 手动同步
+
+管理员可以调用：
+
+```text
+POST /api/annotation-sync/run
+```
+
+默认是增量同步。需要重新回填远端表时可显式执行：
+
+```text
+POST /api/annotation-sync/run?full=true
+```
+
+同步状态可以通过：
+
+```text
+GET /api/annotation-sync/status
+```
+
+远端写入使用幂等 upsert，重复执行不会重复生成相同 revision。
+
+## 9. 本地启动
 
 ### 后端
 
@@ -161,7 +225,7 @@ npm ci
 npm run dev
 ```
 
-## 9. 文档维护说明
+## 10. 文档维护说明
 
 如果原生标注平台的任务流、数据库结构或预处理约定发生变化，应优先更新：
 
