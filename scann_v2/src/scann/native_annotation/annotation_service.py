@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 from math import sqrt
 from pathlib import Path
@@ -242,17 +243,71 @@ class AnnotationService:
             changed.append("detail_type")
         return changed
 
+    @staticmethod
+    def _bbox_signature(annotation: AnnotationBox) -> tuple[float, float, float, float, Optional[str], Optional[str]]:
+        return (
+            round(annotation.x, 6),
+            round(annotation.y, 6),
+            round(annotation.width, 6),
+            round(annotation.height, 6),
+            annotation.label,
+            annotation.detail_type,
+        )
+
+    @staticmethod
+    def _bbox_cell_range(annotation: AnnotationBox, *, cell_size: float = 64.0, padding: float = 12.0) -> tuple[range, range]:
+        x1 = max(0.0, annotation.x - padding)
+        y1 = max(0.0, annotation.y - padding)
+        x2 = max(x1, annotation.x + annotation.width + padding)
+        y2 = max(y1, annotation.y + annotation.height + padding)
+        return (
+            range(int(x1 // cell_size), int(x2 // cell_size) + 1),
+            range(int(y1 // cell_size), int(y2 // cell_size) + 1),
+        )
+
     def _build_diff(
         self,
         before: list[AnnotationBox],
         after: list[AnnotationBox],
+        *,
+        include_items: bool = True,
     ) -> tuple[AnnotationChangeSummary, list[AnnotationDiffItem]]:
         unmatched_before: set[int] = set(range(len(before)))
         unmatched_after: set[int] = set(range(len(after)))
 
-        candidate_pairs: list[tuple[float, int, int]] = []
+        before_by_signature: dict[
+            tuple[float, float, float, float, Optional[str], Optional[str]],
+            deque[int],
+        ] = defaultdict(deque)
         for before_index, before_ann in enumerate(before):
-            for after_index, after_ann in enumerate(after):
+            before_by_signature[self._bbox_signature(before_ann)].append(before_index)
+
+        for after_index, after_ann in enumerate(after):
+            matching_before = before_by_signature.get(self._bbox_signature(after_ann))
+            if not matching_before:
+                continue
+            before_index = matching_before.popleft()
+            unmatched_before.discard(before_index)
+            unmatched_after.discard(after_index)
+
+        before_grid: dict[tuple[int, int], set[int]] = defaultdict(set)
+        for before_index in unmatched_before:
+            x_cells, y_cells = self._bbox_cell_range(before[before_index])
+            for cell_x in x_cells:
+                for cell_y in y_cells:
+                    before_grid[(cell_x, cell_y)].add(before_index)
+
+        candidate_pairs: list[tuple[float, int, int]] = []
+        for after_index in unmatched_after:
+            after_ann = after[after_index]
+            candidate_before_indices: set[int] = set()
+            x_cells, y_cells = self._bbox_cell_range(after_ann)
+            for cell_x in x_cells:
+                for cell_y in y_cells:
+                    candidate_before_indices.update(before_grid.get((cell_x, cell_y), set()))
+
+            for before_index in candidate_before_indices:
+                before_ann = before[before_index]
                 iou = self._bbox_iou(before_ann, after_ann)
                 distance = self._center_distance(before_ann, after_ann)
                 similar_enough = iou > 0.12 or distance <= 12.0
@@ -266,6 +321,7 @@ class AnnotationService:
         candidate_pairs.sort(key=lambda item: item[0], reverse=True)
 
         modified_items: list[AnnotationDiffItem] = []
+        modified_count = 0
         for score, before_index, after_index in candidate_pairs:
             if before_index not in unmatched_before or after_index not in unmatched_after:
                 continue
@@ -276,30 +332,35 @@ class AnnotationService:
                 continue
             unmatched_before.remove(before_index)
             unmatched_after.remove(after_index)
-            modified_items.append(
-                AnnotationDiffItem(
-                    change_type="modified",
-                    before=before[before_index],
-                    after=after[after_index],
-                    changed_fields=changed_fields,
-                    match_score=round(score, 5),
+            modified_count += 1
+            if include_items:
+                modified_items.append(
+                    AnnotationDiffItem(
+                        change_type="modified",
+                        before=before[before_index],
+                        after=after[after_index],
+                        changed_fields=changed_fields,
+                        match_score=round(score, 5),
+                    )
                 )
-            )
 
-        added_items = [
-            AnnotationDiffItem(change_type="added", after=after[index])
-            for index in sorted(unmatched_after)
-        ]
-        removed_items = [
-            AnnotationDiffItem(change_type="removed", before=before[index])
-            for index in sorted(unmatched_before)
-        ]
+        added_items: list[AnnotationDiffItem] = []
+        removed_items: list[AnnotationDiffItem] = []
+        if include_items:
+            added_items = [
+                AnnotationDiffItem(change_type="added", after=after[index])
+                for index in sorted(unmatched_after)
+            ]
+            removed_items = [
+                AnnotationDiffItem(change_type="removed", before=before[index])
+                for index in sorted(unmatched_before)
+            ]
 
         changed_items = [*modified_items, *added_items, *removed_items]
         summary = AnnotationChangeSummary(
-            added=len(added_items),
-            removed=len(removed_items),
-            modified=len(modified_items),
+            added=len(unmatched_after),
+            removed=len(unmatched_before),
+            modified=modified_count,
         )
         return summary, changed_items
 
@@ -348,6 +409,7 @@ class AnnotationService:
             summary, _ = self._build_diff(
                 before=parent.annotations if parent else [],
                 after=revision.annotations,
+                include_items=False,
             )
             items.append(
                 AnnotationHistoryItem(

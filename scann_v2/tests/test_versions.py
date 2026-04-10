@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from scann.core.dataset_storage import DatasetStorage
 from scann.core.fits_annotation_storage import load_v2_annotation_document
 from scann.native_annotation.app import app
+from scann.native_annotation.annotation_service import AnnotationBox, AnnotationService
 
 
 def _touch(path: Path) -> None:
@@ -163,3 +164,32 @@ def test_annotation_history_accepts_uploaded_aligned_crop_task_id(tmp_path, monk
     assert history_response.status_code == 200
     assert history_response.json()["task_id"] == canonical_task_id
     assert len(history_response.json()["revisions"]) == 1
+
+
+def test_large_annotation_diff_avoids_all_pairs_matching(tmp_path, monkeypatch) -> None:
+    service = AnnotationService(tmp_path)
+    before = [
+        AnnotationBox(x=float(index * 20), y=10.0, width=6.0, height=6.0, label="real")
+        for index in range(1200)
+    ]
+    after = [AnnotationBox.model_validate(item.model_dump()) for item in before]
+    after[777] = AnnotationBox(x=before[777].x, y=before[777].y, width=6.0, height=6.0, label="bogus")
+
+    iou_calls = 0
+    original_iou = service._bbox_iou
+
+    def counted_iou(left: AnnotationBox, right: AnnotationBox) -> float:
+        nonlocal iou_calls
+        iou_calls += 1
+        return original_iou(left, right)
+
+    monkeypatch.setattr(service, "_bbox_iou", counted_iou)
+
+    summary, changed_items = service._build_diff(before, after)
+
+    assert summary.added == 0
+    assert summary.removed == 0
+    assert summary.modified == 1
+    assert len(changed_items) == 1
+    assert changed_items[0].changed_fields == ["label"]
+    assert iou_calls < 50

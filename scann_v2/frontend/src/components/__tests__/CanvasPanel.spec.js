@@ -510,6 +510,35 @@ describe('CanvasPanel', () => {
     expect(polygonItems.length).toBeGreaterThanOrEqual(1)
   })
 
+  it('virtualizes large annotation side lists while retaining scroll access', async () => {
+    const wrapper = mount(CanvasPanel, {
+      global: {
+        stubs: globalStubs,
+      },
+    })
+
+    await flushPromises()
+
+    const stage = wrapper.get('[data-testid="stage"]')
+    await wrapper.get('[data-testid="tool-point"]').trigger('click')
+    for (let index = 0; index < 120; index += 1) {
+      await stage.trigger('mouseup', { clientX: 10 + index, clientY: 20 + index })
+    }
+    await flushPromises()
+
+    const annotationList = wrapper.get('[data-testid="annotation-list"]')
+    expect(wrapper.findAll('[data-testid="annotation-item"]').length).toBeLessThan(40)
+
+    annotationList.element.scrollTop = 70 * 36
+    await annotationList.trigger('scroll')
+    await flushPromises()
+
+    const visibleIds = wrapper
+      .findAll('[data-testid="annotation-item"]')
+      .map((item) => item.attributes('data-ann-display-id'))
+    expect(visibleIds).toContain('A0071')
+  })
+
   it('updates selected annotation label to target type from annotation list', async () => {
     const wrapper = mount(CanvasPanel, {
       global: {

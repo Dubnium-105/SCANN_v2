@@ -63,20 +63,31 @@
           删除 {{ selectedRevision.change_summary?.removed || 0 }}
         </p>
 
-        <ul class="mt-2 max-h-36 overflow-auto space-y-1">
+        <p v-if="changedItems.length" class="text-[10px] mt-1 text-slate-500">
+          共 {{ changedItems.length }} 条变更明细
+        </p>
+        <div
+          ref="changedItemsViewportRef"
+          class="mt-2 max-h-36 overflow-auto"
+          data-testid="history-detail-list"
+          @scroll="onChangedItemsScroll"
+        >
+          <ul class="relative" :style="changedItemsSpacerStyle">
           <li
-            v-for="(item, index) in selectedRevision.changed_items || []"
-            :key="`${item.change_type}-${index}`"
-            class="text-[10px] rounded border border-slate-800 px-2 py-1 text-slate-400"
+            v-for="entry in virtualChangedItems"
+            :key="`${entry.item.change_type}-${entry.index}`"
+            class="absolute left-0 right-0 text-[10px] rounded border border-slate-800 px-2 py-1 text-slate-400"
+            :style="{ transform: `translateY(${entry.top}px)` }"
           >
             <span
-              :class="item.change_type === 'added' ? 'text-emerald-300' : item.change_type === 'removed' ? 'text-rose-300' : 'text-amber-300'"
+              :class="entry.item.change_type === 'added' ? 'text-emerald-300' : entry.item.change_type === 'removed' ? 'text-rose-300' : 'text-amber-300'"
             >
-              {{ item.change_type === 'added' ? '新增' : item.change_type === 'removed' ? '删除' : item.change_type === 'modified' ? '修改' : item.change_type }}
+              {{ entry.item.change_type === 'added' ? '新增' : entry.item.change_type === 'removed' ? '删除' : entry.item.change_type === 'modified' ? '修改' : entry.item.change_type }}
             </span>
-            <span v-if="item.changed_fields?.length"> · {{ item.changed_fields.join(',') }}</span>
+            <span v-if="entry.item.changed_fields?.length"> · {{ entry.item.changed_fields.join(',') }}</span>
           </li>
-        </ul>
+          </ul>
+        </div>
 
         <button
           v-if="userRole === 'admin'"
@@ -95,7 +106,7 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 import {
   fetchAnnotationHistory,
@@ -129,10 +140,49 @@ const isRollbackLoading = ref(false)
 const rollbackMessage = ref('')
 const rollbackError = ref('')
 const lastTaskId = ref('')
+const changedItemsViewportRef = ref(null)
+const changedItemsScrollTop = ref(0)
+const CHANGED_ITEM_ROW_HEIGHT = 28
+const CHANGED_ITEM_VIEWPORT_HEIGHT = 144
+const CHANGED_ITEM_OVERSCAN = 8
+
+const changedItems = computed(() => selectedRevision.value?.changed_items || [])
+const changedItemsSpacerStyle = computed(() => ({
+  height: `${changedItems.value.length * CHANGED_ITEM_ROW_HEIGHT}px`,
+}))
+const virtualChangedItems = computed(() => {
+  const start = Math.max(
+    0,
+    Math.floor(changedItemsScrollTop.value / CHANGED_ITEM_ROW_HEIGHT) - CHANGED_ITEM_OVERSCAN,
+  )
+  const visibleCount = Math.ceil(CHANGED_ITEM_VIEWPORT_HEIGHT / CHANGED_ITEM_ROW_HEIGHT) + CHANGED_ITEM_OVERSCAN * 2
+  const end = Math.min(changedItems.value.length, start + visibleCount)
+  const entries = []
+  for (let index = start; index < end; index += 1) {
+    entries.push({
+      index,
+      item: changedItems.value[index],
+      top: index * CHANGED_ITEM_ROW_HEIGHT,
+    })
+  }
+  return entries
+})
+
+function resetChangedItemsScroll() {
+  changedItemsScrollTop.value = 0
+  if (changedItemsViewportRef.value) {
+    changedItemsViewportRef.value.scrollTop = 0
+  }
+}
+
+function onChangedItemsScroll(event) {
+  changedItemsScrollTop.value = Number(event.target?.scrollTop || 0)
+}
 
 function clearSelection() {
   selectedRevisionId.value = ''
   selectedRevision.value = null
+  resetChangedItemsScroll()
   rollbackMessage.value = ''
   rollbackError.value = ''
   emit('revision-cleared')
@@ -149,6 +199,7 @@ async function selectRevision(revisionId) {
   try {
     const detail = await fetchAnnotationRevision(props.taskId, revisionId)
     selectedRevision.value = detail
+    resetChangedItemsScroll()
     emit('revision-selected', detail)
   } catch (err) {
     selectedRevision.value = null

@@ -653,41 +653,53 @@
             </div>
 
             <p class="text-[11px] text-slate-200">Annotations</p>
-            <ul data-testid="annotation-list" class="max-h-28 overflow-auto space-y-1">
-              <li v-for="ann in annotations" :key="`list-${ann.id}`">
-                <div class="flex items-center gap-1">
-                  <button
-                    data-testid="annotation-item"
-                    class="flex-1 text-left text-[11px] px-2 py-1 rounded border"
-                    :class="selectedAnnotationId === ann.id ? 'border-sky-500 text-sky-200 ring-1 ring-sky-500/30' : 'border-slate-700 text-slate-300'"
-                    :style="getAnnotationItemStyle(ann, selectedAnnotationId === ann.id)"
-                    :data-ann-id="ann.id"
-                    :data-ann-display-id="ann.display_id"
-                    :data-ann-type="ann.type"
-                    :data-ann-label="ann.label"
-                    @click="selectAnnotation(ann.id)"
-                  >
-                      <span class="inline-flex items-center gap-2">
-                        <span
-                          class="inline-block w-2 h-2 rounded-full"
-                          :style="{ backgroundColor: getAnnotationColor(ann) }"
-                        />
-                        <span class="font-semibold">{{ ann.display_id }}</span>
-                        <span>{{ ann.type }} · {{ ann.detail_type ? ann.detail_type : ann.label }}</span>
-                      </span>
-                  </button>
-                  <button
-                    data-testid="annotation-remove"
-                    class="text-[10px] px-2 py-1 rounded border hover:bg-rose-900/20"
-                    :class="pendingDeleteAnnotationId === ann.id ? 'border-rose-500 text-rose-100 bg-rose-900/30' : 'border-rose-800 text-rose-300'"
-                    title="删除该标注"
-                    @click.stop="removeAnnotation(ann.id)"
-                  >
-                    {{ pendingDeleteAnnotationId === ann.id ? '确认删除' : '删除' }}
-                  </button>
-                </div>
-              </li>
-            </ul>
+            <div
+              ref="annotationListViewportRef"
+              data-testid="annotation-list"
+              class="max-h-28 overflow-auto"
+              @scroll="onAnnotationListScroll"
+            >
+              <ul class="relative" :style="annotationListSpacerStyle">
+                <li
+                  v-for="entry in virtualAnnotationItems"
+                  :key="`list-${entry.annotation.id}`"
+                  class="absolute left-0 right-0"
+                  :style="{ transform: `translateY(${entry.top}px)` }"
+                >
+                  <div class="flex items-center gap-1">
+                    <button
+                      data-testid="annotation-item"
+                      class="flex-1 text-left text-[11px] px-2 py-1 rounded border"
+                      :class="selectedAnnotationId === entry.annotation.id ? 'border-sky-500 text-sky-200 ring-1 ring-sky-500/30' : 'border-slate-700 text-slate-300'"
+                      :style="getAnnotationItemStyle(entry.annotation, selectedAnnotationId === entry.annotation.id)"
+                      :data-ann-id="entry.annotation.id"
+                      :data-ann-display-id="entry.annotation.display_id"
+                      :data-ann-type="entry.annotation.type"
+                      :data-ann-label="entry.annotation.label"
+                      @click="selectAnnotation(entry.annotation.id)"
+                    >
+                        <span class="inline-flex items-center gap-2">
+                          <span
+                            class="inline-block w-2 h-2 rounded-full"
+                            :style="{ backgroundColor: getAnnotationColor(entry.annotation) }"
+                          />
+                          <span class="font-semibold">{{ entry.annotation.display_id }}</span>
+                          <span>{{ entry.annotation.type }} · {{ entry.annotation.detail_type ? entry.annotation.detail_type : entry.annotation.label }}</span>
+                        </span>
+                    </button>
+                    <button
+                      data-testid="annotation-remove"
+                      class="text-[10px] px-2 py-1 rounded border hover:bg-rose-900/20"
+                      :class="pendingDeleteAnnotationId === entry.annotation.id ? 'border-rose-500 text-rose-100 bg-rose-900/30' : 'border-rose-800 text-rose-300'"
+                      title="删除该标注"
+                      @click.stop="removeAnnotation(entry.annotation.id)"
+                    >
+                      {{ pendingDeleteAnnotationId === entry.annotation.id ? '确认删除' : '删除' }}
+                    </button>
+                  </div>
+                </li>
+              </ul>
+            </div>
 
             <label class="text-[11px] text-slate-300 block">
               Target Type (目标类型)
@@ -807,6 +819,11 @@ const undoDeleteMessage = ref('')
 const lastRemovedAnnotation = ref(null)
 const lastRemovedIndex = ref(-1)
 const pendingDeleteAnnotationId = ref('')
+const annotationListViewportRef = ref(null)
+const annotationListScrollTop = ref(0)
+const ANNOTATION_LIST_ROW_HEIGHT = 36
+const ANNOTATION_LIST_VIEWPORT_HEIGHT = 112
+const ANNOTATION_LIST_OVERSCAN = 8
 let pendingDeleteTimerId = null
 const fitsCanvasRef = ref(null)
 const canvasHostRef = ref(null)
@@ -843,6 +860,28 @@ const taskProgressText = computed(() => {
     return '0 / 0'
   }
   return `${currentTaskIndex.value + 1} / ${taskList.value.length}`
+})
+
+const annotationListSpacerStyle = computed(() => ({
+  height: `${annotations.value.length * ANNOTATION_LIST_ROW_HEIGHT}px`,
+}))
+
+const virtualAnnotationItems = computed(() => {
+  const start = Math.max(
+    0,
+    Math.floor(annotationListScrollTop.value / ANNOTATION_LIST_ROW_HEIGHT) - ANNOTATION_LIST_OVERSCAN,
+  )
+  const visibleCount = Math.ceil(ANNOTATION_LIST_VIEWPORT_HEIGHT / ANNOTATION_LIST_ROW_HEIGHT) + ANNOTATION_LIST_OVERSCAN * 2
+  const end = Math.min(annotations.value.length, start + visibleCount)
+  const entries = []
+  for (let index = start; index < end; index += 1) {
+    entries.push({
+      index,
+      annotation: annotations.value[index],
+      top: index * ANNOTATION_LIST_ROW_HEIGHT,
+    })
+  }
+  return entries
 })
 
 const blinkViewLabels = {
@@ -1988,6 +2027,35 @@ function getAnnotationItemStyle(annotation, isSelected) {
   }
 }
 
+function onAnnotationListScroll(event) {
+  annotationListScrollTop.value = Number(event.target?.scrollTop || 0)
+}
+
+function scrollAnnotationIntoListView(annotationId) {
+  const index = annotations.value.findIndex((item) => item.id === annotationId)
+  if (index < 0 || !annotationListViewportRef.value) {
+    return
+  }
+  const itemTop = index * ANNOTATION_LIST_ROW_HEIGHT
+  const itemBottom = itemTop + ANNOTATION_LIST_ROW_HEIGHT
+  const viewportTop = Number(annotationListViewportRef.value.scrollTop || 0)
+  const viewportBottom = viewportTop + ANNOTATION_LIST_VIEWPORT_HEIGHT
+  let nextTop = viewportTop
+  if (itemTop < viewportTop) {
+    nextTop = itemTop
+  } else if (itemBottom > viewportBottom) {
+    nextTop = itemBottom - ANNOTATION_LIST_VIEWPORT_HEIGHT
+  } else {
+    return
+  }
+  annotationListScrollTop.value = nextTop
+  nextTick(() => {
+    if (annotationListViewportRef.value) {
+      annotationListViewportRef.value.scrollTop = nextTop
+    }
+  })
+}
+
 function selectAnnotation(annotationId) {
   selectedAnnotationId.value = annotationId
   const selected = annotations.value.find((item) => item.id === annotationId)
@@ -1996,6 +2064,7 @@ function selectAnnotation(annotationId) {
   } else {
     selectedLabel.value = 'Unlabeled'
   }
+  scrollAnnotationIntoListView(annotationId)
 }
 
 function removeAnnotation(annotationId) {

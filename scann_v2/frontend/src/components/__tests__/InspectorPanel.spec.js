@@ -3,7 +3,10 @@ import { flushPromises, mount } from '@vue/test-utils'
 import InspectorPanel from '../InspectorPanel.vue'
 
 describe('InspectorPanel', () => {
+  let revisionChangedItems = []
+
   beforeEach(() => {
+    revisionChangedItems = []
     globalThis.fetch = vi.fn(async (url, options) => {
       if (String(url).includes('/rollback/')) {
         return {
@@ -41,8 +44,8 @@ describe('InspectorPanel', () => {
             submitted_by: 'annotator',
             saved_at: '2026-03-19T21:00:00+00:00',
             annotations: [],
-            change_summary: { added: 1, modified: 0, removed: 0 },
-            changed_items: [],
+            change_summary: { added: revisionChangedItems.length || 1, modified: 0, removed: 0 },
+            changed_items: revisionChangedItems,
           }),
         }
       }
@@ -111,5 +114,33 @@ describe('InspectorPanel', () => {
       expect.objectContaining({ method: 'POST' }),
     )
     expect(wrapper.emitted('history-mutated')).toBeTruthy()
+  })
+
+  it('virtualizes large revision detail lists while retaining scroll access', async () => {
+    revisionChangedItems = Array.from({ length: 500 }, (_, index) => ({
+      change_type: 'added',
+      changed_fields: [`field-${index}`],
+    }))
+
+    const wrapper = mount(InspectorPanel, {
+      props: {
+        taskId: 'PGC 17069',
+        refreshKey: 0,
+      },
+    })
+
+    await flushPromises()
+    await wrapper.get('[data-testid="history-item"] button').trigger('click')
+    await flushPromises()
+
+    const detailList = wrapper.get('[data-testid="history-detail-list"]')
+    expect(wrapper.text()).toContain('500')
+    expect(detailList.findAll('li').length).toBeLessThan(50)
+    expect(wrapper.text()).toContain('field-0')
+
+    detailList.element.scrollTop = 400 * 28
+    await detailList.trigger('scroll')
+
+    expect(wrapper.text()).toContain('field-400')
   })
 })
