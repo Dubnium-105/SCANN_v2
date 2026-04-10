@@ -1,0 +1,25 @@
+# Docker deployment local files (do not track)
+
+# Secrets / user-specific env
+.env
+.env.*
+!.env.example
+
+# Build and package artifacts
+dist/
+runtime/
+*.tar
+*.tar.gz
+*.tgz
+
+# Local mounted data (prevent dataset/user data loss from git operations)
+volumes/
+data/
+uploads/
+logs/
+
+# OS/editor temp files
+.DS_Store
+Thumbs.db
+*.tmp
+*.bak

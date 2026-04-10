@@ -188,3 +188,19 @@ docker/runtime/
 docker/*.tar.gz
 docker/*.tgz
 docker/.env
+
+# ============================================
+# Docker ����ʱ�������ݺ��û���Ϣ
+# ============================================
+docker/.env.*
+!docker/.env.example
+docker/volumes/
+docker/data/
+docker/uploads/
+docker/logs/
+
+# �����û������ļ������ڱ���������
+*.local.json
+*.local.yaml
+*.local.yml
+*.local.toml
