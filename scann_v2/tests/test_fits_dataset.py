@@ -353,6 +353,54 @@ class TestFitsDenseDetectionDataset:
         assert np.sum(targets["bbox_mask"]) == 1.0
         assert float(np.max(targets["heatmap"])) == 1.0
 
+    def test_disappeared_detail_types_do_not_create_dense_positive_targets(self, tmp_path):
+        new_dir = tmp_path / "new"
+        old_dir = tmp_path / "old"
+        new_dir.mkdir()
+        old_dir.mkdir()
+
+        new_file = new_dir / "PAIR_A.fts"
+        old_file = old_dir / "PAIR_A.fts"
+        new_file.write_bytes(b"new")
+        old_file.write_bytes(b"old")
+
+        annotations = {
+            "images": [
+                {
+                    "id": "PAIR_A",
+                    "annotations": [
+                        {
+                            "x": 4,
+                            "y": 4,
+                            "width": 8,
+                            "height": 8,
+                            "detail_type": "disappeared_asteroid",
+                        },
+                        {
+                            "x": 20,
+                            "y": 20,
+                            "width": 8,
+                            "height": 8,
+                            "detail_type": "asteroid",
+                        },
+                    ],
+                }
+            ]
+        }
+        ann_file = tmp_path / "annotations.json"
+        ann_file.write_text(json.dumps(annotations), encoding="utf-8")
+
+        mock_new = np.random.rand(32, 32).astype(np.float32)
+        mock_old = np.random.rand(32, 32).astype(np.float32)
+
+        with patch("scann.core.fits_io.read_fits") as mock_read_fits:
+            mock_read_fits.side_effect = [Mock(data=mock_new), Mock(data=mock_old)]
+            dataset = FitsDenseDetectionDataset(dataset_root=str(tmp_path), patch_size=16)
+            _input_image, targets = dataset[0]
+
+        assert np.sum(targets["bbox_mask"]) == 1.0
+        assert float(np.max(targets["heatmap"])) == 1.0
+
     def test_invalid_annotations_are_skipped_with_logging(self, tmp_path, caplog):
         new_dir = tmp_path / "new"
         old_dir = tmp_path / "old"

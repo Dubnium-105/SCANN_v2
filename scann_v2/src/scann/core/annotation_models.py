@@ -28,11 +28,14 @@ class DetailType(str, Enum):
         variable_star  - 周期/非周期变星
 
     B. 假类 (BOGUS):
-        satellite_trail     - 人造卫星划过轨迹
-        noise               - 图像噪点/热点
-        diffraction_spike   - 衍射芒
-        cmos_condensation   - 传感器结霜伪影
-        corresponding       - 新旧图均有，亮度差异大/对齐后旋转等
+        satellite_trail      - 人造卫星划过轨迹
+        noise                - 图像噪点/热点
+        diffraction_spike    - 衍射芒
+        cmos_condensation    - 传感器结霜伪影
+        corresponding        - 新旧图均有，亮度差异大/对齐后旋转等
+        disappeared_asteroid - 旧图有目标，新图无目标，多为小行星飞离
+        disappeared_star     - 旧图是恒星，新图缺失，多为天气原因
+        disappeared_galaxy   - 旧图是星系，新图缺失，多为天气原因
     """
     # A. 真类
     ASTEROID = "asteroid"
@@ -45,6 +48,9 @@ class DetailType(str, Enum):
     DIFFRACTION_SPIKE = "diffraction_spike"
     CMOS_CONDENSATION = "cmos_condensation"
     CORRESPONDING = "corresponding"
+    DISAPPEARED_ASTEROID = "disappeared_asteroid"
+    DISAPPEARED_STAR = "disappeared_star"
+    DISAPPEARED_GALAXY = "disappeared_galaxy"
 
 
 # 类型→大类标签映射
@@ -57,6 +63,9 @@ DETAIL_TYPE_TO_LABEL: dict[DetailType, AnnotationLabel] = {
     DetailType.DIFFRACTION_SPIKE: AnnotationLabel.BOGUS,
     DetailType.CMOS_CONDENSATION: AnnotationLabel.BOGUS,
     DetailType.CORRESPONDING: AnnotationLabel.BOGUS,
+    DetailType.DISAPPEARED_ASTEROID: AnnotationLabel.BOGUS,
+    DetailType.DISAPPEARED_STAR: AnnotationLabel.BOGUS,
+    DetailType.DISAPPEARED_GALAXY: AnnotationLabel.BOGUS,
 }
 
 # 详细类型显示文本
@@ -64,14 +73,17 @@ DETAIL_TYPE_DISPLAY: dict[DetailType, str] = {
     DetailType.ASTEROID: "小行星 ★",
     DetailType.SUPERNOVA: "超新星 💥",
     DetailType.VARIABLE_STAR: "变星 ✦",
+    DetailType.DISAPPEARED_ASTEROID: "消失小行星",
     DetailType.SATELLITE_TRAIL: "卫星线 🛰️",
     DetailType.NOISE: "噪点 ⚡",
     DetailType.DIFFRACTION_SPIKE: "星芒 ✨",
     DetailType.CMOS_CONDENSATION: "CMOS结霜 ❄️",
     DetailType.CORRESPONDING: "有对应 🔀",
+    DetailType.DISAPPEARED_STAR: "消失恒星",
+    DetailType.DISAPPEARED_GALAXY: "消失星系",
 }
 
-# 快捷键映射: Y1-Y3 → 真子类型, N1-N5 → 假子类型
+# 快捷键映射: Y1-Y3 → 真子类型, N1-N8 → 假子类型
 SHORTCUT_TO_DETAIL_TYPE: dict[str, DetailType] = {
     "Y1": DetailType.ASTEROID,
     "Y2": DetailType.SUPERNOVA,
@@ -81,20 +93,26 @@ SHORTCUT_TO_DETAIL_TYPE: dict[str, DetailType] = {
     "N3": DetailType.DIFFRACTION_SPIKE,
     "N4": DetailType.CMOS_CONDENSATION,
     "N5": DetailType.CORRESPONDING,
+    "N6": DetailType.DISAPPEARED_ASTEROID,
+    "N7": DetailType.DISAPPEARED_STAR,
+    "N8": DetailType.DISAPPEARED_GALAXY,
 }
 
 # 详细类型颜色映射
 DETAIL_TYPE_COLOR: dict[DetailType, str] = {
     # A. 真类 - 绿色系
-    DetailType.ASTEROID: "#2E7D32",         # 深绿
-    DetailType.SUPERNOVA: "#00E676",        # 鲜绿
-    DetailType.VARIABLE_STAR: "#69F0AE",    # 浅绿
+    DetailType.ASTEROID: "#2E7D32",               # 深绿
+    DetailType.SUPERNOVA: "#00E676",              # 鲜绿
+    DetailType.VARIABLE_STAR: "#69F0AE",          # 浅绿
     # B. 假类 - 红色/橙色/灰色系
-    DetailType.SATELLITE_TRAIL: "#C62828",  # 深红
-    DetailType.NOISE: "#EF5350",             # 橙红
-    DetailType.DIFFRACTION_SPIKE: "#FF9800",# 橙色
-    DetailType.CMOS_CONDENSATION: "#FFB74D",# 灰橙
-    DetailType.CORRESPONDING: "#BDBDBD",     # 灰色
+    DetailType.SATELLITE_TRAIL: "#C62828",       # 深红
+    DetailType.NOISE: "#EF5350",                 # 橙红
+    DetailType.DIFFRACTION_SPIKE: "#FF9800",     # 橙色
+    DetailType.CMOS_CONDENSATION: "#FFB74D",     # 灰橙
+    DetailType.CORRESPONDING: "#BDBDBD",         # 灰色
+    DetailType.DISAPPEARED_ASTEROID: "#D946EF",  # 洋红
+    DetailType.DISAPPEARED_STAR: "#8E24AA",      # 紫红
+    DetailType.DISAPPEARED_GALAXY: "#6D4C41",    # 棕灰
 }
 
 # 默认颜色（未标注）

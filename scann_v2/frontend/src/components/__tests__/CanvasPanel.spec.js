@@ -503,6 +503,42 @@ describe('CanvasPanel', () => {
     expect(wrapper.findAll('[data-testid="annotation-item"]')[0].attributes('data-ann-label')).toBe('real')
   })
 
+  it('supports disappeared target label options and keyboard shortcuts', async () => {
+    const wrapper = mount(CanvasPanel, {
+      global: {
+        stubs: globalStubs,
+      },
+    })
+
+    await flushPromises()
+
+    const stage = wrapper.get('[data-testid="stage"]')
+    await wrapper.get('[data-testid="tool-point"]').trigger('click')
+    await stage.trigger('mouseup', { clientX: 30, clientY: 36 })
+    await flushPromises()
+
+    const item = wrapper.findAll('[data-testid="annotation-item"]')[0]
+    await item.trigger('click')
+
+    const select = wrapper.get('[data-testid="annotation-label-select"]')
+    const optionValues = select.findAll('option').map((option) => option.element.value)
+    expect(optionValues).toContain('bogus:disappeared_asteroid')
+    expect(optionValues).toContain('bogus:disappeared_star')
+    expect(optionValues).toContain('bogus:disappeared_galaxy')
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '9' }))
+    await flushPromises()
+    expect(wrapper.get('[data-testid="annotation-label-select"]').element.value).toBe('bogus:disappeared_asteroid')
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '0' }))
+    await flushPromises()
+    expect(wrapper.get('[data-testid="annotation-label-select"]').element.value).toBe('bogus:disappeared_star')
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '-' }))
+    await flushPromises()
+    expect(wrapper.get('[data-testid="annotation-label-select"]').element.value).toBe('bogus:disappeared_galaxy')
+  })
+
   it('requires second click to delete and supports undo for annotation item', async () => {
     const wrapper = mount(CanvasPanel, {
       global: {

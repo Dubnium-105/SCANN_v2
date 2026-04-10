@@ -47,15 +47,18 @@ class TestDetailType:
         assert DetailType.DIFFRACTION_SPIKE.value == "diffraction_spike"
         assert DetailType.CMOS_CONDENSATION.value == "cmos_condensation"
         assert DetailType.CORRESPONDING.value == "corresponding"
+        assert DetailType.DISAPPEARED_ASTEROID.value == "disappeared_asteroid"
+        assert DetailType.DISAPPEARED_STAR.value == "disappeared_star"
+        assert DetailType.DISAPPEARED_GALAXY.value == "disappeared_galaxy"
 
     def test_total_count(self):
-        """确保有 3 个真类和 5 个假类"""
+        """确保有 3 个真类和 8 个假类"""
         real_types = [dt for dt, lbl in DETAIL_TYPE_TO_LABEL.items()
                       if lbl == AnnotationLabel.REAL]
         bogus_types = [dt for dt, lbl in DETAIL_TYPE_TO_LABEL.items()
                        if lbl == AnnotationLabel.BOGUS]
         assert len(real_types) == 3
-        assert len(bogus_types) == 5
+        assert len(bogus_types) == 8
 
     def test_all_types_have_display_text(self):
         """所有 DetailType 都应有显示文本"""
@@ -80,9 +83,12 @@ class TestShortcutMapping:
         assert SHORTCUT_TO_DETAIL_TYPE["N3"] == DetailType.DIFFRACTION_SPIKE
         assert SHORTCUT_TO_DETAIL_TYPE["N4"] == DetailType.CMOS_CONDENSATION
         assert SHORTCUT_TO_DETAIL_TYPE["N5"] == DetailType.CORRESPONDING
+        assert SHORTCUT_TO_DETAIL_TYPE["N6"] == DetailType.DISAPPEARED_ASTEROID
+        assert SHORTCUT_TO_DETAIL_TYPE["N7"] == DetailType.DISAPPEARED_STAR
+        assert SHORTCUT_TO_DETAIL_TYPE["N8"] == DetailType.DISAPPEARED_GALAXY
 
     def test_total_shortcuts(self):
-        assert len(SHORTCUT_TO_DETAIL_TYPE) == 8
+        assert len(SHORTCUT_TO_DETAIL_TYPE) == 11
 
 
 # ─────────────────────── BBox 测试 ───────────────────────
@@ -335,7 +341,12 @@ class TestAnnotationStats:
 
     def test_real_count(self):
         stats = AnnotationStats()
-        stats.label_counts = {"asteroid": 10, "supernova": 3, "noise": 5}
+        stats.label_counts = {
+            "asteroid": 10,
+            "supernova": 3,
+            "disappeared_asteroid": 2,
+            "noise": 5,
+        }
         assert stats.real_count == 13
 
     def test_bogus_count(self):
@@ -346,8 +357,11 @@ class TestAnnotationStats:
             "diffraction_spike": 2,
             "cmos_condensation": 1,
             "corresponding": 3,
+            "disappeared_asteroid": 2,
+            "disappeared_star": 4,
+            "disappeared_galaxy": 6,
         }
-        assert stats.bogus_count == 21
+        assert stats.bogus_count == 33
 
     def test_mixed_label_types(self):
         """当只有大类标签 (无 detail_type) 时也能正确计数"""

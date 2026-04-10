@@ -9,7 +9,7 @@
 - 先固化可复现的 baseline，再开展后续改进实验。
 - 以 v2 FITS 数据链路为主，不再把 v1 PNG 兼容链路作为主实验对象。
 - 当前主任务应定义为 `real/bogus` 二分类与 v2 全图检测。
-- `asteroid`、`supernova`、`variable_star`、`satellite_trail`、`noise`、`diffraction_spike`、`cmos_condensation`、`corresponding` 这 8 个细分类型目前更适合作为误差分析和统计维度，而不是直接作为主训练任务。
+- `asteroid`、`supernova`、`variable_star`、`disappeared_asteroid`、`satellite_trail`、`noise`、`diffraction_spike`、`cmos_condensation`、`corresponding`、`disappeared_star`、`disappeared_galaxy` 这 11 个细分类型目前更适合作为误差分析和统计维度，而不是直接作为主训练任务。
 - 量化和 TurboQuant 相关实验是下一阶段重点，但仓库当前还没有对应实现，需要先补实验基础设施。
 
 > 说明  
@@ -20,7 +20,7 @@
 | 模块 | 当前状态 | 对实验的意义 |
 | --- | --- | --- |
 | 数据预处理 | 已有 `dataset_preprocess_service.py`、`scann_dataset.db`、`task_artifacts`，支持新旧图配对、对齐裁剪、任务化管理 | 可以作为 v2 实验数据主链路 |
-| 标注体系 | 已支持 `real/bogus` 大类与 8 个细分 `detail_type` | 可以做二分类训练，也可以做细分类统计与误差分析 |
+| 标注体系 | 已支持 `real/bogus` 大类与 11 个细分 `detail_type` | 可以做二分类训练，也可以做细分类统计与误差分析 |
 | 分类训练 | `training_worker.py` 已支持 `ResNet18`、`ResNet34`、`ResNet50`、`ViT_B_16` | 可直接开展分类 baseline 实验 |
 | 检测训练 | `SCANNDetector` 已支持 v2 dense detection 训练 | 可作为全图检测 baseline |
 | 推理 | 已有 patch 分类与 dense full-image detection 推理路径 | 可以做离线推理评测与效率测试 |
@@ -31,7 +31,7 @@
 
 ### 3.1 任务定义与原草案不一致
 
-原草案默认直接做 8 类分类，但当前训练代码并不是 8 分类训练，而是：
+原草案默认直接做细分类多分类，但当前训练代码并不是按 11 个 `detail_type` 直接训练，而是：
 
 - 分类链路以 `real/bogus` 二分类为主；
 - 细分类型通过 `detail_type -> label` 映射参与统计；
@@ -98,8 +98,8 @@
 | --- | --- | --- | --- |
 | 分类 baseline | v2 数据导出的三通道 patch，做 `real/bogus` 二分类 | 高 | 是 |
 | 检测 baseline | v2 FITS 全图做 dense detection | 中 | 是 |
-| 细分类型统计 | 8 个 `detail_type` 的数据分布、误差分布、召回分布 | 高 | 是 |
-| 8 类直接分类 | 把 8 个 `detail_type` 直接作为训练标签 | 低 | 否，作为后续扩展 |
+| 细分类型统计 | 11 个 `detail_type` 的数据分布、误差分布、召回分布 | 高 | 是 |
+| 细分类直接分类 | 把 11 个 `detail_type` 直接作为训练标签 | 低 | 否，作为后续扩展 |
 | 量化实验 | 分类模型与检测模型压缩和加速 | 低 | 是，但需先补基础设施 |
 | TurboQuant 相关实验 | 面向 Transformer 模块的低比特实验 | 低 | 是，作为第二阶段重点 |
 
@@ -127,7 +127,7 @@
 | P1 | 新增量化实验入口 | 支持 FP32 / INT8 / INT4 等对照实验 |
 | P1 | 新增量化结果落盘格式 | 让 baseline 与量化实验可横向比较 |
 | P1 | 新增 TurboQuant 实验入口 | 面向 ViT 与 Transformer 编码器做低比特实验 |
-| P2 | 新增细分类型误差分析脚本 | 输出 8 类细分标签的召回/误检分布 |
+| P2 | 新增细分类型误差分析脚本 | 输出 11 类细分标签的召回/误检分布 |
 
 ## 6. 建议的实验路线
 

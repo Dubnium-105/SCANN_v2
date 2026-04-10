@@ -53,6 +53,9 @@
                 <li class="text-red-300"><kbd class="bg-red-900/50 border border-red-500 px-1 rounded text-red-200">6</kbd> - 衍射芒</li>
                 <li class="text-pink-300"><kbd class="bg-pink-900/50 border border-pink-500 px-1 rounded text-pink-200">7</kbd> - CMOS结露</li>
                 <li class="text-rose-400"><kbd class="bg-rose-950/60 border border-rose-600 px-1 rounded text-rose-300">8</kbd> - 对应体</li>
+                <li class="text-fuchsia-200"><kbd class="bg-fuchsia-950/60 border border-fuchsia-600 px-1 rounded text-fuchsia-200">9</kbd> - 消失小行星</li>
+                <li class="text-fuchsia-300"><kbd class="bg-fuchsia-950/60 border border-fuchsia-600 px-1 rounded text-fuchsia-300">0</kbd> - 消失恒星</li>
+                <li class="text-amber-200"><kbd class="bg-amber-950/60 border border-amber-700 px-1 rounded text-amber-200">-</kbd> - 消失星系</li>
               </ul>
               </div>
             </div>

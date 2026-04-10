@@ -88,6 +88,64 @@ class TestTrainingWorkerDatasetParsing:
             assert np.all(triplet >= 0.0)
             assert np.all(triplet <= 1.0)
 
+    def test_collect_v2_samples_maps_disappeared_detail_types_to_bogus(self, tmp_path):
+        new_dir = tmp_path / "new"
+        old_dir = tmp_path / "old"
+        new_dir.mkdir()
+        old_dir.mkdir()
+
+        (new_dir / "target.fts").write_bytes(b"new")
+        (old_dir / "target.fts").write_bytes(b"old")
+
+        annotations = {
+            "images": [
+                {
+                    "id": "target",
+                    "file_name": "target.fts",
+                    "annotations": [
+                        {
+                            "x": 12,
+                            "y": 14,
+                            "width": 20,
+                            "height": 24,
+                            "detail_type": "disappeared_asteroid",
+                        },
+                        {
+                            "x": 32,
+                            "y": 36,
+                            "width": 16,
+                            "height": 18,
+                            "detail_type": "disappeared_star",
+                        },
+                        {
+                            "x": 52,
+                            "y": 56,
+                            "width": 18,
+                            "height": 18,
+                            "detail_type": "asteroid",
+                        },
+                    ],
+                }
+            ]
+        }
+        (tmp_path / "annotations.json").write_text(json.dumps(annotations), encoding="utf-8")
+
+        new_image = np.linspace(0, 1, 128 * 128, dtype=np.float32).reshape(128, 128)
+        old_image = np.flipud(new_image)
+
+        def fake_read_fits(path):
+            if str(path).endswith("new\\target.fts") or str(path).endswith("new/target.fts"):
+                return SimpleNamespace(data=new_image)
+            return SimpleNamespace(data=old_image)
+
+        worker = TrainingWorker({"dataset_dir": str(tmp_path), "dataset_format": "v2"})
+        with patch("scann.ai.training_worker.read_fits", side_effect=fake_read_fits):
+            samples = worker._collect_v2_samples_from_root(tmp_path)
+
+        labels = [label for _, label in samples]
+        assert labels.count(0) == 2
+        assert labels.count(1) == 1
+
 
 class TestTrainingWorkerDetectionTask:
     def test_resolve_task_type_default_and_detection(self):

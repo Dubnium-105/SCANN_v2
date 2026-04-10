@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QDialog,
     QFileDialog,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -269,88 +270,86 @@ class AnnotationDialog(QDialog):
         """)
 
     def _create_label_panel(self) -> QWidget:
-        """创建快速标签面板 (Y1-Y3, N1-N5)"""
+        """创建快速标签面板 (Y1-Y3, N1-N8)"""
         panel = QWidget()
-        layout = QHBoxLayout(panel)
+        layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        # A. 真类
-        real_group = QGroupBox("A. 真")
-        real_group.setStyleSheet("""
-            QGroupBox {
-                color: #4CAF50; font-weight: bold; font-size: 12px;
-                border: 1px solid #4CAF50; border-radius: 4px;
-                margin-top: 8px; padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                padding: 0 4px;
-            }
-        """)
-        real_layout = QHBoxLayout(real_group)
-        real_layout.setSpacing(4)
-
-        real_buttons = {
-            "Y1": ("小行星 ★  Y1", "asteroid"),
-            "Y2": ("超新星 💥  Y2", "supernova"),
-            "Y3": ("变星 ✦  Y3", "variable_star"),
-        }
-        for key, (text, _detail) in real_buttons.items():
-            btn = QPushButton(text)
-            btn.setStyleSheet("""
-                QPushButton {
-                    background: #2E7D32; color: white;
-                    border: none; border-radius: 3px;
-                    font-size: 11px; min-height: 22px; padding: 2px 8px;
-                }
-                QPushButton:hover { background: #388E3C; }
+        def create_group(title: str, border_color: str) -> QGroupBox:
+            group = QGroupBox(title)
+            group.setStyleSheet(f"""
+                QGroupBox {{
+                    color: {border_color}; font-weight: bold; font-size: 12px;
+                    border: 1px solid {border_color}; border-radius: 4px;
+                    margin-top: 8px; padding-top: 10px;
+                }}
+                QGroupBox::title {{
+                    subcontrol-origin: margin;
+                    subcontrol-position: top left;
+                    padding: 0 4px;
+                }}
             """)
-            btn.clicked.connect(lambda checked, k=key: self._on_label_button(k))
-            self._label_buttons[key] = btn
-            real_layout.addWidget(btn)
+            return group
 
+        def populate_buttons(
+            group: QGroupBox,
+            buttons: list[tuple[str, str]],
+            *,
+            background: str,
+            hover: str,
+            columns: int,
+        ) -> None:
+            grid = QGridLayout(group)
+            grid.setHorizontalSpacing(4)
+            grid.setVerticalSpacing(4)
+            for index, (key, text) in enumerate(buttons):
+                btn = QPushButton(text)
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background: {background}; color: white;
+                        border: none; border-radius: 3px;
+                        font-size: 11px; min-height: 22px; padding: 2px 8px;
+                    }}
+                    QPushButton:hover {{ background: {hover}; }}
+                """)
+                btn.clicked.connect(lambda checked, k=key: self._on_label_button(k))
+                self._label_buttons[key] = btn
+                row = index // columns
+                col = index % columns
+                grid.addWidget(btn, row, col)
+
+        real_group = create_group("A. 真", "#4CAF50")
+        populate_buttons(
+            real_group,
+            [
+                ("Y1", "小行星 ★  Y1"),
+                ("Y2", "超新星 💥  Y2"),
+                ("Y3", "变星 ✦  Y3"),
+            ],
+            background="#2E7D32",
+            hover="#388E3C",
+            columns=2,
+        )
         layout.addWidget(real_group)
 
-        # B. 假类
-        bogus_group = QGroupBox("B. 假")
-        bogus_group.setStyleSheet("""
-            QGroupBox {
-                color: #F44336; font-weight: bold; font-size: 12px;
-                border: 1px solid #F44336; border-radius: 4px;
-                margin-top: 8px; padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                padding: 0 4px;
-            }
-        """)
-        bogus_layout = QHBoxLayout(bogus_group)
-        bogus_layout.setSpacing(4)
-
-        bogus_buttons = {
-            "N1": ("卫星线 🛰️  N1", "satellite_trail"),
-            "N2": ("噪点 ⚡  N2", "noise"),
-            "N3": ("星芒 ✨  N3", "diffraction_spike"),
-            "N4": ("CMOS结霜 ❄️  N4", "cmos_condensation"),
-            "N5": ("有对应 🔀  N5", "corresponding"),
-        }
-        for key, (text, _detail) in bogus_buttons.items():
-            btn = QPushButton(text)
-            btn.setStyleSheet("""
-                QPushButton {
-                    background: #C62828; color: white;
-                    border: none; border-radius: 3px;
-                    font-size: 11px; min-height: 22px; padding: 2px 8px;
-                }
-                QPushButton:hover { background: #D32F2F; }
-            """)
-            btn.clicked.connect(lambda checked, k=key: self._on_label_button(k))
-            self._label_buttons[key] = btn
-            bogus_layout.addWidget(btn)
-
+        bogus_group = create_group("B. 假", "#F44336")
+        populate_buttons(
+            bogus_group,
+            [
+                ("N1", "卫星线 🛰️  N1"),
+                ("N2", "噪点 ⚡  N2"),
+                ("N3", "星芒 ✨  N3"),
+                ("N4", "CMOS结霜 ❄️  N4"),
+                ("N5", "有对应 🔀  N5"),
+                ("N6", "消失小行星  N6"),
+                ("N7", "消失恒星  N7"),
+                ("N8", "消失星系  N8"),
+            ],
+            background="#C62828",
+            hover="#D32F2F",
+            columns=3,
+        )
         layout.addWidget(bogus_group)
 
         return panel
@@ -780,6 +779,9 @@ class AnnotationDialog(QDialog):
             "N3": lambda: self._on_label_button("N3"),
             "N4": lambda: self._on_label_button("N4"),
             "N5": lambda: self._on_label_button("N5"),
+            "N6": lambda: self._on_label_button("N6"),
+            "N7": lambda: self._on_label_button("N7"),
+            "N8": lambda: self._on_label_button("N8"),
             "3": self._on_show_new_marked,
             "1": self._on_show_new,
             "2": self._on_show_old,

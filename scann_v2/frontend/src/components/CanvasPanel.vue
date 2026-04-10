@@ -659,6 +659,9 @@
                   <option value="bogus:diffraction_spike">Diffraction Spike (衍射芒)</option>
                   <option value="bogus:cmos_condensation">CMOS Condensation (CMOS结露)</option>
                   <option value="bogus:corresponding">Corresponding (对应体)</option>
+                  <option value="bogus:disappeared_asteroid">Disappeared Asteroid (消失小行星)</option>
+                  <option value="bogus:disappeared_star">Disappeared Star (消失恒星)</option>
+                  <option value="bogus:disappeared_galaxy">Disappeared Galaxy (消失星系)</option>
                 </optgroup>
               </select>
             </label>
@@ -1842,6 +1845,9 @@ function getAnnotationColor(annotation) {
     'bogus:diffraction_spike': '#e11d48',
     'bogus:cmos_condensation': '#fb7185',
     'bogus:corresponding': '#be123c',
+    'bogus:disappeared_asteroid': '#d946ef',
+    'bogus:disappeared_star': '#a855f7',
+    'bogus:disappeared_galaxy': '#8b5e3c',
     real: '#22c55e',
     bogus: '#ef4444',
   }
@@ -2331,6 +2337,9 @@ function onKeyDown(event) {
     '6': 'bogus:diffraction_spike',
     '7': 'bogus:cmos_condensation',
     '8': 'bogus:corresponding',
+    '9': 'bogus:disappeared_asteroid',
+    '0': 'bogus:disappeared_star',
+    '-': 'bogus:disappeared_galaxy',
   }
 
   const newLabelStr = keyMap[event.key]

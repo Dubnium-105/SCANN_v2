@@ -191,7 +191,7 @@ class FitsAnnotationStorage:
                 y=int(row["y"]),
                 width=int(row["width"]),
                 height=int(row["height"]),
-                label=str(row["label"] or "real"),
+                label=str(row["label"]) if row["label"] is not None else None,
                 confidence=float(row["confidence"] if row["confidence"] is not None else 1.0),
                 detail_type=str(row["detail_type"]) if row["detail_type"] is not None else None,
             )
