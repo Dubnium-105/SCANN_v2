@@ -10,11 +10,23 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 
-set -a
-source ./.env
-set +a
+invalid_env_lines="$(
+  grep -nE '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]+[:=]|^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*:' .env || true
+)"
+if [[ -n "$invalid_env_lines" ]]; then
+  echo "Invalid docker/.env syntax. Use KEY=value with no spaces around '=' and no ':' after the key."
+  echo "$invalid_env_lines"
+  exit 1
+fi
 
-DATASET_DIR="${SCANN_DATASET_DIR:-./runtime/dataset}"
+DATASET_DIR="$(
+  grep -E '^[[:space:]]*SCANN_DATASET_DIR=' .env | tail -n 1 | cut -d= -f2- || true
+)"
+DATASET_DIR="${DATASET_DIR%\"}"
+DATASET_DIR="${DATASET_DIR#\"}"
+DATASET_DIR="${DATASET_DIR%\'}"
+DATASET_DIR="${DATASET_DIR#\'}"
+DATASET_DIR="${DATASET_DIR:-./runtime/dataset}"
 mkdir -p "$DATASET_DIR/new" "$DATASET_DIR/old" "$DATASET_DIR/new_marked"
 
 export COMPOSE_BAKE="${COMPOSE_BAKE:-false}"
