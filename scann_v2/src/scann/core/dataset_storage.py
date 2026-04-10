@@ -961,6 +961,7 @@ class DatasetStorage:
                     t.current_detail_type,
                     t.current_ai_suggestion,
                     t.current_ai_confidence,
+                    rev.metadata_json AS latest_metadata_json,
                     COALESCE(an.relpath, rn.relpath) AS new_path,
                     COALESCE(ao.relpath, ro.relpath) AS old_path,
                     COALESCE(am.relpath, rm.relpath) AS new_marked_path
@@ -977,6 +978,17 @@ class DatasetStorage:
                     ON ao.task_id = t.task_id AND ao.artifact_role = 'aligned_old'
                 LEFT JOIN task_artifacts am
                     ON am.task_id = t.task_id AND am.artifact_role = 'aligned_new_marked'
+                LEFT JOIN (
+                    SELECT ar.task_id, ar.metadata_json
+                    FROM annotation_revisions ar
+                    INNER JOIN (
+                        SELECT task_id, MAX(rowid) AS latest_rowid
+                        FROM annotation_revisions
+                        GROUP BY task_id
+                    ) latest
+                        ON latest.task_id = ar.task_id AND latest.latest_rowid = ar.rowid
+                ) rev
+                    ON rev.task_id = t.task_id
                 WHERE t.preprocess_status != 'missing'
                 """
             ).fetchall()
@@ -1028,6 +1040,13 @@ class DatasetStorage:
                 record["ai_suggestion"] = str(row["current_ai_suggestion"])
             if row["current_ai_confidence"] is not None:
                 record["ai_confidence"] = float(row["current_ai_confidence"])
+            if row["latest_metadata_json"] is not None:
+                try:
+                    metadata = json.loads(str(row["latest_metadata_json"] or "{}"))
+                except Exception:
+                    metadata = {}
+                if isinstance(metadata, dict) and metadata:
+                    record["metadata"] = metadata
             annotations = annotations_by_task.get(task_id, [])
             if annotations:
                 record["annotations"] = annotations

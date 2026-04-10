@@ -251,6 +251,36 @@ class TrainingWorker(QThread):
         ]
         return np.stack(channels, axis=0).astype(np.float32)
 
+    @staticmethod
+    def _resolve_manual_crop_bounds(image_info: dict[str, Any], width: int, height: int) -> tuple[int, int, int, int] | None:
+        metadata = image_info.get("metadata")
+        if not isinstance(metadata, dict):
+            return None
+        crop = metadata.get("manual_crop")
+        if not isinstance(crop, dict):
+            return None
+
+        try:
+            x = float(crop.get("x"))
+            y = float(crop.get("y"))
+            crop_w = float(crop.get("width"))
+            crop_h = float(crop.get("height"))
+        except (TypeError, ValueError):
+            return None
+
+        if not np.isfinite(x) or not np.isfinite(y) or not np.isfinite(crop_w) or not np.isfinite(crop_h):
+            return None
+        if crop_w <= 1 or crop_h <= 1 or width <= 0 or height <= 0:
+            return None
+
+        x0 = max(0, min(width - 1, int(round(x))))
+        y0 = max(0, min(height - 1, int(round(y))))
+        x1 = max(x0 + 1, min(width, int(round(x + crop_w))))
+        y1 = max(y0 + 1, min(height, int(round(y + crop_h))))
+        if x1 <= x0 or y1 <= y0:
+            return None
+        return x0, y0, x1, y1
+
     def _collect_v2_samples_from_root(self, dataset_root: Path) -> list[tuple[np.ndarray, int]]:
         new_dir = dataset_root / "new"
         old_dir = dataset_root / "old"
@@ -300,17 +330,33 @@ class TrainingWorker(QThread):
                 pair_cache[pair_key] = self._load_pair_uint8(pair)
             new_u8, old_u8 = pair_cache[pair_key]
 
+            h, w = new_u8.shape[:2]
+            crop_bounds = self._resolve_manual_crop_bounds(image_info, w, h)
+            if crop_bounds is not None:
+                x0, y0, x1, y1 = crop_bounds
+                new_u8_view = new_u8[y0:y1, x0:x1]
+                old_u8_view = old_u8[y0:y1, x0:x1]
+            else:
+                x0, y0 = 0, 0
+                new_u8_view = new_u8
+                old_u8_view = old_u8
+
             for ann in annotations:
                 label = self._resolve_annotation_label(ann, image_info)
                 if label is None:
                     continue
                 center_x = float(ann.get("x", 0)) + float(ann.get("width", 0)) / 2.0
                 center_y = float(ann.get("y", 0)) + float(ann.get("height", 0)) / 2.0
+                if crop_bounds is not None:
+                    if center_x < x0 or center_x > x1 or center_y < y0 or center_y > y1:
+                        continue
+                    center_x -= x0
+                    center_y -= y0
                 patch_size = max(
                     80,
                     int(round(max(float(ann.get("width", 0) or 0), float(ann.get("height", 0) or 0), 0.0))),
                 )
-                triplet = self._build_triplet_patch(new_u8, old_u8, center_x, center_y, patch_size)
+                triplet = self._build_triplet_patch(new_u8_view, old_u8_view, center_x, center_y, patch_size)
                 all_samples.append((triplet, 1 if label == "real" else 0))
 
         if not all_samples:

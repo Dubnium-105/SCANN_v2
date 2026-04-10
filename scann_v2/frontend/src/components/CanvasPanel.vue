@@ -187,6 +187,14 @@
                 >
                   多边形
                 </button>
+                <button
+                  data-testid="tool-crop"
+                  class="text-xs px-2 py-1 rounded border"
+                  :class="toolMode === 'crop' ? 'border-cyan-400 text-cyan-300' : 'border-slate-700 text-slate-300'"
+                  @click="setToolMode('crop')"
+                >
+                  手动裁剪
+                </button>
               </div>
               <button
                 v-if="toolMode === 'polygon'"
@@ -196,6 +204,23 @@
               >
                 完成多边形
               </button>
+              <div class="space-y-1 rounded border border-cyan-900/60 bg-cyan-950/20 p-2">
+                <div class="flex items-center justify-between gap-2">
+                  <p class="text-[11px] text-cyan-200">手动裁剪区域</p>
+                  <button
+                    data-testid="manual-crop-clear"
+                    class="text-[10px] px-2 py-0.5 rounded border border-cyan-800 text-cyan-200 disabled:opacity-50"
+                    :disabled="!manualCropRect"
+                    @click="clearManualCrop"
+                  >
+                    清除
+                  </button>
+                </div>
+                <p class="text-[10px] text-cyan-300">
+                  {{ manualCropRect ? `x=${Math.round(manualCropRect.x)}, y=${Math.round(manualCropRect.y)}, w=${Math.round(manualCropRect.width)}, h=${Math.round(manualCropRect.height)}` : '未设置' }}
+                </p>
+                <p class="text-[10px] text-slate-400">使用“手动裁剪”工具在图上框选有效区域，裁剪区外将不参与提交与训练。</p>
+              </div>
               <p class="text-[10px] text-slate-500">快捷键：H 切换移动工具 / C 切换矩形工具</p>
             </div>
 
@@ -391,6 +416,32 @@
           @mouseup="onStageMouseUp"
         >
           <v-layer>
+            <template v-if="manualCropMasks.length > 0">
+              <v-rect
+                v-for="(mask, index) in manualCropMasks"
+                :key="`manual-crop-mask-${index}`"
+                :config="{
+                  x: mask.x,
+                  y: mask.y,
+                  width: mask.width,
+                  height: mask.height,
+                  fill: 'rgba(2, 6, 23, 0.68)',
+                  listening: false,
+                }"
+              />
+              <v-rect
+                :config="{
+                  x: manualCropRect.x,
+                  y: manualCropRect.y,
+                  width: manualCropRect.width,
+                  height: manualCropRect.height,
+                  stroke: '#22d3ee',
+                  strokeWidth: Math.max(1.5, bboxStrokeWidth),
+                  dash: [8, 4],
+                  listening: false,
+                }"
+              />
+            </template>
             <v-rect
               v-for="ann in annotations.filter((item) => item.type === 'bbox')"
               :key="ann.id"
@@ -736,6 +787,7 @@ const annotationDisplayCounter = ref(1)
 const draftRect = ref(null)
 const drawStart = ref(null)
 const currentPolygonPoints = ref([])
+const manualCropRect = ref(null)
 const taskList = ref([])
 const currentTaskIndex = ref(-1)
 const isSubmitting = ref(false)
@@ -917,6 +969,40 @@ const hasNextTask = computed(() => (
 const hasTaskLock = computed(() => {
   const taskId = String(activeTask.value?.task_id || '')
   return Boolean(taskId) && claimedTaskId.value === taskId && !taskLockError.value
+})
+
+const activeImageRect = computed(() => {
+  const width = Number(activeFitsNode.value?.width || stageWidth.value || 0)
+  const height = Number(activeFitsNode.value?.height || stageHeight.value || 0)
+  return {
+    x: 0,
+    y: 0,
+    width: Math.max(0, width),
+    height: Math.max(0, height),
+  }
+})
+
+const manualCropMasks = computed(() => {
+  const crop = manualCropRect.value
+  const imageRect = activeImageRect.value
+  if (!crop || imageRect.width <= 0 || imageRect.height <= 0) {
+    return []
+  }
+
+  const x0 = crop.x
+  const y0 = crop.y
+  const x1 = crop.x + crop.width
+  const y1 = crop.y + crop.height
+  const maxX = imageRect.width
+  const maxY = imageRect.height
+
+  const masks = [
+    { x: 0, y: 0, width: maxX, height: Math.max(0, y0) },
+    { x: 0, y: Math.max(0, y0), width: Math.max(0, x0), height: Math.max(0, y1 - y0) },
+    { x: Math.min(maxX, x1), y: Math.max(0, y0), width: Math.max(0, maxX - x1), height: Math.max(0, y1 - y0) },
+    { x: 0, y: Math.min(maxY, y1), width: maxX, height: Math.max(0, maxY - y1) },
+  ]
+  return masks.filter((item) => item.width > 0 && item.height > 0)
 })
 
 const stageConfig = computed(() => ({
@@ -1307,6 +1393,7 @@ function switchToView(view) {
 function resetAnnotationStates() {
   annotations.value = []
   annotationDisplayCounter.value = 1
+  manualCropRect.value = null
   selectedAnnotationId.value = ''
   selectedLabel.value = 'Unlabeled'
   clearPendingDeleteState()
@@ -1433,6 +1520,7 @@ async function loadLatestRevisionAnnotations(taskId) {
 
     annotations.value = restored
     annotationDisplayCounter.value = restored.length + 1
+    manualCropRect.value = normalizeManualCropFromMetadata(detail?.metadata)
 
     if (detail?.source_view && ['new', 'new_marked', 'old'].includes(detail.source_view)) {
       setCurrentView(detail.source_view)
@@ -1677,20 +1765,35 @@ function setToolMode(mode) {
 }
 
 function getSubmittableBboxAnnotations() {
-  return annotations.value.filter(
-    (ann) => (
-      ann.type === 'bbox'
-      && ann.label !== 'Unlabeled'
-      && Number.isFinite(Number(ann.x))
-      && Number.isFinite(Number(ann.y))
-      && Number.isFinite(Number(ann.width))
-      && Number.isFinite(Number(ann.height))
-      && Number(ann.x) >= 0
-      && Number(ann.y) >= 0
-      && Number(ann.width) >= 0
-      && Number(ann.height) >= 0
+  return annotations.value
+    .filter(
+      (ann) => (
+        ann.type === 'bbox'
+        && ann.label !== 'Unlabeled'
+        && Number.isFinite(Number(ann.x))
+        && Number.isFinite(Number(ann.y))
+        && Number.isFinite(Number(ann.width))
+        && Number.isFinite(Number(ann.height))
+        && Number(ann.x) >= 0
+        && Number(ann.y) >= 0
+        && Number(ann.width) >= 0
+        && Number(ann.height) >= 0
+      )
     )
-  )
+    .map((ann) => {
+      if (!manualCropRect.value) {
+        return ann
+      }
+      const clipped = clipRectToCrop(ann)
+      if (!clipped) {
+        return null
+      }
+      return {
+        ...ann,
+        ...clipped,
+      }
+    })
+    .filter(Boolean)
 }
 
 function deriveLegacyBucket(bboxAnnotations) {
@@ -1698,14 +1801,24 @@ function deriveLegacyBucket(bboxAnnotations) {
 }
 
 function buildAnnotationPayload(bboxAnnotations) {
+  const metadata = {
+    tool: 'bbox',
+    format_version: 'v2',
+  }
+  if (manualCropRect.value) {
+    metadata.manual_crop = {
+      x: manualCropRect.value.x,
+      y: manualCropRect.value.y,
+      width: manualCropRect.value.width,
+      height: manualCropRect.value.height,
+    }
+  }
+
   return {
     // Keep the legacy bucket field for older deployed backends that still require it.
     bucket: deriveLegacyBucket(bboxAnnotations),
     source_view: currentView.value,
-    metadata: {
-      tool: 'bbox',
-      format_version: 'v2',
-    },
+    metadata,
     annotations: bboxAnnotations.map((ann) => ({
       x: ann.x,
       y: ann.y,
@@ -2032,6 +2145,136 @@ function normalizeRect(start, current) {
   }
 }
 
+function clampRectToImage(rect) {
+  const imageRect = activeImageRect.value
+  if (!rect || imageRect.width <= 0 || imageRect.height <= 0) {
+    return null
+  }
+  const x0 = clamp(rect.x, imageRect.x, imageRect.x + imageRect.width)
+  const y0 = clamp(rect.y, imageRect.y, imageRect.y + imageRect.height)
+  const x1 = clamp(rect.x + rect.width, imageRect.x, imageRect.x + imageRect.width)
+  const y1 = clamp(rect.y + rect.height, imageRect.y, imageRect.y + imageRect.height)
+  if (x1 <= x0 || y1 <= y0) {
+    return null
+  }
+  return {
+    x: x0,
+    y: y0,
+    width: x1 - x0,
+    height: y1 - y0,
+  }
+}
+
+function pointInRect(point, rect) {
+  if (!point || !rect) {
+    return false
+  }
+  return (
+    point.x >= rect.x
+    && point.y >= rect.y
+    && point.x <= rect.x + rect.width
+    && point.y <= rect.y + rect.height
+  )
+}
+
+function clipRectToCrop(rect) {
+  if (!rect) {
+    return null
+  }
+  const normalizedRect = clampRectToImage(rect)
+  if (!normalizedRect) {
+    return null
+  }
+  if (!manualCropRect.value) {
+    return normalizedRect
+  }
+  const crop = manualCropRect.value
+  const x0 = Math.max(normalizedRect.x, crop.x)
+  const y0 = Math.max(normalizedRect.y, crop.y)
+  const x1 = Math.min(normalizedRect.x + normalizedRect.width, crop.x + crop.width)
+  const y1 = Math.min(normalizedRect.y + normalizedRect.height, crop.y + crop.height)
+  if (x1 <= x0 || y1 <= y0) {
+    return null
+  }
+  return {
+    x: x0,
+    y: y0,
+    width: x1 - x0,
+    height: y1 - y0,
+  }
+}
+
+function normalizeManualCropFromMetadata(metadata) {
+  if (!metadata || typeof metadata !== 'object') {
+    return null
+  }
+  const manualCrop = metadata.manual_crop
+  if (!manualCrop || typeof manualCrop !== 'object') {
+    return null
+  }
+  const x = Number(manualCrop.x)
+  const y = Number(manualCrop.y)
+  const width = Number(manualCrop.width)
+  const height = Number(manualCrop.height)
+  if (![x, y, width, height].every(Number.isFinite)) {
+    return null
+  }
+  if (width <= 1 || height <= 1) {
+    return null
+  }
+  return clampRectToImage({ x, y, width, height })
+}
+
+function isPointInsideManualCrop(point) {
+  if (!manualCropRect.value) {
+    return true
+  }
+  return pointInRect(point, manualCropRect.value)
+}
+
+function applyManualCropRect(nextRect) {
+  const normalized = clampRectToImage(nextRect)
+  manualCropRect.value = normalized
+  if (!normalized) {
+    return
+  }
+
+  annotations.value = annotations.value
+    .map((ann) => {
+      if (ann.type === 'bbox') {
+        const clipped = clipRectToCrop(ann)
+        if (!clipped) {
+          return null
+        }
+        return { ...ann, ...clipped }
+      }
+      if (ann.type === 'point') {
+        return isPointInsideManualCrop(ann) ? ann : null
+      }
+      if (ann.type === 'polygon') {
+        const points = Array.isArray(ann.points) ? ann.points : []
+        if (points.length === 0) {
+          return null
+        }
+        return points.every((point) => isPointInsideManualCrop(point)) ? ann : null
+      }
+      return ann
+    })
+    .filter(Boolean)
+
+  if (selectedAnnotationId.value) {
+    const stillExists = annotations.value.some((item) => item.id === selectedAnnotationId.value)
+    if (!stillExists) {
+      selectedAnnotationId.value = ''
+      selectedLabel.value = 'Unlabeled'
+    }
+  }
+}
+
+function clearManualCrop() {
+  manualCropRect.value = null
+}
+
 let middlePanLast = null
 
 function onMiddlePanMove(event) {
@@ -2079,12 +2322,16 @@ function onStageMouseDown(event) {
     return
   }
 
-  if (toolMode.value !== 'bbox') {
+  if (toolMode.value !== 'bbox' && toolMode.value !== 'crop') {
     return
   }
 
   const pointer = getPointer(event)
   if (!pointer) {
+    return
+  }
+
+  if (toolMode.value === 'bbox' && !isPointInsideManualCrop(pointer)) {
     return
   }
 
@@ -2102,7 +2349,7 @@ function onStageMouseMove(event) {
     return
   }
 
-  if (toolMode.value !== 'bbox' || !drawStart.value) {
+  if ((toolMode.value !== 'bbox' && toolMode.value !== 'crop') || !drawStart.value) {
     return
   }
 
@@ -2111,7 +2358,8 @@ function onStageMouseMove(event) {
     return
   }
 
-  draftRect.value = normalizeRect(drawStart.value, pointer)
+  const rect = normalizeRect(drawStart.value, pointer)
+  draftRect.value = toolMode.value === 'crop' ? clampRectToImage(rect) : clipRectToCrop(rect)
 }
 
 function onStageMouseUp(event) {
@@ -2131,6 +2379,9 @@ function onStageMouseUp(event) {
   }
 
   if (toolMode.value === 'point') {
+    if (!isPointInsideManualCrop(pointer)) {
+      return
+    }
     addAnnotation(
       createAnnotation({
         type: 'point',
@@ -2142,13 +2393,27 @@ function onStageMouseUp(event) {
   }
 
   if (toolMode.value === 'polygon') {
+    if (!isPointInsideManualCrop(pointer)) {
+      return
+    }
     currentPolygonPoints.value = [...currentPolygonPoints.value, { x: pointer.x, y: pointer.y }]
     return
   }
 
+  if (toolMode.value === 'crop' && drawStart.value) {
+    const rect = clampRectToImage(normalizeRect(drawStart.value, pointer))
+    if (rect && rect.width > 1 && rect.height > 1) {
+      applyManualCropRect(rect)
+      setToolMode('bbox')
+    }
+    draftRect.value = null
+    drawStart.value = null
+    return
+  }
+
   if (toolMode.value === 'bbox' && drawStart.value) {
-    const rect = normalizeRect(drawStart.value, pointer)
-    if (rect.width > 0 && rect.height > 0) {
+    const rect = clipRectToCrop(normalizeRect(drawStart.value, pointer))
+    if (rect && rect.width > 0 && rect.height > 0) {
       addAnnotation(
         createAnnotation({
           type: 'bbox',

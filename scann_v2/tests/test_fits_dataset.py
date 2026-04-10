@@ -438,3 +438,49 @@ class TestFitsDenseDetectionDataset:
 
         assert np.sum(targets["bbox_mask"]) == 1.0
         assert "跳过异常标注" in caplog.text
+
+    def test_manual_crop_metadata_is_applied_for_dense_targets(self, tmp_path):
+        new_dir = tmp_path / "new"
+        old_dir = tmp_path / "old"
+        new_dir.mkdir()
+        old_dir.mkdir()
+
+        new_file = new_dir / "PAIR_A.fts"
+        old_file = old_dir / "PAIR_A.fts"
+        new_file.write_bytes(b"new")
+        old_file.write_bytes(b"old")
+
+        annotations = {
+            "images": [
+                {
+                    "id": "PAIR_A",
+                    "metadata": {
+                        "manual_crop": {
+                            "x": 0,
+                            "y": 0,
+                            "width": 32,
+                            "height": 32,
+                        }
+                    },
+                    "annotations": [
+                        {"x": 4, "y": 4, "width": 8, "height": 8, "label": "real"},
+                        {"x": 40, "y": 40, "width": 8, "height": 8, "label": "real"},
+                    ],
+                }
+            ]
+        }
+        ann_file = tmp_path / "annotations.json"
+        ann_file.write_text(json.dumps(annotations), encoding="utf-8")
+
+        mock_new = np.random.rand(64, 64).astype(np.float32)
+        mock_old = np.random.rand(64, 64).astype(np.float32)
+
+        with patch("scann.core.fits_io.read_fits") as mock_read_fits:
+            mock_read_fits.side_effect = [Mock(data=mock_new), Mock(data=mock_old)]
+            dataset = FitsDenseDetectionDataset(dataset_root=str(tmp_path), patch_size=16)
+            input_image, targets = dataset[0]
+
+        assert input_image.shape == (3, 32, 32)
+        assert targets["heatmap"].shape == (1, 2, 2)
+        assert targets["bbox"].shape == (4, 2, 2)
+        assert np.sum(targets["bbox_mask"]) == 1.0

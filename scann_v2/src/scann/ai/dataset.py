@@ -630,6 +630,54 @@ class FitsDenseDetectionDataset:
         center_y = y + h / 2.0
         return center_x, center_y, w, h
 
+    @staticmethod
+    def _parse_manual_crop(image_info: dict[str, Any]) -> dict[str, float] | None:
+        metadata = image_info.get("metadata")
+        if not isinstance(metadata, dict):
+            return None
+        manual_crop = metadata.get("manual_crop")
+        if not isinstance(manual_crop, dict):
+            return None
+
+        x = FitsDenseDetectionDataset._safe_float(manual_crop.get("x"))
+        y = FitsDenseDetectionDataset._safe_float(manual_crop.get("y"))
+        width = FitsDenseDetectionDataset._safe_float(manual_crop.get("width"))
+        height = FitsDenseDetectionDataset._safe_float(manual_crop.get("height"))
+        if x is None or y is None or width is None or height is None:
+            return None
+        if width <= 1 or height <= 1:
+            return None
+        return {
+            "x": x,
+            "y": y,
+            "width": width,
+            "height": height,
+        }
+
+    @staticmethod
+    def _resolve_manual_crop_bounds(
+        manual_crop: dict[str, float] | None,
+        width: int,
+        height: int,
+    ) -> tuple[int, int, int, int] | None:
+        if manual_crop is None or width <= 0 or height <= 0:
+            return None
+
+        x = float(manual_crop.get("x", 0.0))
+        y = float(manual_crop.get("y", 0.0))
+        crop_w = float(manual_crop.get("width", 0.0))
+        crop_h = float(manual_crop.get("height", 0.0))
+        if crop_w <= 1 or crop_h <= 1:
+            return None
+
+        x0 = max(0, min(width - 1, int(round(x))))
+        y0 = max(0, min(height - 1, int(round(y))))
+        x1 = max(x0 + 1, min(width, int(round(x + crop_w))))
+        y1 = max(y0 + 1, min(height, int(round(y + crop_h))))
+        if x1 <= x0 or y1 <= y0:
+            return None
+        return x0, y0, x1, y1
+
     def _load_samples(self) -> List[Dict[str, Any]]:
         if self.annotation_file.name == "annotations.json":
             annotations_doc = load_v2_annotation_document(self.dataset_root)
@@ -686,6 +734,7 @@ class FitsDenseDetectionDataset:
                 "image_id": image_info.get("id") or image_info.get("file_name") or pair.name,
                 "pair": pair,
                 "annotations": parsed_annotations,
+                "manual_crop": self._parse_manual_crop(image_info),
             })
 
         if not samples:
@@ -768,11 +817,24 @@ class FitsDenseDetectionDataset:
         if height <= 0 or width <= 0:
             raise ValueError(f"图像尺寸无效: {pair.new_path.name} / {pair.old_path.name}")
 
-        new_img = self._normalize_channel(new_raw[:height, :width])
-        old_img = self._normalize_channel(old_raw[:height, :width])
+        crop_bounds = self._resolve_manual_crop_bounds(sample.get("manual_crop"), width, height)
+        if crop_bounds is not None:
+            x0, y0, x1, y1 = crop_bounds
+            new_raw = new_raw[y0:y1, x0:x1]
+            old_raw = old_raw[y0:y1, x0:x1]
+            annotations = [
+                (center_x - x0, center_y - y0, box_w, box_h)
+                for center_x, center_y, box_w, box_h in sample["annotations"]
+                if x0 <= center_x <= x1 and y0 <= center_y <= y1
+            ]
+        else:
+            annotations = list(sample["annotations"])
+
+        new_img = self._normalize_channel(new_raw)
+        old_img = self._normalize_channel(old_raw)
         diff_img = np.abs(new_img - old_img).astype(np.float32)
         input_image = np.stack([diff_img, new_img, old_img], axis=0).astype(np.float32)
 
-        targets = self._encode_dense_targets(height, width, sample["annotations"])
+        targets = self._encode_dense_targets(new_img.shape[0], new_img.shape[1], annotations)
         targets["image_id"] = sample["image_id"]
         return input_image, targets
