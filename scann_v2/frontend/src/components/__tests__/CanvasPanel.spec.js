@@ -332,6 +332,7 @@ describe('CanvasPanel', () => {
 
     const payload = JSON.parse(submitCall.options?.body)
     expect(payload.source_view).toBe('new')
+    expect(payload.bucket).toBe('positive')
     expect(payload.annotations).toHaveLength(1)
     expect(payload.annotations[0]).toMatchObject({
       x: 12,
@@ -381,6 +382,7 @@ describe('CanvasPanel', () => {
     )
     expect(submitCalls).toHaveLength(1)
     expect(String(submitCalls[0].url)).toContain('release_after_save=false')
+    expect(JSON.parse(submitCalls[0].options?.body).bucket).toBe('positive')
     expect(wrapper.get('[data-testid="auto-submit-status"]').text()).toContain('自动提交成功')
   })
 

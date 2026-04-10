@@ -1675,12 +1675,29 @@ function setToolMode(mode) {
 
 function getSubmittableBboxAnnotations() {
   return annotations.value.filter(
-    (ann) => ann.type === 'bbox' && ann.label !== 'Unlabeled'
+    (ann) => (
+      ann.type === 'bbox'
+      && ann.label !== 'Unlabeled'
+      && Number.isFinite(Number(ann.x))
+      && Number.isFinite(Number(ann.y))
+      && Number.isFinite(Number(ann.width))
+      && Number.isFinite(Number(ann.height))
+      && Number(ann.x) >= 0
+      && Number(ann.y) >= 0
+      && Number(ann.width) >= 0
+      && Number(ann.height) >= 0
+    )
   )
+}
+
+function deriveLegacyBucket(bboxAnnotations) {
+  return bboxAnnotations.every((ann) => ann.label === 'bogus') ? 'negative' : 'positive'
 }
 
 function buildAnnotationPayload(bboxAnnotations) {
   return {
+    // Keep the legacy bucket field for older deployed backends that still require it.
+    bucket: deriveLegacyBucket(bboxAnnotations),
     source_view: currentView.value,
     metadata: {
       tool: 'bbox',
@@ -1725,6 +1742,9 @@ async function saveActiveTaskAnnotations(options = {}) {
 
 function formatAutoSubmitError(err) {
   const message = err instanceof Error ? err.message : 'Failed to submit annotations'
+  if (message === '会话已过期，请重新登录' || message === 'Session expired. Please log in again') {
+    return '自动提交已停止：会话已过期，请重新登录'
+  }
   if (message === 'Current task is not locked by this client') {
     return '自动提交已跳过：当前任务未被本会话持有'
   }
@@ -1753,7 +1773,11 @@ async function runAutoSubmit() {
     autoSubmitStatusMessage.value = `自动提交成功：已保存 ${response.saved_count} 条标注`
     emit('annotations-saved', savedTaskId)
   } catch (err) {
-    autoSubmitStatusMessage.value = formatAutoSubmitError(err)
+    const nextMessage = formatAutoSubmitError(err)
+    autoSubmitStatusMessage.value = nextMessage
+    if (nextMessage.includes('会话已过期')) {
+      autoSubmitEnabled.value = false
+    }
   } finally {
     autoSubmitInFlight.value = false
     isSubmitting.value = false

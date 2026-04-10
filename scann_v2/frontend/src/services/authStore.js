@@ -67,16 +67,38 @@ export function getAuthToken() {
   return authState.token
 }
 
+export function getAuthTokenExpiresAtMs(token = authState.token) {
+  const payload = decodeJwtPayload(token)
+  const exp = Number(payload?.exp)
+  return Number.isFinite(exp) ? exp * 1000 : 0
+}
+
+export function isAuthTokenExpired(token = authState.token, bufferMs = 0) {
+  const expiresAtMs = getAuthTokenExpiresAtMs(token)
+  if (!expiresAtMs) {
+    return false
+  }
+  return Date.now() + Math.max(0, Number(bufferMs) || 0) >= expiresAtMs
+}
+
 export async function authFetch(url, options = {}, fetchImpl = fetch) {
   const headers = {
     ...(options.headers || {}),
   }
   const token = getAuthToken()
   if (token) {
+    if (isAuthTokenExpired(token)) {
+      clearAuthSession()
+      throw new Error('Session expired. Please log in again')
+    }
     headers.Authorization = `Bearer ${token}`
   }
-  return fetchImpl(url, {
+  const response = await fetchImpl(url, {
     ...options,
     headers,
   })
+  if (response.status === 401) {
+    clearAuthSession()
+  }
+  return response
 }
