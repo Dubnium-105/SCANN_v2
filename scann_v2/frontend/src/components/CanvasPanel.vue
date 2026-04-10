@@ -1840,7 +1840,8 @@ async function saveActiveTaskAnnotations(options = {}) {
   }
 
   const bboxAnnotations = getSubmittableBboxAnnotations()
-  if (bboxAnnotations.length === 0) {
+  const hasManualCrop = Boolean(manualCropRect.value)
+  if (bboxAnnotations.length === 0 && !hasManualCrop) {
     throw new Error('No valid bbox annotations to submit')
   }
 

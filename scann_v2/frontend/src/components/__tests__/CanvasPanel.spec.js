@@ -344,6 +344,38 @@ describe('CanvasPanel', () => {
     })
   })
 
+  it('allows submitting manual crop boundary without bbox annotations', async () => {
+    const wrapper = mount(CanvasPanel, {
+      global: {
+        stubs: globalStubs,
+      },
+    })
+
+    await flushPromises()
+
+    await wrapper.get('[data-testid="tool-crop"]').trigger('click')
+    const stage = wrapper.get('[data-testid="stage"]')
+    await stage.trigger('mousedown', { clientX: 0, clientY: 0 })
+    await stage.trigger('mousemove', { clientX: 90, clientY: 70 })
+    await stage.trigger('mouseup', { clientX: 90, clientY: 70 })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="submit-annotations"]').trigger('click')
+    await flushPromises()
+
+    const submitCall = fetchCalls.find(
+      (item) => String(item.url).startsWith('/api/annotations/') && item.options?.method === 'POST',
+    )
+    expect(submitCall).toBeTruthy()
+
+    const payload = JSON.parse(submitCall.options?.body)
+    expect(payload.annotations).toHaveLength(0)
+    expect(payload.metadata?.manual_crop?.x).toBe(0)
+    expect(payload.metadata?.manual_crop?.y).toBe(0)
+    expect(payload.metadata?.manual_crop?.width).toBeGreaterThan(1)
+    expect(payload.metadata?.manual_crop?.height).toBeGreaterThan(1)
+  })
+
   it('auto-submits current task at the configured interval', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-09T00:00:00.000Z'))
