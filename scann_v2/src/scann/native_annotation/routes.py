@@ -194,9 +194,11 @@ def list_tasks(
     lock_service = get_task_lock_service()
     normalized_client_id = client_id.strip() if client_id and client_id.strip() else None
     responses: list[TaskListResponse] = []
-    for task in service.list_tasks():
+    tasks = service.list_tasks()
+    locks_by_task = lock_service.get_task_locks([task.task_id for task in tasks])
+    for task in tasks:
         task_payload = task.model_dump()
-        lock = lock_service.get_task_lock(task.task_id)
+        lock = locks_by_task.get(task.task_id)
         if lock is not None:
             task_payload["lock_expires_at"] = lock.expires_at.isoformat(timespec="seconds")
             if normalized_client_id is not None:

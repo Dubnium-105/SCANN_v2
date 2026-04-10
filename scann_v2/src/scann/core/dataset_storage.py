@@ -1240,6 +1240,26 @@ class DatasetStorage:
             ).fetchone()
         return self._row_to_task(row) if row is not None else None
 
+    def list_tasks_by_ids(self, task_ids: Iterable[str]) -> list[TaskRecord]:
+        normalized_ids = [task_id for task_id in dict.fromkeys(task_ids) if task_id]
+        if not normalized_ids:
+            return []
+        placeholders = ",".join("?" for _ in normalized_ids)
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            rows = connection.execute(
+                f"""
+                SELECT * FROM tasks
+                WHERE task_id IN ({placeholders})
+                """,
+                tuple(normalized_ids),
+            ).fetchall()
+        tasks_by_id = {
+            task.task_id: task
+            for task in (self._row_to_task(row) for row in rows)
+        }
+        return [tasks_by_id[task_id] for task_id in normalized_ids if task_id in tasks_by_id]
+
     def try_claim_task(self, task_id: str, client_id: str, expires_at: str, now_iso: str) -> bool:
         with self._connect() as connection:
             self._ensure_schema(connection)

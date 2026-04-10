@@ -238,3 +238,24 @@ class TaskLockService:
                 expires_at=task.claim_expires_at,
             )
         return self._locks_by_task.get(task_id)
+
+    def get_task_locks(self, task_ids: list[str]) -> dict[str, TaskLock]:
+        self._cleanup_expired_locks()
+        normalized_ids = [task_id for task_id in dict.fromkeys(task_ids) if task_id]
+        if self._storage is not None:
+            locks: dict[str, TaskLock] = {}
+            for task in self._storage.list_tasks_by_ids(normalized_ids):
+                lock = self._parse_lock(
+                    task_id=task.task_id,
+                    client_id=str(task.claim_client_id or ""),
+                    locked_at=task.claim_locked_at,
+                    expires_at=task.claim_expires_at,
+                )
+                if lock is not None:
+                    locks[task.task_id] = lock
+            return locks
+        return {
+            task_id: lock
+            for task_id, lock in self._locks_by_task.items()
+            if task_id in normalized_ids
+        }

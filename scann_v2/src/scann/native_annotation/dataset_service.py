@@ -60,33 +60,35 @@ class DatasetService:
         stripped = DatasetPreprocessService.strip_aligned_crop_suffix(normalized)
         return field_name or stripped
 
-    def list_tasks(self) -> list[TaskSession]:
-        self._preprocess_service.prepare_annotation_dataset(self.dataset_root)
-        prepared_tasks = self._preprocess_service.collect_preprocessed_tasks(self.dataset_root)
-        if prepared_tasks:
-            tasks: list[TaskSession] = []
-            for task in prepared_tasks:
-                tasks.append(
-                    TaskSession(
-                        task_id=task.task_id,
-                        new_path=task.new_path.relative_to(self.dataset_root).as_posix(),
-                        old_path=task.old_path.relative_to(self.dataset_root).as_posix() if task.old_path else None,
-                        new_marked_path=(
-                            task.new_marked_path.relative_to(self.dataset_root).as_posix()
-                            if task.new_marked_path
-                            else None
-                        ),
-                    )
+    def _prepared_task_sessions(self) -> list[TaskSession]:
+        tasks: list[TaskSession] = []
+        for task in self._preprocess_service.collect_preprocessed_tasks(self.dataset_root):
+            tasks.append(
+                TaskSession(
+                    task_id=task.task_id,
+                    new_path=task.new_path.relative_to(self.dataset_root).as_posix(),
+                    old_path=task.old_path.relative_to(self.dataset_root).as_posix() if task.old_path else None,
+                    new_marked_path=(
+                        task.new_marked_path.relative_to(self.dataset_root).as_posix()
+                        if task.new_marked_path
+                        else None
+                    ),
                 )
+            )
+        return tasks
+
+    def list_tasks(self) -> list[TaskSession]:
+        tasks = self._prepared_task_sessions()
+        if tasks:
             return tasks
 
         new_files = self._scan_dir(self.new_dir)
         old_files = self._scan_dir(self.old_dir)
         new_marked_files = self._scan_dir(self.new_marked_dir)
 
-        tasks: list[TaskSession] = []
+        legacy_tasks: list[TaskSession] = []
         for task_id in sorted(new_files.keys()):
-            tasks.append(
+            legacy_tasks.append(
                 TaskSession(
                     task_id=task_id,
                     new_path=new_files[task_id],
@@ -94,4 +96,7 @@ class DatasetService:
                     new_marked_path=new_marked_files.get(task_id),
                 )
             )
-        return tasks
+
+        self._preprocess_service.prepare_annotation_dataset(self.dataset_root)
+        tasks = self._prepared_task_sessions()
+        return tasks or legacy_tasks

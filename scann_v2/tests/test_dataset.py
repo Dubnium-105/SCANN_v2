@@ -83,6 +83,43 @@ def test_api_tasks_aggregates_triplet_paths(tmp_path, monkeypatch) -> None:
     ]
 
 
+def test_dataset_service_uses_prepared_tasks_without_repreprocessing(tmp_path) -> None:
+    from scann.native_annotation.dataset_service import DatasetService
+    from scann.services.dataset_preprocess_service import PreparedTaskPaths
+
+    dataset_root = tmp_path / "dataset"
+    new_path = dataset_root / "new" / "prepared.fts"
+    old_path = dataset_root / "old" / "prepared.fts"
+    _touch(new_path)
+    _touch(old_path)
+
+    class StubPreprocessService:
+        def __init__(self) -> None:
+            self.prepare_calls = 0
+
+        def collect_preprocessed_tasks(self, root: Path) -> list[PreparedTaskPaths]:
+            return [
+                PreparedTaskPaths(
+                    task_id="prepared",
+                    new_path=Path(root) / "new" / "prepared.fts",
+                    old_path=Path(root) / "old" / "prepared.fts",
+                )
+            ]
+
+        def prepare_annotation_dataset(self, root: Path):
+            self.prepare_calls += 1
+            raise AssertionError("list_tasks should not preprocess when prepared tasks exist")
+
+    preprocess_service = StubPreprocessService()
+    service = DatasetService(dataset_root=dataset_root, preprocess_service=preprocess_service)
+
+    tasks = service.list_tasks()
+
+    assert preprocess_service.prepare_calls == 0
+    assert tasks[0].task_id == "prepared"
+    assert tasks[0].new_path == "new/prepared.fts"
+
+
 def test_api_dataset_preprocess_exposes_uploaded_annotation_views(tmp_path, monkeypatch) -> None:
     from scann.native_annotation import routes as native_routes
     from scann.native_annotation.dataset_service import DatasetService
