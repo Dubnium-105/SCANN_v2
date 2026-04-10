@@ -2439,31 +2439,13 @@ async function submitCurrentAnnotations() {
 
   try {
     isSubmitting.value = true
-    const shouldReleaseAfterSave = hasNextTask.value
     const { response, savedTaskId } = await saveActiveTaskAnnotations({
-      releaseAfterSave: shouldReleaseAfterSave,
+      releaseAfterSave: false,
     })
 
-    let movedToNextTask = false
-    if (hasNextTask.value) {
-      movedToNextTask = await loadTaskAtIndex(currentTaskIndex.value + 1)
-    }
-
-    if (!movedToNextTask && shouldReleaseAfterSave) {
-      const currentIndex = taskList.value.findIndex((task) => task.task_id === savedTaskId)
-      if (currentIndex >= 0) {
-        await loadTaskAtIndex(currentIndex, { releasePrevious: false })
-      }
-    }
-
-    saveMessage.value = movedToNextTask
-      ? `Saved ${response.saved_count} annotations · switched to next task`
-      : `Saved ${response.saved_count} annotations`
-
-    if (!movedToNextTask) {
-      resetAnnotationStates()
-      await loadLatestRevisionAnnotations(savedTaskId)
-    }
+    saveMessage.value = `Saved ${response.saved_count} annotations`
+    resetAnnotationStates()
+    await loadLatestRevisionAnnotations(savedTaskId)
 
     emit('annotations-saved', savedTaskId)
     resetAutoSubmitSchedule(Date.now())
