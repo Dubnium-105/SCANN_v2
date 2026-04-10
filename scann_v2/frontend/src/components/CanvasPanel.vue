@@ -2181,12 +2181,17 @@ function clipRectToCrop(rect) {
   if (!rect) {
     return null
   }
+  if (!manualCropRect.value) {
+    return {
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height,
+    }
+  }
   const normalizedRect = clampRectToImage(rect)
   if (!normalizedRect) {
     return null
-  }
-  if (!manualCropRect.value) {
-    return normalizedRect
   }
   const crop = manualCropRect.value
   const x0 = Math.max(normalizedRect.x, crop.x)
