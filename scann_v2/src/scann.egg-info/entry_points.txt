@@ -1,2 +1,0 @@
-[console_scripts]
-scann = scann.app:main
