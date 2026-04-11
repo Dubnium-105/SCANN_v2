@@ -604,6 +604,41 @@ describe('CanvasPanel', () => {
     expect(items()[0].classes()).not.toContain('border-sky-500')
   })
 
+  it('prefers the smaller bbox when overlapping boxes both contain the click point', async () => {
+    const wrapper = mount(CanvasPanel, {
+      global: {
+        stubs: globalStubs,
+      },
+    })
+
+    await flushPromises()
+
+    const stage = wrapper.get('[data-testid="stage"]')
+    await wrapper.get('[data-testid="tool-bbox"]').trigger('click')
+
+    await stage.trigger('mousedown', { clientX: 40, clientY: 40 })
+    await stage.trigger('mousemove', { clientX: 60, clientY: 60 })
+    await stage.trigger('mouseup', { clientX: 60, clientY: 60 })
+
+    await stage.trigger('mousedown', { clientX: 20, clientY: 20 })
+    await stage.trigger('mousemove', { clientX: 100, clientY: 100 })
+    await stage.trigger('mouseup', { clientX: 100, clientY: 100 })
+    await flushPromises()
+
+    const items = () => wrapper.findAll('[data-testid="annotation-item"]')
+    expect(items()).toHaveLength(2)
+    expect(items()[1].classes()).toContain('border-sky-500')
+
+    await wrapper.get('[data-testid="tool-move"]').trigger('click')
+    await stage.trigger('mousedown', { clientX: 50, clientY: 50 })
+    await stage.trigger('mouseup', { clientX: 50, clientY: 50 })
+    await flushPromises()
+
+    expect(items()[0].attributes('data-ann-display-id')).toBe('A0001')
+    expect(items()[0].classes()).toContain('border-sky-500')
+    expect(items()[1].classes()).not.toContain('border-sky-500')
+  })
+
   it('supports disappeared target label options and keyboard shortcuts', async () => {
     const wrapper = mount(CanvasPanel, {
       global: {

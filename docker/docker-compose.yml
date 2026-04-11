@@ -5,6 +5,8 @@ services:
       dockerfile: docker/backend/Dockerfile
       args:
         PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.11-slim}
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-deb.debian.org}
+        DEBIAN_SECURITY_MIRROR: ${DEBIAN_SECURITY_MIRROR:-security.debian.org}
     container_name: scann-native-backend
     restart: unless-stopped
     env_file:

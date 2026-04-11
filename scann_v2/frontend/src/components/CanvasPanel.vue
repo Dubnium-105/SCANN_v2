@@ -2433,6 +2433,47 @@ function annotationContainsPoint(annotation, point) {
   return false
 }
 
+function getBboxArea(annotation) {
+  return Math.max(0, Number(annotation?.width) || 0) * Math.max(0, Number(annotation?.height) || 0)
+}
+
+function getBboxCenterDistance(point, annotation) {
+  if (!point || !annotation) {
+    return Number.POSITIVE_INFINITY
+  }
+  return distanceBetweenPoints(point, {
+    x: Number(annotation.x) + Number(annotation.width) / 2,
+    y: Number(annotation.y) + Number(annotation.height) / 2,
+  })
+}
+
+function findBestBboxAtPoint(point) {
+  const matched = annotations.value
+    .map((annotation, index) => ({ annotation, index }))
+    .filter(({ annotation }) => annotation.type === 'bbox' && annotationContainsPoint(annotation, point))
+
+  if (matched.length === 0) {
+    return null
+  }
+
+  // When overlapping boxes both contain the click point, prefer the more specific one.
+  matched.sort((left, right) => {
+    const areaDiff = getBboxArea(left.annotation) - getBboxArea(right.annotation)
+    if (Math.abs(areaDiff) > Number.EPSILON) {
+      return areaDiff
+    }
+
+    const centerDistanceDiff = getBboxCenterDistance(point, left.annotation) - getBboxCenterDistance(point, right.annotation)
+    if (Math.abs(centerDistanceDiff) > Number.EPSILON) {
+      return centerDistanceDiff
+    }
+
+    return right.index - left.index
+  })
+
+  return matched[0].annotation
+}
+
 function findAnnotationAtPoint(point) {
   if (!point) {
     return null
@@ -2440,6 +2481,14 @@ function findAnnotationAtPoint(point) {
 
   const hitOrder = ['polygon', 'point', 'bbox']
   for (const type of hitOrder) {
+    if (type === 'bbox') {
+      const matchedBbox = findBestBboxAtPoint(point)
+      if (matchedBbox) {
+        return matchedBbox
+      }
+      continue
+    }
+
     const candidates = annotations.value
       .filter((annotation) => annotation.type === type)
       .slice()
