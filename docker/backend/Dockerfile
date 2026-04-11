@@ -1,4 +1,6 @@
-FROM python:3.11-slim AS builder
+ARG PYTHON_BASE_IMAGE=python:3.11-slim
+
+FROM ${PYTHON_BASE_IMAGE} AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
@@ -14,7 +16,9 @@ COPY docker/backend/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir --prefix=/install -r /tmp/requirements.txt
 
 
-FROM python:3.11-slim
+ARG PYTHON_BASE_IMAGE=python:3.11-slim
+
+FROM ${PYTHON_BASE_IMAGE}
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

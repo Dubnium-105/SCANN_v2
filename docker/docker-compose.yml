@@ -3,6 +3,8 @@ services:
     build:
       context: ..
       dockerfile: docker/backend/Dockerfile
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.11-slim}
     container_name: scann-native-backend
     restart: unless-stopped
     env_file:
@@ -28,6 +30,9 @@ services:
     build:
       context: ..
       dockerfile: docker/frontend/Dockerfile
+      args:
+        NODE_BASE_IMAGE: ${NODE_BASE_IMAGE:-node:20-alpine}
+        NGINX_BASE_IMAGE: ${NGINX_BASE_IMAGE:-nginx:1.27-alpine}
     container_name: scann-native-frontend
     restart: unless-stopped
     depends_on:

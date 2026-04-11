@@ -1,4 +1,7 @@
-FROM node:20-alpine AS builder
+ARG NODE_BASE_IMAGE=node:20-alpine
+ARG NGINX_BASE_IMAGE=nginx:1.27-alpine
+
+FROM ${NODE_BASE_IMAGE} AS builder
 
 WORKDIR /app
 
@@ -9,7 +12,9 @@ COPY scann_v2/frontend/ ./
 RUN npm run build
 
 
-FROM nginx:1.27-alpine
+ARG NGINX_BASE_IMAGE=nginx:1.27-alpine
+
+FROM ${NGINX_BASE_IMAGE}
 
 COPY docker/frontend/nginx.conf /etc/nginx/nginx.conf
 COPY --from=builder /app/dist /usr/share/nginx/html
