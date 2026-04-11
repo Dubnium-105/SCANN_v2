@@ -450,8 +450,11 @@
                 y: ann.y,
                 width: ann.width,
                 height: ann.height,
-                stroke: getAnnotationColor(ann),
-                strokeWidth: bboxStrokeWidth,
+                stroke: getCanvasAnnotationStroke(ann),
+                strokeWidth: getCanvasBboxStrokeWidth(ann),
+                fill: getCanvasBboxFill(ann),
+                shadowColor: getCanvasAnnotationShadowColor(ann),
+                shadowBlur: getCanvasAnnotationShadowBlur(ann),
               }"
             />
             <v-rect
@@ -511,10 +514,12 @@
               :config="{
                 x: ann.x,
                 y: ann.y,
-                radius: pointRadius,
+                radius: getCanvasPointRadius(ann),
                 fill: getAnnotationColor(ann),
-                stroke: getAnnotationColor(ann),
-                strokeWidth: 1,
+                stroke: getCanvasAnnotationStroke(ann),
+                strokeWidth: getCanvasPointStrokeWidth(ann),
+                shadowColor: getCanvasAnnotationShadowColor(ann),
+                shadowBlur: getCanvasAnnotationShadowBlur(ann),
               }"
             />
             <v-line
@@ -523,8 +528,11 @@
               :config="{
                 points: toFlatPoints(ann.points),
                 closed: true,
-                stroke: getAnnotationColor(ann),
-                strokeWidth: polygonStrokeWidth,
+                stroke: getCanvasAnnotationStroke(ann),
+                strokeWidth: getCanvasPolygonStrokeWidth(ann),
+                fill: getCanvasPolygonFill(ann),
+                shadowColor: getCanvasAnnotationShadowColor(ann),
+                shadowBlur: getCanvasAnnotationShadowBlur(ann),
               }"
             />
             <v-line
@@ -821,6 +829,8 @@ const lastRemovedIndex = ref(-1)
 const pendingDeleteAnnotationId = ref('')
 const annotationListViewportRef = ref(null)
 const annotationListScrollTop = ref(0)
+const stagePointerDownScreen = ref(null)
+const stageDragMoved = ref(false)
 const ANNOTATION_LIST_ROW_HEIGHT = 36
 const ANNOTATION_LIST_VIEWPORT_HEIGHT = 112
 const ANNOTATION_LIST_OVERSCAN = 8
@@ -854,6 +864,9 @@ let autoSubmitTimerId = null
 const taskClientId = getTaskClientId()
 const AUTO_SUBMIT_MIN_SECONDS = 30
 const AUTO_SUBMIT_MAX_SECONDS = 3600
+const CANVAS_CLICK_SELECTION_TOLERANCE = 6
+const CANVAS_DRAW_CLICK_TOLERANCE = 2
+const ANNOTATION_HIT_SCREEN_TOLERANCE = 8
 
 const taskProgressText = computed(() => {
   if (taskList.value.length === 0 || currentTaskIndex.value < 0) {
@@ -1373,6 +1386,7 @@ function onDragEnd(event) {
     return
   }
 
+  stageDragMoved.value = true
   stageX.value = position.x
   stageY.value = position.y
 }
@@ -1383,6 +1397,7 @@ function onDragMove(event) {
     return
   }
 
+  stageDragMoved.value = true
   stageX.value = position.x
   stageY.value = position.y
 }
@@ -1949,6 +1964,52 @@ function toFlatPoints(points) {
   return flat
 }
 
+function distanceBetweenPoints(first, second) {
+  if (!first || !second) {
+    return Number.POSITIVE_INFINITY
+  }
+  const dx = Number(first.x) - Number(second.x)
+  const dy = Number(first.y) - Number(second.y)
+  return Math.hypot(dx, dy)
+}
+
+function getStageEventScreenPoint(event) {
+  const raw = event?.evt ?? event
+  if (typeof raw?.clientX === 'number' && typeof raw?.clientY === 'number') {
+    return { x: raw.clientX, y: raw.clientY }
+  }
+  if (typeof raw?.offsetX === 'number' && typeof raw?.offsetY === 'number') {
+    return { x: raw.offsetX, y: raw.offsetY }
+  }
+  return null
+}
+
+function rememberStagePointerDown(event) {
+  stageDragMoved.value = false
+  const screenPoint = getStageEventScreenPoint(event)
+  stagePointerDownScreen.value = screenPoint ? { ...screenPoint } : null
+}
+
+function clearStagePointerDown() {
+  stagePointerDownScreen.value = null
+}
+
+function isCanvasClickGesture(event, tolerance = CANVAS_CLICK_SELECTION_TOLERANCE) {
+  const start = stagePointerDownScreen.value
+  const end = getStageEventScreenPoint(event)
+  if (!start || !end) {
+    return false
+  }
+  return distanceBetweenPoints(start, end) <= tolerance
+}
+
+function getAnnotationHitTolerance() {
+  return Math.max(
+    2,
+    ANNOTATION_HIT_SCREEN_TOLERANCE / Math.max(Number(stageScale.value) || 1, 0.1),
+  )
+}
+
 function createAnnotation(base) {
   let initialLabel = 'Unlabeled'
   let initialDetail = undefined
@@ -2016,6 +2077,54 @@ function hexToRgba(hexColor, alpha) {
   const g = parseInt(match[2], 16)
   const b = parseInt(match[3], 16)
   return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
+function isAnnotationSelected(annotationId) {
+  return selectedAnnotationId.value === annotationId
+}
+
+function getCanvasAnnotationStroke(annotation) {
+  return isAnnotationSelected(annotation?.id) ? '#38bdf8' : getAnnotationColor(annotation)
+}
+
+function getCanvasAnnotationShadowColor(annotation) {
+  return isAnnotationSelected(annotation?.id) ? '#38bdf8' : undefined
+}
+
+function getCanvasAnnotationShadowBlur(annotation) {
+  return isAnnotationSelected(annotation?.id) ? 10 : 0
+}
+
+function getCanvasBboxStrokeWidth(annotation) {
+  return isAnnotationSelected(annotation?.id)
+    ? Math.max(3, bboxStrokeWidth.value + 1.5)
+    : bboxStrokeWidth.value
+}
+
+function getCanvasBboxFill(annotation) {
+  return isAnnotationSelected(annotation?.id)
+    ? hexToRgba(getAnnotationColor(annotation), 0.16)
+    : undefined
+}
+
+function getCanvasPointRadius(annotation) {
+  return isAnnotationSelected(annotation?.id) ? pointRadius.value + 2 : pointRadius.value
+}
+
+function getCanvasPointStrokeWidth(annotation) {
+  return isAnnotationSelected(annotation?.id) ? 2 : 1
+}
+
+function getCanvasPolygonStrokeWidth(annotation) {
+  return isAnnotationSelected(annotation?.id)
+    ? Math.max(3, polygonStrokeWidth.value + 1.5)
+    : polygonStrokeWidth.value
+}
+
+function getCanvasPolygonFill(annotation) {
+  return isAnnotationSelected(annotation?.id)
+    ? hexToRgba(getAnnotationColor(annotation), 0.12)
+    : undefined
 }
 
 function getAnnotationItemStyle(annotation, isSelected) {
@@ -2247,6 +2356,111 @@ function pointInRect(point, rect) {
   )
 }
 
+function pointInPolygon(point, points) {
+  if (!point || !Array.isArray(points) || points.length < 3) {
+    return false
+  }
+
+  let inside = false
+  for (let index = 0, prev = points.length - 1; index < points.length; prev = index, index += 1) {
+    const currentPoint = points[index]
+    const previousPoint = points[prev]
+    const intersects = (
+      (currentPoint.y > point.y) !== (previousPoint.y > point.y)
+      && point.x < ((previousPoint.x - currentPoint.x) * (point.y - currentPoint.y))
+        / ((previousPoint.y - currentPoint.y) || Number.EPSILON)
+        + currentPoint.x
+    )
+    if (intersects) {
+      inside = !inside
+    }
+  }
+  return inside
+}
+
+function distanceToSegment(point, start, end) {
+  if (!point || !start || !end) {
+    return Number.POSITIVE_INFINITY
+  }
+
+  const dx = end.x - start.x
+  const dy = end.y - start.y
+  if (dx === 0 && dy === 0) {
+    return distanceBetweenPoints(point, start)
+  }
+
+  const t = Math.max(
+    0,
+    Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / (dx * dx + dy * dy)),
+  )
+  return distanceBetweenPoints(point, {
+    x: start.x + t * dx,
+    y: start.y + t * dy,
+  })
+}
+
+function pointNearPolygonStroke(point, points, tolerance) {
+  if (!point || !Array.isArray(points) || points.length < 2) {
+    return false
+  }
+
+  for (let index = 0; index < points.length; index += 1) {
+    const start = points[index]
+    const end = points[(index + 1) % points.length]
+    if (distanceToSegment(point, start, end) <= tolerance) {
+      return true
+    }
+  }
+  return false
+}
+
+function annotationContainsPoint(annotation, point) {
+  if (!annotation || !point) {
+    return false
+  }
+
+  const tolerance = getAnnotationHitTolerance()
+  if (annotation.type === 'bbox') {
+    return pointInRect(point, annotation)
+  }
+  if (annotation.type === 'point') {
+    return distanceBetweenPoints(point, annotation) <= Math.max(pointRadius.value, tolerance)
+  }
+  if (annotation.type === 'polygon') {
+    const points = Array.isArray(annotation.points) ? annotation.points : []
+    return pointInPolygon(point, points) || pointNearPolygonStroke(point, points, tolerance)
+  }
+  return false
+}
+
+function findAnnotationAtPoint(point) {
+  if (!point) {
+    return null
+  }
+
+  const hitOrder = ['polygon', 'point', 'bbox']
+  for (const type of hitOrder) {
+    const candidates = annotations.value
+      .filter((annotation) => annotation.type === type)
+      .slice()
+      .reverse()
+    const matched = candidates.find((annotation) => annotationContainsPoint(annotation, point))
+    if (matched) {
+      return matched
+    }
+  }
+  return null
+}
+
+function trySelectAnnotationAtPoint(point) {
+  const matched = findAnnotationAtPoint(point)
+  if (!matched) {
+    return false
+  }
+  selectAnnotation(matched.id)
+  return true
+}
+
 function clipRectToCrop(rect) {
   if (!rect) {
     return null
@@ -2397,6 +2611,12 @@ function onStageMouseDown(event) {
     return
   }
 
+  if (typeof raw?.button === 'number' && raw.button !== 0) {
+    return
+  }
+
+  rememberStagePointerDown(event)
+
   if (toolMode.value !== 'bbox' && toolMode.value !== 'crop') {
     return
   }
@@ -2441,15 +2661,35 @@ function onStageMouseUp(event) {
   const raw = event?.evt ?? event
   if (raw?.button === 1 || middlePanActive.value) {
     stopMiddlePan()
+    clearStagePointerDown()
+    return
+  }
+
+  if (typeof raw?.button === 'number' && raw.button !== 0) {
+    clearStagePointerDown()
     return
   }
 
   const pointer = getPointer(event)
+  const wasStageDragged = stageDragMoved.value
+  const isDrawClick = isCanvasClickGesture(event, CANVAS_DRAW_CLICK_TOLERANCE)
+  stageDragMoved.value = false
+  clearStagePointerDown()
+
+  if (wasStageDragged) {
+    return
+  }
+
   if (!pointer) {
-    if (toolMode.value === 'bbox') {
+    if (toolMode.value === 'bbox' || toolMode.value === 'crop') {
       draftRect.value = null
       drawStart.value = null
     }
+    return
+  }
+
+  if (toolMode.value === 'move') {
+    trySelectAnnotationAtPoint(pointer)
     return
   }
 
@@ -2472,6 +2712,13 @@ function onStageMouseUp(event) {
       return
     }
     currentPolygonPoints.value = [...currentPolygonPoints.value, { x: pointer.x, y: pointer.y }]
+    return
+  }
+
+  if ((toolMode.value === 'crop' || toolMode.value === 'bbox') && drawStart.value && isDrawClick) {
+    draftRect.value = null
+    drawStart.value = null
+    trySelectAnnotationAtPoint(pointer)
     return
   }
 

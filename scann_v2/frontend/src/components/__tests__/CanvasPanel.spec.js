@@ -564,6 +564,46 @@ describe('CanvasPanel', () => {
     expect(wrapper.findAll('[data-testid="annotation-item"]')[0].attributes('data-ann-label')).toBe('real')
   })
 
+  it('selects an existing annotation by clicking it on the canvas in move mode', async () => {
+    const wrapper = mount(CanvasPanel, {
+      global: {
+        stubs: globalStubs,
+      },
+    })
+
+    await flushPromises()
+
+    const stage = wrapper.get('[data-testid="stage"]')
+    await wrapper.get('[data-testid="tool-bbox"]').trigger('click')
+    await stage.trigger('mousedown', { clientX: 10, clientY: 20 })
+    await stage.trigger('mousemove', { clientX: 30, clientY: 40 })
+    await stage.trigger('mouseup', { clientX: 30, clientY: 40 })
+    await stage.trigger('mousedown', { clientX: 70, clientY: 80 })
+    await stage.trigger('mousemove', { clientX: 100, clientY: 110 })
+    await stage.trigger('mouseup', { clientX: 100, clientY: 110 })
+    await flushPromises()
+
+    const items = () => wrapper.findAll('[data-testid="annotation-item"]')
+    expect(items()).toHaveLength(2)
+    await items()[0].trigger('click')
+    await flushPromises()
+
+    expect(items()[0].classes()).toContain('border-sky-500')
+    expect(items()[1].classes()).not.toContain('border-sky-500')
+
+    await wrapper.get('[data-testid="tool-move"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="tool-move"]').classes()).toContain('border-sky-400')
+
+    await stage.trigger('mousedown', { clientX: 85, clientY: 95 })
+    await stage.trigger('mouseup', { clientX: 85, clientY: 95 })
+    await flushPromises()
+
+    expect(items()).toHaveLength(2)
+    expect(items()[1].classes()).toContain('border-sky-500')
+    expect(items()[0].classes()).not.toContain('border-sky-500')
+  })
+
   it('supports disappeared target label options and keyboard shortcuts', async () => {
     const wrapper = mount(CanvasPanel, {
       global: {
