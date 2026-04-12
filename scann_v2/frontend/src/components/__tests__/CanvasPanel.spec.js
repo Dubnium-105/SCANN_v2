@@ -443,6 +443,51 @@ describe('CanvasPanel', () => {
     expect(afterInvert.startsWith('255,255,255,255')).toBe(true)
   })
 
+  it('renders FITS pixels through a non-smoothed pixelated canvas without CSS scale transforms', async () => {
+    const originalImageData = globalThis.ImageData
+    try {
+      if (typeof globalThis.ImageData === 'undefined') {
+        globalThis.ImageData = class ImageDataMock {
+          constructor(data, width, height) {
+            this.data = data
+            this.width = width
+            this.height = height
+          }
+        }
+      }
+
+      const context = {
+        clearRect: vi.fn(),
+        putImageData: vi.fn(),
+        imageSmoothingEnabled: true,
+      }
+      HTMLCanvasElement.prototype.getContext.mockImplementation(() => context)
+
+      const wrapper = mount(CanvasPanel, {
+        global: {
+          stubs: globalStubs,
+        },
+      })
+
+      await flushPromises()
+
+      const canvas = wrapper.get('[data-testid="fits-render-canvas"]').element
+      expect(canvas.style.imageRendering).toBe('pixelated')
+      expect(canvas.style.transform).toBe('')
+      expect(canvas.style.width).toBe('2px')
+      expect(canvas.style.height).toBe('2px')
+      expect(context.imageSmoothingEnabled).toBe(false)
+      expect(context.clearRect).toHaveBeenCalledWith(0, 0, 2, 2)
+      expect(context.putImageData).toHaveBeenCalled()
+    } finally {
+      if (originalImageData === undefined) {
+        delete globalThis.ImageData
+      } else {
+        globalThis.ImageData = originalImageData
+      }
+    }
+  })
+
   it('auto-applies brightness-matched stretch per task view and can sync other views from current min/max', async () => {
     mockImageFetch({
       'new/PGC 17069.fts': [0, 1, 2, 3],

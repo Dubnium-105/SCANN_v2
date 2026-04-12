@@ -399,7 +399,7 @@
       >
         <canvas
           ref="fitsCanvasRef"
-          class="absolute inset-0 pointer-events-none z-0"
+          class="absolute pointer-events-none z-0"
           :style="fitsCanvasStyle"
           data-testid="fits-render-canvas"
         />
@@ -1068,10 +1068,11 @@ const stageConfig = computed(() => ({
 }))
 
 const fitsCanvasStyle = computed(() => ({
-  width: `${stageWidth.value}px`,
-  height: `${stageHeight.value}px`,
-  transform: `translate(${stageX.value}px, ${stageY.value}px) scale(${stageScale.value})`,
-  transformOrigin: 'top left',
+  left: `${stageX.value}px`,
+  top: `${stageY.value}px`,
+  width: `${Math.max(1, stageWidth.value * stageScale.value)}px`,
+  height: `${Math.max(1, stageHeight.value * stageScale.value)}px`,
+  imageRendering: 'pixelated',
 }))
 
 const {
@@ -1387,8 +1388,7 @@ function onDragEnd(event) {
   }
 
   stageDragMoved.value = true
-  stageX.value = position.x
-  stageY.value = position.y
+  updateStagePosition(position.x, position.y)
 }
 
 function onDragMove(event) {
@@ -1398,8 +1398,7 @@ function onDragMove(event) {
   }
 
   stageDragMoved.value = true
-  stageX.value = position.x
-  stageY.value = position.y
+  updateStagePosition(position.x, position.y)
 }
 
 function zoomAtPointer(deltaY, pointerX, pointerY) {
@@ -1419,8 +1418,10 @@ function zoomAtPointer(deltaY, pointerX, pointerY) {
   const worldY = (pointerY - stageY.value) / oldScale
 
   stageScale.value = nextScale
-  stageX.value = pointerX - worldX * nextScale
-  stageY.value = pointerY - worldY * nextScale
+  updateStagePosition(
+    pointerX - worldX * nextScale,
+    pointerY - worldY * nextScale,
+  )
 }
 
 function onWheel(event) {
@@ -1703,6 +1704,28 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value))
 }
 
+function getDevicePixelRatio() {
+  if (typeof window === 'undefined') {
+    return 1
+  }
+  const ratio = Number(window.devicePixelRatio)
+  return Number.isFinite(ratio) && ratio > 0 ? ratio : 1
+}
+
+function snapToDevicePixel(value) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) {
+    return 0
+  }
+  const ratio = getDevicePixelRatio()
+  return Math.round(numeric * ratio) / ratio
+}
+
+function updateStagePosition(nextX, nextY) {
+  stageX.value = snapToDevicePixel(nextX)
+  stageY.value = snapToDevicePixel(nextY)
+}
+
 function applyStretchForNode(node) {
   if (!node?.pixels || node.pixels.length === 0) {
     return
@@ -1781,6 +1804,9 @@ function redrawFitsCanvas() {
   if (!context) {
     return
   }
+
+  context.imageSmoothingEnabled = false
+  context.clearRect(0, 0, node.width, node.height)
 
   if (typeof ImageData !== 'undefined') {
     const imageData = new ImageData(stretchedRgba.value, node.width, node.height)
@@ -2622,8 +2648,7 @@ function onMiddlePanMove(event) {
 
   const dx = event.clientX - middlePanLast.x
   const dy = event.clientY - middlePanLast.y
-  stageX.value += dx
-  stageY.value += dy
+  updateStagePosition(stageX.value + dx, stageY.value + dy)
   middlePanLast = { x: event.clientX, y: event.clientY }
 }
 
