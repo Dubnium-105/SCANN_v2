@@ -39,6 +39,7 @@ dev = [
 
 [project.scripts]
 scann = "scann.app:main"
+scann-prelabel-worker = "scann.native_annotation.prelabel_worker:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

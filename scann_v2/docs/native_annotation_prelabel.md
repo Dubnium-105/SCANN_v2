@@ -225,13 +225,76 @@ worker 使用独立 token，不复用 annotator/admin JWT。
   - `worker_id`
   - `model_version`
 
-## 9. 当前实现边界
+## 9. Worker 运行配置
+
+当前实现提供独立 worker 入口：
+
+```bash
+scann-prelabel-worker
+```
+
+或：
+
+```bash
+python -m scann.native_annotation.prelabel_worker
+```
+
+关键环境变量：
+
+- `SCANN_PRELABEL_SERVER_URL`
+  - 标注后端地址，例如 `http://server:8000`
+- `SCANN_PRELABEL_WORKER_TOKEN`
+  - worker 专用 token
+- `SCANN_PRELABEL_WORKER_ID`
+  - worker 唯一标识
+- `SCANN_PRELABEL_WORKER_NAME`
+  - worker 展示名称
+- `SCANN_PRELABEL_WORKER_DATASET_ROOT`
+  - 可选。本地挂载的数据集根目录；设置后优先走本地读盘
+- `SCANN_PRELABEL_WORKER_CONFIG_PATH`
+  - 可选。读取现有 `scann_v2_config.json`
+- `SCANN_PRELABEL_WORKER_MODEL_PATH`
+  - 模型路径；未设置时回退到 `config.model_path`
+- `SCANN_PRELABEL_WORKER_MODEL_VERSION`
+  - worker 当前提供的模型版本
+- `SCANN_PRELABEL_WORKER_MODEL_FORMAT`
+- `SCANN_PRELABEL_WORKER_MODEL_BACKBONE`
+- `SCANN_PRELABEL_WORKER_COMPUTE_DEVICE`
+- `SCANN_PRELABEL_WORKER_IDLE_SECONDS`
+- `SCANN_PRELABEL_WORKER_HEARTBEAT_SECONDS`
+- `SCANN_PRELABEL_WORKER_REQUEST_TIMEOUT_SECONDS`
+
+检测参数默认从现有配置文件继承，也可以通过环境变量覆盖，例如：
+
+- `SCANN_PRELABEL_THRESH`
+- `SCANN_PRELABEL_MIN_AREA`
+- `SCANN_PRELABEL_MAX_AREA`
+- `SCANN_PRELABEL_CONTRAST_MIN`
+- `SCANN_PRELABEL_WORKER_PATCH_SIZE`
+- `SCANN_PRELABEL_WORKER_DETECTION_MODE`
+
+### 9.1 资产读取模式
+
+worker 支持两种读取方式：
+
+1. 共享目录模式
+   - 配置 `SCANN_PRELABEL_WORKER_DATASET_ROOT`
+   - worker 使用 claim 返回的相对路径直接读本地 FITS
+2. 远端拉取模式
+   - 不配置本地数据集目录
+   - worker 通过 `GET /api/prelabel-jobs/{job_id}/fits/{view}` 拉取二进制 FITS
+
+建议同局域网优先使用共享目录模式，跨公网再用远端拉取模式。
+
+## 10. 当前实现边界
 
 当前仓库先落第一批控制面能力：
 
 - 预标注 job 队列表
 - 当前 AI draft 存储
 - worker claim / heartbeat / complete / fail API
+- worker 常驻轮询进程
+- worker 受控拉取 FITS 资产接口
 - 任务列表中的预标注摘要字段
 - 单任务 AI draft 查询 API
 

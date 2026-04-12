@@ -1756,7 +1756,22 @@ class DatasetStorage:
             (now_iso, now_iso),
         )
 
-    def claim_next_prelabel_job(self, *, worker_id: str, timeout_seconds: int) -> PrelabelJobRecord | None:
+    def get_prelabel_job(self, job_id: str) -> PrelabelJobRecord | None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            row = connection.execute(
+                "SELECT * FROM prelabel_jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+        return self._row_to_prelabel_job(row) if row is not None else None
+
+    def claim_next_prelabel_job(
+        self,
+        *,
+        worker_id: str,
+        timeout_seconds: int,
+        model_versions: list[str] | None = None,
+    ) -> PrelabelJobRecord | None:
         now_dt = datetime.now(timezone.utc)
         now_iso = now_dt.isoformat(timespec="seconds")
         expires_at = self._expires_after(now_dt, timeout_seconds)
@@ -1764,14 +1779,27 @@ class DatasetStorage:
             self._ensure_schema(connection)
             self._requeue_stale_prelabel_jobs(connection, now_iso=now_iso)
             for _ in range(8):
-                row = connection.execute(
-                    """
-                    SELECT * FROM prelabel_jobs
-                    WHERE status = 'queued'
-                    ORDER BY priority DESC, created_at ASC, rowid ASC
-                    LIMIT 1
-                    """
-                ).fetchone()
+                if model_versions:
+                    placeholders = ",".join("?" for _ in model_versions)
+                    row = connection.execute(
+                        f"""
+                        SELECT * FROM prelabel_jobs
+                        WHERE status = 'queued'
+                          AND model_version IN ({placeholders})
+                        ORDER BY priority DESC, created_at ASC, rowid ASC
+                        LIMIT 1
+                        """,
+                        tuple(model_versions),
+                    ).fetchone()
+                else:
+                    row = connection.execute(
+                        """
+                        SELECT * FROM prelabel_jobs
+                        WHERE status = 'queued'
+                        ORDER BY priority DESC, created_at ASC, rowid ASC
+                        LIMIT 1
+                        """
+                    ).fetchone()
                 if row is None:
                     connection.commit()
                     return None

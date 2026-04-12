@@ -340,6 +340,28 @@ def fail_prelabel_job(
     return response
 
 
+@api_router.get("/prelabel-jobs/{job_id}/fits/{view_name}")
+def fetch_prelabel_job_fits(
+    job_id: str,
+    view_name: str,
+    worker_id: str = Query(..., min_length=1),
+    _worker_token: str = Depends(require_prelabel_worker_token),
+) -> Response:
+    service = get_prelabel_service()
+    try:
+        file_path = service.get_claimed_job_asset_path(
+            job_id=job_id,
+            worker_id=worker_id,
+            view_name=view_name,
+        )
+    except ValueError as exc:
+        message = str(exc)
+        if message in {"job not found", "task not found"}:
+            raise HTTPException(status_code=404, detail=message) from exc
+        raise HTTPException(status_code=409, detail=message) from exc
+    return Response(content=file_path.read_bytes(), media_type="application/octet-stream")
+
+
 @api_router.get("/annotation-sync/status", response_model=AnnotationSyncStatus)
 def get_annotation_sync_status(
     request: Request,

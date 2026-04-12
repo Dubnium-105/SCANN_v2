@@ -250,6 +250,12 @@ class PrelabelService:
         return paths
 
     def claim_next_job(self, payload: WorkerClaimRequest) -> WorkerClaimResponse | None:
+        model_versions_raw = payload.capabilities.get("model_versions")
+        model_versions = (
+            [str(item) for item in model_versions_raw if str(item).strip()]
+            if isinstance(model_versions_raw, list)
+            else None
+        )
         self._storage.upsert_worker_node(
             worker_id=payload.worker_id,
             display_name=payload.display_name,
@@ -261,6 +267,7 @@ class PrelabelService:
         job = self._storage.claim_next_prelabel_job(
             worker_id=payload.worker_id,
             timeout_seconds=self.job_timeout_seconds,
+            model_versions=model_versions,
         )
         if job is None:
             return None
@@ -284,6 +291,37 @@ class PrelabelService:
             claimed_at=job.claimed_at,
             claim_expires_at=job.claim_expires_at,
         )
+
+    def get_claimed_job_asset_path(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        view_name: str,
+    ) -> Path:
+        job = self._storage.get_prelabel_job(job_id)
+        if job is None:
+            raise ValueError("job not found")
+        if job.status != "claimed" or job.claim_worker_id != worker_id:
+            raise ValueError("job is not claimed by this worker")
+
+        task = self._task_sessions_by_id().get(job.task_id)
+        if task is None:
+            raise ValueError("task not found")
+
+        relpath = {
+            "new": task.new_path,
+            "old": task.old_path,
+            "new_marked": task.new_marked_path,
+        }.get(view_name)
+        if not relpath:
+            raise ValueError("requested asset is not available")
+
+        file_path = (self.dataset_root / relpath).resolve()
+        file_path.relative_to(self.dataset_root)
+        if not file_path.is_file():
+            raise ValueError("requested asset file does not exist")
+        return file_path
 
     def heartbeat_job(self, *, job_id: str, payload: WorkerHeartbeatRequest) -> WorkerJobAckResponse:
         accepted = self._storage.heartbeat_prelabel_job(
