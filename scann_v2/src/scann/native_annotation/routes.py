@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import hmac
 import os
 from pathlib import Path
 from typing import Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
@@ -33,6 +34,18 @@ from .auth_service import (
 )
 from .dataset_service import DatasetService, TaskSession
 from .fits_engine import FITSEngine
+from .prelabel_service import (
+    PrelabelEnqueueRequest,
+    PrelabelEnqueueResponse,
+    PrelabelService,
+    TaskPrelabelResponse,
+    WorkerClaimRequest,
+    WorkerClaimResponse,
+    WorkerCompleteRequest,
+    WorkerFailRequest,
+    WorkerHeartbeatRequest,
+    WorkerJobAckResponse,
+)
 from .task_lock_service import TaskLockService
 from scann.services.dataset_preprocess_service import DatasetPreprocessService
 
@@ -49,6 +62,10 @@ class TaskClaimResponse(TaskSession):
 class TaskListResponse(TaskSession):
     lock_expires_at: Optional[str] = None
     locked_by_current_client: Optional[bool] = None
+    prelabel_status: Optional[str] = None
+    prelabel_model_version: Optional[str] = None
+    prelabel_updated_at: Optional[str] = None
+    prelabel_box_count: Optional[int] = None
 
 
 class TaskLockHeartbeatResponse(BaseModel):
@@ -114,6 +131,22 @@ def get_annotation_service() -> AnnotationService:
 
 def get_annotation_sync_service():
     return build_annotation_sync_service_from_env(get_dataset_root())
+
+
+def get_prelabel_service() -> PrelabelService:
+    return PrelabelService(dataset_root=get_dataset_root())
+
+
+def require_prelabel_worker_token(
+    x_scann_worker_token: Optional[str] = Header(None),
+) -> str:
+    expected = os.getenv("SCANN_PRELABEL_WORKER_TOKEN", "").strip()
+    if not expected:
+        raise HTTPException(status_code=503, detail="Prelabel worker token is not configured")
+    presented = (x_scann_worker_token or "").strip()
+    if not presented or not hmac.compare_digest(presented, expected):
+        raise HTTPException(status_code=401, detail="Invalid worker token")
+    return presented
 
 
 def _require_task_lock_owner(
@@ -191,11 +224,13 @@ def list_tasks(
 ) -> list[TaskListResponse]:
     _ = current_user
     service = get_dataset_service()
+    prelabel_service = get_prelabel_service()
     lock_service = get_task_lock_service()
     normalized_client_id = client_id.strip() if client_id and client_id.strip() else None
     responses: list[TaskListResponse] = []
     tasks = service.list_tasks()
     locks_by_task = lock_service.get_task_locks([task.task_id for task in tasks])
+    prelabel_summaries = prelabel_service.list_task_prelabel_summaries([task.task_id for task in tasks])
     for task in tasks:
         task_payload = task.model_dump()
         lock = locks_by_task.get(task.task_id)
@@ -203,6 +238,12 @@ def list_tasks(
             task_payload["lock_expires_at"] = lock.expires_at.isoformat(timespec="seconds")
             if normalized_client_id is not None:
                 task_payload["locked_by_current_client"] = lock.client_id == normalized_client_id
+        summary = prelabel_summaries.get(task.task_id)
+        if summary is not None:
+            task_payload["prelabel_status"] = summary.prelabel_status
+            task_payload["prelabel_model_version"] = summary.prelabel_model_version
+            task_payload["prelabel_updated_at"] = summary.prelabel_updated_at
+            task_payload["prelabel_box_count"] = summary.prelabel_box_count
         responses.append(TaskListResponse(**task_payload))
     return responses
 
@@ -222,6 +263,81 @@ def preprocess_dataset(
         generated_marked_crops=report.generated_marked_crops,
         task_count=report.task_count,
     )
+
+
+@api_router.post("/prelabels/enqueue", response_model=PrelabelEnqueueResponse)
+def enqueue_prelabels(
+    payload: PrelabelEnqueueRequest,
+    current_user: AuthUser = Depends(get_current_user),
+) -> PrelabelEnqueueResponse:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can enqueue prelabels")
+    service = get_prelabel_service()
+    return service.enqueue(payload=payload, requested_by=current_user.username)
+
+
+@api_router.get("/prelabels/{task_id}", response_model=TaskPrelabelResponse, response_model_exclude_none=True)
+def get_task_prelabel(
+    task_id: str,
+    current_user: AuthUser = Depends(get_current_user),
+) -> TaskPrelabelResponse:
+    _ = current_user
+    service = get_prelabel_service()
+    response = service.get_task_prelabel(task_id)
+    if response is None:
+        raise HTTPException(status_code=404, detail="Prelabel not found")
+    return response
+
+
+@api_router.post("/prelabel-jobs/claim", response_model=WorkerClaimResponse)
+def claim_prelabel_job(
+    payload: WorkerClaimRequest,
+    _worker_token: str = Depends(require_prelabel_worker_token),
+) -> WorkerClaimResponse:
+    service = get_prelabel_service()
+    response = service.claim_next_job(payload)
+    if response is None:
+        raise HTTPException(status_code=404, detail="No queued prelabel job")
+    return response
+
+
+@api_router.post("/prelabel-jobs/{job_id}/heartbeat", response_model=WorkerJobAckResponse)
+def heartbeat_prelabel_job(
+    job_id: str,
+    payload: WorkerHeartbeatRequest,
+    _worker_token: str = Depends(require_prelabel_worker_token),
+) -> WorkerJobAckResponse:
+    service = get_prelabel_service()
+    response = service.heartbeat_job(job_id=job_id, payload=payload)
+    if not response.accepted:
+        raise HTTPException(status_code=409, detail="Prelabel job is not claimed by this worker")
+    return response
+
+
+@api_router.post("/prelabel-jobs/{job_id}/complete", response_model=TaskPrelabelResponse)
+def complete_prelabel_job(
+    job_id: str,
+    payload: WorkerCompleteRequest,
+    _worker_token: str = Depends(require_prelabel_worker_token),
+) -> TaskPrelabelResponse:
+    service = get_prelabel_service()
+    response = service.complete_job(job_id=job_id, payload=payload)
+    if response is None:
+        raise HTTPException(status_code=409, detail="Prelabel job is not claimed by this worker")
+    return response
+
+
+@api_router.post("/prelabel-jobs/{job_id}/fail", response_model=WorkerJobAckResponse)
+def fail_prelabel_job(
+    job_id: str,
+    payload: WorkerFailRequest,
+    _worker_token: str = Depends(require_prelabel_worker_token),
+) -> WorkerJobAckResponse:
+    service = get_prelabel_service()
+    response = service.fail_job(job_id=job_id, payload=payload)
+    if not response.accepted:
+        raise HTTPException(status_code=409, detail="Prelabel job is not claimed by this worker")
+    return response
 
 
 @api_router.get("/annotation-sync/status", response_model=AnnotationSyncStatus)

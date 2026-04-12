@@ -7,7 +7,7 @@ import sqlite3
 import threading
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -84,6 +84,71 @@ class TaskArtifactRecord:
     width: int | None = None
     height: int | None = None
     metadata: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class PrelabelJobRecord:
+    job_id: str
+    task_id: str
+    requested_by: str
+    model_version: str
+    input_fingerprint: str
+    status: str
+    priority: int = 100
+    claim_worker_id: str | None = None
+    claimed_at: str | None = None
+    claim_expires_at: str | None = None
+    last_heartbeat_at: str | None = None
+    attempt_count: int = 0
+    error_message: str | None = None
+    result_prelabel_id: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+@dataclass(frozen=True)
+class TaskAIPrelabelRecord:
+    prelabel_id: str
+    task_id: str
+    job_id: str | None = None
+    source_view: str | None = None
+    ai_suggestion: str | None = None
+    ai_confidence: float | None = None
+    model_version: str | None = None
+    input_fingerprint: str | None = None
+    status: str = "available"
+    box_count: int = 0
+    worker_id: str | None = None
+    accepted_revision_id: str | None = None
+    metadata: dict[str, Any] | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    superseded_at: str | None = None
+
+
+@dataclass(frozen=True)
+class WorkerNodeRecord:
+    worker_id: str
+    display_name: str | None = None
+    host_name: str | None = None
+    device_label: str | None = None
+    status: str = "online"
+    capabilities: dict[str, Any] | None = None
+    last_seen_at: str | None = None
+    last_claimed_at: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+@dataclass(frozen=True)
+class TaskPrelabelSummaryRecord:
+    task_id: str
+    prelabel_status: str | None = None
+    prelabel_model_version: str | None = None
+    prelabel_updated_at: str | None = None
+    prelabel_box_count: int = 0
+    prelabel_id: str | None = None
+    prelabel_job_id: str | None = None
 
 
 class DatasetStorage:
@@ -292,6 +357,104 @@ class DatasetStorage:
                 confidence REAL,
                 PRIMARY KEY(revision_id, box_index),
                 FOREIGN KEY(revision_id) REFERENCES annotation_revisions(revision_id) ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS prelabel_jobs (
+                job_id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                requested_by TEXT NOT NULL,
+                model_version TEXT NOT NULL,
+                input_fingerprint TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('queued', 'claimed', 'completed', 'failed', 'cancelled')),
+                priority INTEGER NOT NULL DEFAULT 100,
+                claim_worker_id TEXT,
+                claimed_at TEXT,
+                claim_expires_at TEXT,
+                last_heartbeat_at TEXT,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                error_message TEXT,
+                result_prelabel_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_prelabel_jobs_status_priority
+            ON prelabel_jobs(status, priority DESC, created_at)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_prelabel_jobs_task_id
+            ON prelabel_jobs(task_id, created_at)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_ai_prelabels (
+                prelabel_id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                job_id TEXT,
+                source_view TEXT,
+                ai_suggestion TEXT,
+                ai_confidence REAL,
+                model_version TEXT,
+                input_fingerprint TEXT,
+                status TEXT NOT NULL CHECK(status IN ('available', 'superseded', 'hidden', 'accepted')),
+                box_count INTEGER NOT NULL DEFAULT 0,
+                worker_id TEXT,
+                accepted_revision_id TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                superseded_at TEXT,
+                FOREIGN KEY(task_id) REFERENCES tasks(task_id) ON DELETE CASCADE,
+                FOREIGN KEY(job_id) REFERENCES prelabel_jobs(job_id) ON DELETE SET NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_task_ai_prelabels_task_status
+            ON task_ai_prelabels(task_id, status, updated_at)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_ai_prelabel_boxes (
+                prelabel_id TEXT NOT NULL,
+                box_index INTEGER NOT NULL,
+                x REAL NOT NULL,
+                y REAL NOT NULL,
+                width REAL NOT NULL,
+                height REAL NOT NULL,
+                label TEXT,
+                detail_type TEXT,
+                confidence REAL,
+                PRIMARY KEY(prelabel_id, box_index),
+                FOREIGN KEY(prelabel_id) REFERENCES task_ai_prelabels(prelabel_id) ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS worker_nodes (
+                worker_id TEXT PRIMARY KEY,
+                display_name TEXT,
+                host_name TEXT,
+                device_label TEXT,
+                status TEXT NOT NULL DEFAULT 'online',
+                capabilities_json TEXT NOT NULL DEFAULT '{}',
+                last_seen_at TEXT,
+                last_claimed_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             )
             """
         )
@@ -1352,6 +1515,620 @@ class DatasetStorage:
             for task in (self._row_to_task(row) for row in rows)
         }
         return [tasks_by_id[task_id] for task_id in normalized_ids if task_id in tasks_by_id]
+
+    @staticmethod
+    def _load_json_dict(raw: Any) -> dict[str, Any]:
+        if raw is None:
+            return {}
+        try:
+            parsed = json.loads(str(raw))
+        except Exception:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    @staticmethod
+    def _expires_after(now: datetime, timeout_seconds: int) -> str:
+        timeout = max(1, int(timeout_seconds))
+        return (now + timedelta(seconds=timeout)).isoformat(timespec="seconds")
+
+    @staticmethod
+    def _row_to_prelabel_job(row: sqlite3.Row) -> PrelabelJobRecord:
+        return PrelabelJobRecord(
+            job_id=str(row["job_id"]),
+            task_id=str(row["task_id"]),
+            requested_by=str(row["requested_by"]),
+            model_version=str(row["model_version"]),
+            input_fingerprint=str(row["input_fingerprint"]),
+            status=str(row["status"]),
+            priority=int(row["priority"] or 100),
+            claim_worker_id=(str(row["claim_worker_id"]) if row["claim_worker_id"] is not None else None),
+            claimed_at=(str(row["claimed_at"]) if row["claimed_at"] is not None else None),
+            claim_expires_at=(str(row["claim_expires_at"]) if row["claim_expires_at"] is not None else None),
+            last_heartbeat_at=(
+                str(row["last_heartbeat_at"]) if row["last_heartbeat_at"] is not None else None
+            ),
+            attempt_count=int(row["attempt_count"] or 0),
+            error_message=(str(row["error_message"]) if row["error_message"] is not None else None),
+            result_prelabel_id=(
+                str(row["result_prelabel_id"]) if row["result_prelabel_id"] is not None else None
+            ),
+            created_at=(str(row["created_at"]) if row["created_at"] is not None else None),
+            updated_at=(str(row["updated_at"]) if row["updated_at"] is not None else None),
+        )
+
+    @classmethod
+    def _row_to_ai_prelabel(cls, row: sqlite3.Row) -> TaskAIPrelabelRecord:
+        return TaskAIPrelabelRecord(
+            prelabel_id=str(row["prelabel_id"]),
+            task_id=str(row["task_id"]),
+            job_id=str(row["job_id"]) if row["job_id"] is not None else None,
+            source_view=str(row["source_view"]) if row["source_view"] is not None else None,
+            ai_suggestion=str(row["ai_suggestion"]) if row["ai_suggestion"] is not None else None,
+            ai_confidence=float(row["ai_confidence"]) if row["ai_confidence"] is not None else None,
+            model_version=str(row["model_version"]) if row["model_version"] is not None else None,
+            input_fingerprint=(
+                str(row["input_fingerprint"]) if row["input_fingerprint"] is not None else None
+            ),
+            status=str(row["status"]),
+            box_count=int(row["box_count"] or 0),
+            worker_id=str(row["worker_id"]) if row["worker_id"] is not None else None,
+            accepted_revision_id=(
+                str(row["accepted_revision_id"]) if row["accepted_revision_id"] is not None else None
+            ),
+            metadata=cls._load_json_dict(row["metadata_json"]),
+            created_at=str(row["created_at"]) if row["created_at"] is not None else None,
+            updated_at=str(row["updated_at"]) if row["updated_at"] is not None else None,
+            superseded_at=str(row["superseded_at"]) if row["superseded_at"] is not None else None,
+        )
+
+    @classmethod
+    def _row_to_worker_node(cls, row: sqlite3.Row) -> WorkerNodeRecord:
+        return WorkerNodeRecord(
+            worker_id=str(row["worker_id"]),
+            display_name=str(row["display_name"]) if row["display_name"] is not None else None,
+            host_name=str(row["host_name"]) if row["host_name"] is not None else None,
+            device_label=str(row["device_label"]) if row["device_label"] is not None else None,
+            status=str(row["status"]),
+            capabilities=cls._load_json_dict(row["capabilities_json"]),
+            last_seen_at=str(row["last_seen_at"]) if row["last_seen_at"] is not None else None,
+            last_claimed_at=str(row["last_claimed_at"]) if row["last_claimed_at"] is not None else None,
+            created_at=str(row["created_at"]) if row["created_at"] is not None else None,
+            updated_at=str(row["updated_at"]) if row["updated_at"] is not None else None,
+        )
+
+    def upsert_worker_node(
+        self,
+        *,
+        worker_id: str,
+        display_name: str | None = None,
+        host_name: str | None = None,
+        device_label: str | None = None,
+        status: str = "online",
+        capabilities: dict[str, Any] | None = None,
+        last_claimed_at: str | None = None,
+    ) -> WorkerNodeRecord:
+        now = _utc_now_iso()
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            connection.execute(
+                """
+                INSERT INTO worker_nodes (
+                    worker_id,
+                    display_name,
+                    host_name,
+                    device_label,
+                    status,
+                    capabilities_json,
+                    last_seen_at,
+                    last_claimed_at,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(worker_id) DO UPDATE SET
+                    display_name = COALESCE(excluded.display_name, worker_nodes.display_name),
+                    host_name = COALESCE(excluded.host_name, worker_nodes.host_name),
+                    device_label = COALESCE(excluded.device_label, worker_nodes.device_label),
+                    status = excluded.status,
+                    capabilities_json = CASE
+                        WHEN excluded.capabilities_json = '{}' THEN worker_nodes.capabilities_json
+                        ELSE excluded.capabilities_json
+                    END,
+                    last_seen_at = excluded.last_seen_at,
+                    last_claimed_at = COALESCE(excluded.last_claimed_at, worker_nodes.last_claimed_at),
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    worker_id,
+                    display_name,
+                    host_name,
+                    device_label,
+                    status,
+                    json.dumps(capabilities or {}, ensure_ascii=False),
+                    now,
+                    last_claimed_at,
+                    now,
+                    now,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM worker_nodes WHERE worker_id = ?",
+                (worker_id,),
+            ).fetchone()
+            connection.commit()
+        return self._row_to_worker_node(row) if row is not None else WorkerNodeRecord(worker_id=worker_id)
+
+    def enqueue_prelabel_job(
+        self,
+        *,
+        task_id: str,
+        requested_by: str,
+        model_version: str,
+        input_fingerprint: str,
+        priority: int = 100,
+        cancel_existing: bool = False,
+    ) -> tuple[PrelabelJobRecord, bool]:
+        now = _utc_now_iso()
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            if cancel_existing:
+                connection.execute(
+                    """
+                    UPDATE prelabel_jobs
+                    SET status = 'cancelled',
+                        error_message = 'superseded by newer enqueue request',
+                        claim_expires_at = NULL,
+                        updated_at = ?
+                    WHERE task_id = ?
+                      AND status IN ('queued', 'claimed')
+                    """,
+                    (now, task_id),
+                )
+
+            existing = connection.execute(
+                """
+                SELECT * FROM prelabel_jobs
+                WHERE task_id = ?
+                  AND status IN ('queued', 'claimed')
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT 1
+                """,
+                (task_id,),
+            ).fetchone()
+            if existing is not None:
+                connection.commit()
+                return self._row_to_prelabel_job(existing), False
+
+            job_id = uuid.uuid4().hex
+            connection.execute(
+                """
+                INSERT INTO prelabel_jobs (
+                    job_id,
+                    task_id,
+                    requested_by,
+                    model_version,
+                    input_fingerprint,
+                    status,
+                    priority,
+                    attempt_count,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, 'queued', ?, 0, ?, ?)
+                """,
+                (
+                    job_id,
+                    task_id,
+                    requested_by,
+                    model_version,
+                    input_fingerprint,
+                    int(priority),
+                    now,
+                    now,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM prelabel_jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+            connection.commit()
+        if row is None:
+            raise RuntimeError("failed to create prelabel job")
+        return self._row_to_prelabel_job(row), True
+
+    def _requeue_stale_prelabel_jobs(self, connection: sqlite3.Connection, *, now_iso: str) -> None:
+        connection.execute(
+            """
+            UPDATE prelabel_jobs
+            SET status = 'queued',
+                claim_worker_id = NULL,
+                claimed_at = NULL,
+                claim_expires_at = NULL,
+                updated_at = ?,
+                error_message = CASE
+                    WHEN error_message IS NULL OR error_message = '' THEN 'job claim timed out and was requeued'
+                    ELSE error_message
+                END
+            WHERE status = 'claimed'
+              AND claim_expires_at IS NOT NULL
+              AND claim_expires_at <= ?
+            """,
+            (now_iso, now_iso),
+        )
+
+    def claim_next_prelabel_job(self, *, worker_id: str, timeout_seconds: int) -> PrelabelJobRecord | None:
+        now_dt = datetime.now(timezone.utc)
+        now_iso = now_dt.isoformat(timespec="seconds")
+        expires_at = self._expires_after(now_dt, timeout_seconds)
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            self._requeue_stale_prelabel_jobs(connection, now_iso=now_iso)
+            for _ in range(8):
+                row = connection.execute(
+                    """
+                    SELECT * FROM prelabel_jobs
+                    WHERE status = 'queued'
+                    ORDER BY priority DESC, created_at ASC, rowid ASC
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if row is None:
+                    connection.commit()
+                    return None
+                job_id = str(row["job_id"])
+                updated = connection.execute(
+                    """
+                    UPDATE prelabel_jobs
+                    SET status = 'claimed',
+                        claim_worker_id = ?,
+                        claimed_at = ?,
+                        claim_expires_at = ?,
+                        last_heartbeat_at = ?,
+                        attempt_count = attempt_count + 1,
+                        error_message = NULL,
+                        updated_at = ?
+                    WHERE job_id = ?
+                      AND status = 'queued'
+                    """,
+                    (worker_id, now_iso, expires_at, now_iso, now_iso, job_id),
+                )
+                if int(updated.rowcount or 0) <= 0:
+                    continue
+                connection.execute(
+                    """
+                    UPDATE worker_nodes
+                    SET status = 'online',
+                        last_seen_at = ?,
+                        last_claimed_at = ?,
+                        updated_at = ?
+                    WHERE worker_id = ?
+                    """,
+                    (now_iso, now_iso, now_iso, worker_id),
+                )
+                claimed = connection.execute(
+                    "SELECT * FROM prelabel_jobs WHERE job_id = ?",
+                    (job_id,),
+                ).fetchone()
+                connection.commit()
+                return self._row_to_prelabel_job(claimed) if claimed is not None else None
+            connection.commit()
+        return None
+
+    def heartbeat_prelabel_job(self, *, job_id: str, worker_id: str, timeout_seconds: int) -> bool:
+        now_dt = datetime.now(timezone.utc)
+        now_iso = now_dt.isoformat(timespec="seconds")
+        expires_at = self._expires_after(now_dt, timeout_seconds)
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            updated = connection.execute(
+                """
+                UPDATE prelabel_jobs
+                SET last_heartbeat_at = ?,
+                    claim_expires_at = ?,
+                    updated_at = ?
+                WHERE job_id = ?
+                  AND status = 'claimed'
+                  AND claim_worker_id = ?
+                """,
+                (now_iso, expires_at, now_iso, job_id, worker_id),
+            )
+            connection.execute(
+                """
+                UPDATE worker_nodes
+                SET status = 'online',
+                    last_seen_at = ?,
+                    updated_at = ?
+                WHERE worker_id = ?
+                """,
+                (now_iso, now_iso, worker_id),
+            )
+            connection.commit()
+        return int(updated.rowcount or 0) > 0
+
+    def fail_prelabel_job(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        error_message: str,
+        retryable: bool = False,
+    ) -> bool:
+        now = _utc_now_iso()
+        status = "queued" if retryable else "failed"
+        claim_worker_id = None if retryable else worker_id
+        claimed_at = None if retryable else now
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            updated = connection.execute(
+                """
+                UPDATE prelabel_jobs
+                SET status = ?,
+                    claim_worker_id = ?,
+                    claimed_at = ?,
+                    claim_expires_at = NULL,
+                    last_heartbeat_at = ?,
+                    error_message = ?,
+                    updated_at = ?
+                WHERE job_id = ?
+                  AND status = 'claimed'
+                  AND claim_worker_id = ?
+                """,
+                (status, claim_worker_id, claimed_at, now, error_message, now, job_id, worker_id),
+            )
+            connection.execute(
+                """
+                UPDATE worker_nodes
+                SET status = 'online',
+                    last_seen_at = ?,
+                    updated_at = ?
+                WHERE worker_id = ?
+                """,
+                (now, now, worker_id),
+            )
+            connection.commit()
+        return int(updated.rowcount or 0) > 0
+
+    def complete_prelabel_job(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        source_view: str | None,
+        ai_suggestion: str | None,
+        ai_confidence: float | None,
+        annotations: list[dict[str, Any]],
+        metadata: dict[str, Any] | None = None,
+    ) -> TaskAIPrelabelRecord | None:
+        now = _utc_now_iso()
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            job_row = connection.execute(
+                "SELECT * FROM prelabel_jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+            if job_row is None:
+                return None
+            job = self._row_to_prelabel_job(job_row)
+            if job.status != "claimed" or job.claim_worker_id != worker_id:
+                return None
+
+            connection.execute(
+                """
+                UPDATE task_ai_prelabels
+                SET status = 'superseded',
+                    superseded_at = ?,
+                    updated_at = ?
+                WHERE task_id = ?
+                  AND status = 'available'
+                """,
+                (now, now, job.task_id),
+            )
+
+            prelabel_id = uuid.uuid4().hex
+            connection.execute(
+                """
+                INSERT INTO task_ai_prelabels (
+                    prelabel_id,
+                    task_id,
+                    job_id,
+                    source_view,
+                    ai_suggestion,
+                    ai_confidence,
+                    model_version,
+                    input_fingerprint,
+                    status,
+                    box_count,
+                    worker_id,
+                    accepted_revision_id,
+                    metadata_json,
+                    created_at,
+                    updated_at,
+                    superseded_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'available', ?, ?, NULL, ?, ?, ?, NULL)
+                """,
+                (
+                    prelabel_id,
+                    job.task_id,
+                    job.job_id,
+                    source_view,
+                    ai_suggestion,
+                    ai_confidence,
+                    job.model_version,
+                    job.input_fingerprint,
+                    len(annotations),
+                    worker_id,
+                    json.dumps(metadata or {}, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+            for index, annotation in enumerate(annotations):
+                connection.execute(
+                    """
+                    INSERT INTO task_ai_prelabel_boxes (
+                        prelabel_id,
+                        box_index,
+                        x,
+                        y,
+                        width,
+                        height,
+                        label,
+                        detail_type,
+                        confidence
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        prelabel_id,
+                        index,
+                        float(annotation.get("x", 0.0)),
+                        float(annotation.get("y", 0.0)),
+                        float(annotation.get("width", 0.0)),
+                        float(annotation.get("height", 0.0)),
+                        annotation.get("label"),
+                        annotation.get("detail_type"),
+                        float(annotation.get("confidence", 1.0)),
+                    ),
+                )
+
+            connection.execute(
+                """
+                UPDATE prelabel_jobs
+                SET status = 'completed',
+                    last_heartbeat_at = ?,
+                    claim_expires_at = NULL,
+                    result_prelabel_id = ?,
+                    error_message = NULL,
+                    updated_at = ?
+                WHERE job_id = ?
+                """,
+                (now, prelabel_id, now, job_id),
+            )
+            prelabel_row = connection.execute(
+                "SELECT * FROM task_ai_prelabels WHERE prelabel_id = ?",
+                (prelabel_id,),
+            ).fetchone()
+            connection.execute(
+                """
+                UPDATE worker_nodes
+                SET status = 'online',
+                    last_seen_at = ?,
+                    updated_at = ?
+                WHERE worker_id = ?
+                """,
+                (now, now, worker_id),
+            )
+            connection.commit()
+        return self._row_to_ai_prelabel(prelabel_row) if prelabel_row is not None else None
+
+    def get_task_prelabel(self, task_id: str) -> tuple[TaskAIPrelabelRecord, list[dict[str, Any]]] | None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            row = connection.execute(
+                """
+                SELECT *
+                FROM task_ai_prelabels
+                WHERE task_id = ?
+                  AND status = 'available'
+                ORDER BY updated_at DESC, created_at DESC, rowid DESC
+                LIMIT 1
+                """,
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            boxes = connection.execute(
+                """
+                SELECT box_index, x, y, width, height, label, detail_type, confidence
+                FROM task_ai_prelabel_boxes
+                WHERE prelabel_id = ?
+                ORDER BY box_index ASC
+                """,
+                (str(row["prelabel_id"]),),
+            ).fetchall()
+        annotations = [
+            {
+                "x": float(box["x"]),
+                "y": float(box["y"]),
+                "width": float(box["width"]),
+                "height": float(box["height"]),
+                "label": box["label"],
+                "detail_type": box["detail_type"],
+                "confidence": float(box["confidence"]) if box["confidence"] is not None else 1.0,
+            }
+            for box in boxes
+        ]
+        return self._row_to_ai_prelabel(row), annotations
+
+    def list_task_prelabel_summaries(self, task_ids: Iterable[str]) -> dict[str, TaskPrelabelSummaryRecord]:
+        normalized_ids = [task_id for task_id in dict.fromkeys(task_ids) if task_id]
+        if not normalized_ids:
+            return {}
+        placeholders = ",".join("?" for _ in normalized_ids)
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            prelabel_rows = connection.execute(
+                f"""
+                SELECT p.*
+                FROM task_ai_prelabels p
+                INNER JOIN (
+                    SELECT task_id, MAX(rowid) AS latest_rowid
+                    FROM task_ai_prelabels
+                    WHERE status = 'available'
+                      AND task_id IN ({placeholders})
+                    GROUP BY task_id
+                ) latest
+                    ON latest.latest_rowid = p.rowid
+                """,
+                tuple(normalized_ids),
+            ).fetchall()
+            job_rows = connection.execute(
+                f"""
+                SELECT j.*
+                FROM prelabel_jobs j
+                INNER JOIN (
+                    SELECT task_id, MAX(rowid) AS latest_rowid
+                    FROM prelabel_jobs
+                    WHERE task_id IN ({placeholders})
+                    GROUP BY task_id
+                ) latest
+                    ON latest.latest_rowid = j.rowid
+                """,
+                tuple(normalized_ids),
+            ).fetchall()
+
+        summaries: dict[str, TaskPrelabelSummaryRecord] = {}
+        for row in job_rows:
+            job = self._row_to_prelabel_job(row)
+            mapped_status = {
+                "claimed": "processing",
+                "queued": "queued",
+                "failed": "failed",
+                "cancelled": "cancelled",
+                "completed": "completed",
+            }.get(job.status, job.status)
+            summaries[job.task_id] = TaskPrelabelSummaryRecord(
+                task_id=job.task_id,
+                prelabel_status=mapped_status,
+                prelabel_model_version=job.model_version,
+                prelabel_updated_at=job.updated_at,
+                prelabel_box_count=0,
+                prelabel_job_id=job.job_id,
+            )
+
+        for row in prelabel_rows:
+            prelabel = self._row_to_ai_prelabel(row)
+            summaries[prelabel.task_id] = TaskPrelabelSummaryRecord(
+                task_id=prelabel.task_id,
+                prelabel_status=prelabel.status,
+                prelabel_model_version=prelabel.model_version,
+                prelabel_updated_at=prelabel.updated_at,
+                prelabel_box_count=prelabel.box_count,
+                prelabel_id=prelabel.prelabel_id,
+                prelabel_job_id=prelabel.job_id,
+            )
+        return summaries
 
     def try_claim_task(self, task_id: str, client_id: str, expires_at: str, now_iso: str) -> bool:
         with self._connect() as connection:

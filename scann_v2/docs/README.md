@@ -10,6 +10,8 @@
   - 数据集预处理流程、任务生成规则与 `scann_dataset.db` 数据库设计
 - `native_annotation.md`
   - 原生 FITS 标注平台的后端、前端、数据集、锁与标注链路说明
+- `native_annotation_prelabel.md`
+  - 原生 FITS 标注平台的长期预标注架构、外部 GPU worker 控制面与当前实现边界
 
 ## 相关目录文档
 
