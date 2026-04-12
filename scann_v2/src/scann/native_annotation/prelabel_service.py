@@ -195,13 +195,15 @@ class PrelabelService:
                 continue
 
             input_fingerprint = self._build_input_fingerprint(task, model_version=payload.model_version)
-            existing = self._storage.get_task_prelabel(task.task_id)
+            existing = self._storage.get_latest_task_prelabel_record(
+                task.task_id,
+                statuses=("available", "accepted"),
+            )
             if (
                 existing is not None
                 and not payload.force
-                and existing[0].status == "available"
-                and existing[0].model_version == payload.model_version
-                and existing[0].input_fingerprint == input_fingerprint
+                and existing.model_version == payload.model_version
+                and existing.input_fingerprint == input_fingerprint
             ):
                 skipped_task_ids.append(task.task_id)
                 skipped_count += 1

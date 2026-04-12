@@ -187,3 +187,105 @@ def test_prelabel_worker_endpoints_require_token(tmp_path, monkeypatch) -> None:
 
     assert response.status_code == 401
     assert response.json()["detail"] == "Invalid worker token"
+
+
+def test_annotation_save_accepts_applied_prelabel_and_skips_duplicate_enqueue(tmp_path, monkeypatch) -> None:
+    dataset_root = tmp_path / "dataset"
+    _touch(dataset_root / "new" / "PGC 17069.fts")
+    _touch(dataset_root / "old" / "PGC 17069.fts")
+
+    monkeypatch.setenv("SCANN_NATIVE_DATASET_ROOT", str(dataset_root))
+    monkeypatch.setenv("SCANN_PRELABEL_WORKER_TOKEN", "worker-secret")
+
+    client = TestClient(app)
+    admin_headers = _auth_headers(client)
+    annotator_headers = _auth_headers(client, username="annotator", password="scann123")
+
+    enqueue = client.post(
+        "/api/prelabels/enqueue",
+        json={"model_version": "detector-v1"},
+        headers=admin_headers,
+    )
+    assert enqueue.status_code == 200
+    assert enqueue.json()["enqueued_count"] == 1
+
+    claim = client.post(
+        "/api/prelabel-jobs/claim",
+        json={"worker_id": "gpu-worker-1"},
+        headers=_worker_headers(),
+    )
+    assert claim.status_code == 200
+    claim_payload = claim.json()
+
+    complete = client.post(
+        f"/api/prelabel-jobs/{claim_payload['job_id']}/complete",
+        json={
+            "worker_id": "gpu-worker-1",
+            "source_view": "new",
+            "ai_suggestion": "real",
+            "ai_confidence": 0.97,
+            "annotations": [
+                {
+                    "x": 12.0,
+                    "y": 18.0,
+                    "width": 32.0,
+                    "height": 26.0,
+                    "label": "Positive",
+                    "detail_type": "candidate",
+                    "confidence": 0.97,
+                }
+            ],
+        },
+        headers=_worker_headers(),
+    )
+    assert complete.status_code == 200
+    prelabel_id = complete.json()["prelabel_id"]
+
+    save = client.post(
+        "/api/annotations/PGC 17069",
+        json={
+            "source_view": "new",
+            "metadata": {
+                "tool": "bbox",
+                "applied_prelabel": {
+                    "prelabel_id": prelabel_id,
+                    "model_version": "detector-v1",
+                    "imported_annotation_count": 1,
+                },
+            },
+            "annotations": [
+                {
+                    "x": 12.0,
+                    "y": 18.0,
+                    "width": 32.0,
+                    "height": 26.0,
+                    "label": "Positive",
+                    "detail_type": "candidate",
+                }
+            ],
+        },
+        headers=annotator_headers,
+    )
+    assert save.status_code == 200
+    save_payload = save.json()
+    assert save_payload["accepted_prelabel_id"] == prelabel_id
+    assert save_payload["revision_id"]
+
+    prelabel = client.get("/api/prelabels/PGC%2017069", headers=annotator_headers)
+    assert prelabel.status_code == 404
+
+    tasks = client.get("/api/tasks", headers=annotator_headers)
+    assert tasks.status_code == 200
+    task_payload = tasks.json()[0]
+    assert task_payload["prelabel_status"] == "accepted"
+    assert task_payload["prelabel_model_version"] == "detector-v1"
+    assert task_payload["prelabel_box_count"] == 1
+
+    enqueue_again = client.post(
+        "/api/prelabels/enqueue",
+        json={"model_version": "detector-v1"},
+        headers=admin_headers,
+    )
+    assert enqueue_again.status_code == 200
+    assert enqueue_again.json()["enqueued_count"] == 0
+    assert enqueue_again.json()["skipped_count"] == 1

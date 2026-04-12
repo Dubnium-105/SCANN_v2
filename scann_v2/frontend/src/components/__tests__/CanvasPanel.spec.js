@@ -1,5 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import CanvasPanel from '../CanvasPanel.vue'
+import { authState } from '../../services/authStore'
 
 function createTask(taskId, overrides = {}) {
   return {
@@ -7,6 +8,31 @@ function createTask(taskId, overrides = {}) {
     old_path: `old/${taskId}.fts`,
     new_path: `new/${taskId}.fts`,
     new_marked_path: `new_marked/${taskId}.fts`,
+    ...overrides,
+  }
+}
+
+function createPrelabel(taskId, overrides = {}) {
+  return {
+    prelabel_id: `prelabel-${taskId}`,
+    task_id: taskId,
+    status: 'available',
+    source_view: 'new',
+    ai_suggestion: 'real',
+    ai_confidence: 0.91,
+    model_version: 'detector-v1',
+    box_count: 1,
+    annotations: [
+      {
+        x: 16,
+        y: 24,
+        width: 20,
+        height: 28,
+        label: null,
+        detail_type: null,
+        confidence: 0.91,
+      },
+    ],
     ...overrides,
   }
 }
@@ -50,6 +76,7 @@ function createFitsBuffer(values = [0, 0.5, 0.75, 1]) {
 function mockImageFetch(pathValues = {}, options = {}) {
   const tasks = options.tasks || [createTask('PGC 17069')]
   const nextTaskId = options.nextTaskId || tasks[0]?.task_id || 'PGC 17069'
+  const prelabels = options.prelabels || {}
   const calls = []
   globalThis.fetch = vi.fn((url, options) => {
     calls.push({ url, options })
@@ -61,10 +88,11 @@ function mockImageFetch(pathValues = {}, options = {}) {
     }
 
     if (String(url).startsWith('/api/tasks/next?')) {
+      const task = tasks.find((item) => item.task_id === nextTaskId) || createTask(nextTaskId)
       return Promise.resolve({
         ok: true,
         json: async () => ({
-          ...createTask(nextTaskId),
+          ...task,
           client_id: 'test-client',
           lock_expires_at: '2026-03-19T21:30:00+00:00',
         }),
@@ -73,10 +101,11 @@ function mockImageFetch(pathValues = {}, options = {}) {
 
     if (String(url).includes('/api/tasks/') && String(url).includes('/claim?')) {
       const taskId = decodeURIComponent(String(url).split('/api/tasks/')[1].split('/claim?')[0])
+      const task = tasks.find((item) => item.task_id === taskId) || createTask(taskId)
       return Promise.resolve({
         ok: true,
         json: async () => ({
-          ...createTask(taskId),
+          ...task,
           client_id: 'test-client',
           lock_expires_at: '2026-03-19T21:30:00+00:00',
         }),
@@ -122,6 +151,37 @@ function mockImageFetch(pathValues = {}, options = {}) {
       })
     }
 
+    if (String(url) === '/api/prelabels/enqueue') {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          requested_count: 1,
+          enqueued_count: 1,
+          skipped_count: 0,
+          job_ids: ['job-1'],
+          skipped_task_ids: [],
+        }),
+      })
+    }
+
+    if (String(url).startsWith('/api/prelabels/')) {
+      const taskId = decodeURIComponent(String(url).split('/api/prelabels/')[1])
+      const payload = prelabels[taskId]
+      if (!payload) {
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          json: async () => ({ detail: 'Prelabel not found' }),
+        })
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => payload,
+      })
+    }
+
     return Promise.resolve({
       ok: true,
       blob: async () => new Blob(['png-bytes'], { type: 'image/png' }),
@@ -156,6 +216,9 @@ describe('CanvasPanel', () => {
     URL.revokeObjectURL = vi.fn()
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => null)
     sessionStorage.clear()
+    authState.token = ''
+    authState.username = ''
+    authState.role = ''
     fetchCalls = mockImageFetch()
   })
 
@@ -295,6 +358,77 @@ describe('CanvasPanel', () => {
 
     const rects = wrapper.findAll('[data-testid="bbox-rect"]')
     expect(rects.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('loads AI prelabel summary and can apply/remove AI draft boxes', async () => {
+    fetchCalls = mockImageFetch({}, {
+      prelabels: {
+        'PGC 17069': createPrelabel('PGC 17069'),
+      },
+    })
+
+    const wrapper = mount(CanvasPanel, {
+      global: {
+        stubs: globalStubs,
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="prelabel-summary"]').text()).toContain('AI 草稿可用')
+    expect(wrapper.findAll('[data-testid="annotation-item"]')).toHaveLength(0)
+
+    await wrapper.get('[data-testid="apply-prelabel"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="annotation-item"]')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="prelabel-message"]').text()).toContain('已导入 1 个 AI 草稿框')
+
+    await wrapper.get('[data-testid="remove-applied-prelabel"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="annotation-item"]')).toHaveLength(0)
+    expect(wrapper.get('[data-testid="prelabel-message"]').text()).toContain('已移除 1 个 AI 导入框')
+    expect(fetchCalls.some((item) => String(item.url).startsWith('/api/prelabels/PGC%2017069'))).toBe(true)
+  })
+
+  it('allows admins to request prelabel regeneration for the current task', async () => {
+    authState.username = 'admin'
+    authState.role = 'admin'
+    fetchCalls = mockImageFetch({}, {
+      tasks: [
+        createTask('PGC 17069', {
+          prelabel_status: 'accepted',
+          prelabel_model_version: 'detector-v1',
+        }),
+      ],
+    })
+
+    const wrapper = mount(CanvasPanel, {
+      global: {
+        stubs: globalStubs,
+      },
+    })
+
+    await flushPromises()
+
+    const button = wrapper.get('[data-testid="regenerate-prelabel"]')
+    expect(button.attributes('disabled')).toBeUndefined()
+
+    await button.trigger('click')
+    await flushPromises()
+
+    const enqueueCall = fetchCalls.find(
+      (item) => String(item.url) === '/api/prelabels/enqueue' && item.options?.method === 'POST',
+    )
+    expect(enqueueCall).toBeTruthy()
+    expect(JSON.parse(enqueueCall.options?.body)).toEqual({
+      model_version: 'detector-v1',
+      task_ids: ['PGC 17069'],
+      priority: 100,
+      force: true,
+    })
+    expect(wrapper.get('[data-testid="prelabel-message"]').text()).toContain('已请求重新生成 AI 草稿')
   })
 
   it('submits drawn bbox annotations to backend endpoint', async () => {
@@ -781,6 +915,33 @@ describe('CanvasPanel', () => {
     const lockBadges = wrapper.findAll('[data-testid="task-catalog-lock-status"]')
     expect(lockBadges).toHaveLength(1)
     expect(lockBadges[0].text()).toBe('当前会话占用')
+  })
+
+  it('shows prelabel status badges in task catalog when available', async () => {
+    fetchCalls = mockImageFetch({}, {
+      tasks: [
+        createTask('PGC 17069', {
+          prelabel_status: 'available',
+          prelabel_model_version: 'detector-v1',
+        }),
+        createTask('PGC 35671'),
+      ],
+      nextTaskId: 'PGC 17069',
+    })
+
+    const wrapper = mount(CanvasPanel, {
+      global: {
+        stubs: globalStubs,
+      },
+    })
+
+    await flushPromises()
+    await wrapper.get('[data-testid="task-catalog-open"]').trigger('click')
+    await flushPromises()
+
+    const prelabelBadges = wrapper.findAll('[data-testid="task-catalog-prelabel-status"]')
+    expect(prelabelBadges).toHaveLength(1)
+    expect(prelabelBadges[0].text()).toContain('AI 草稿可用')
   })
 
   it('blocks switching when target task group is occupied by another user', async () => {

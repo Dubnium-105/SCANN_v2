@@ -33,6 +33,8 @@ class AnnotationSaveResponse(BaseModel):
     format_version: str
     saved_path: str
     saved_count: int
+    revision_id: str
+    accepted_prelabel_id: Optional[str] = None
 
 
 class AnnotationRevision(BaseModel):
@@ -399,6 +401,25 @@ class AnnotationService:
             annotation_origin="online",
         )
 
+    @staticmethod
+    def _extract_applied_prelabel_id(metadata: dict[str, Any]) -> str | None:
+        applied_prelabel = metadata.get("applied_prelabel")
+        if not isinstance(applied_prelabel, dict):
+            return None
+        prelabel_id = str(applied_prelabel.get("prelabel_id") or "").strip()
+        return prelabel_id or None
+
+    @staticmethod
+    def _extract_applied_prelabel_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+        applied_prelabel = metadata.get("applied_prelabel")
+        if not isinstance(applied_prelabel, dict):
+            return {}
+        return {
+            key: value
+            for key, value in applied_prelabel.items()
+            if key != "prelabel_id"
+        }
+
     def list_history(self, task_id: str) -> AnnotationHistoryResponse:
         task_id = self._validate_task_id(task_id)
         task_id = self._ensure_task_exists(task_id)
@@ -511,10 +532,22 @@ class AnnotationService:
             source_view=payload.source_view or "new",
             annotations=payload.annotations,
         )
+        accepted_prelabel_id = self._extract_applied_prelabel_id(payload.metadata)
+        accepted_prelabel = None
+        if accepted_prelabel_id:
+            accepted_prelabel = self._storage.mark_prelabel_accepted(
+                task_id=task_id,
+                prelabel_id=accepted_prelabel_id,
+                accepted_revision_id=revision.revision_id,
+                accepted_by=submitted_by,
+                acceptance_metadata=self._extract_applied_prelabel_metadata(payload.metadata),
+            )
 
         return AnnotationSaveResponse(
             task_id=task_id,
             format_version="v2",
             saved_path=self._manifest_path_for_response(),
             saved_count=len(payload.annotations),
+            revision_id=revision.revision_id,
+            accepted_prelabel_id=accepted_prelabel.prelabel_id if accepted_prelabel is not None else None,
         )

@@ -18,6 +18,14 @@
               <p class="text-[11px] text-slate-400">{{ activeTask?.task_id || '暂无任务' }}</p>
               <p class="text-[10px] text-slate-500">进度 {{ taskProgressText }}</p>
               <p
+                v-if="activeTask?.prelabel_status"
+                data-testid="active-task-prelabel-status"
+                class="text-[10px] text-sky-300"
+              >
+                {{ formatPrelabelStatus(activeTask.prelabel_status) }}
+                <span v-if="activeTask?.prelabel_model_version" class="text-slate-400">· {{ activeTask.prelabel_model_version }}</span>
+              </p>
+              <p
                 v-if="taskLockNotice"
                 data-testid="task-lock-status"
                 class="text-[10px] text-emerald-300"
@@ -366,13 +374,23 @@
               >
                 <span class="flex items-center justify-between gap-2">
                   <span class="truncate">{{ item.task.task_id }}</span>
-                  <span
-                    v-if="item.task.lock_expires_at"
-                    data-testid="task-catalog-lock-status"
-                    class="shrink-0 rounded border px-1.5 py-0.5 text-[10px]"
-                    :class="item.task.locked_by_current_client ? 'border-emerald-700 text-emerald-300 bg-emerald-950/30' : 'border-amber-700 text-amber-300 bg-amber-950/30'"
-                  >
-                    {{ item.task.locked_by_current_client ? '当前会话占用' : '占用中' }}
+                  <span class="shrink-0 inline-flex items-center gap-1">
+                    <span
+                      v-if="item.task.prelabel_status"
+                      data-testid="task-catalog-prelabel-status"
+                      class="rounded border px-1.5 py-0.5 text-[10px]"
+                      :class="getPrelabelStatusBadgeClass(item.task.prelabel_status)"
+                    >
+                      {{ formatPrelabelStatus(item.task.prelabel_status) }}
+                    </span>
+                    <span
+                      v-if="item.task.lock_expires_at"
+                      data-testid="task-catalog-lock-status"
+                      class="rounded border px-1.5 py-0.5 text-[10px]"
+                      :class="item.task.locked_by_current_client ? 'border-emerald-700 text-emerald-300 bg-emerald-950/30' : 'border-amber-700 text-amber-300 bg-amber-950/30'"
+                    >
+                      {{ item.task.locked_by_current_client ? '当前会话占用' : '占用中' }}
+                    </span>
                   </span>
                 </span>
                 <span
@@ -442,6 +460,21 @@
                 }"
               />
             </template>
+            <v-rect
+              v-for="ann in visiblePrelabelAnnotations"
+              :key="ann.id"
+              :config="{
+                x: ann.x,
+                y: ann.y,
+                width: ann.width,
+                height: ann.height,
+                stroke: '#60a5fa',
+                strokeWidth: Math.max(1.5, bboxStrokeWidth),
+                fill: 'rgba(96, 165, 250, 0.10)',
+                dash: [6, 4],
+                listening: false,
+              }"
+            />
             <v-rect
               v-for="ann in annotations.filter((item) => item.type === 'bbox')"
               :key="ann.id"
@@ -638,6 +671,92 @@
                 {{ autoSubmitStatusMessage }}
               </p>
             </div>
+            <div class="space-y-2 rounded border border-sky-900/50 bg-sky-950/20 p-2">
+              <div class="flex items-center justify-between gap-2">
+                <p class="text-[11px] text-slate-200">AI 预标注</p>
+                <div class="flex items-center gap-2">
+                  <button
+                    v-if="isAdmin"
+                    data-testid="regenerate-prelabel"
+                    class="text-[10px] px-2 py-0.5 rounded border border-emerald-800 text-emerald-200 disabled:opacity-50"
+                    :disabled="!canRegeneratePrelabel"
+                    @click="regenerateActivePrelabel"
+                  >
+                    {{ isRegeneratingPrelabel ? '请求中...' : '重新生成' }}
+                  </button>
+                  <button
+                    data-testid="toggle-prelabel-overlay"
+                    class="text-[10px] px-2 py-0.5 rounded border border-sky-800 text-sky-200 disabled:opacity-50"
+                    :disabled="!hasActivePrelabel"
+                    @click="togglePrelabelOverlay"
+                  >
+                    {{ prelabelVisible ? '隐藏叠层' : '显示叠层' }}
+                  </button>
+                </div>
+              </div>
+              <p
+                v-if="prelabelLoadState === 'loading'"
+                data-testid="prelabel-loading"
+                class="text-[10px] text-slate-400"
+              >
+                正在加载 AI 草稿...
+              </p>
+              <p
+                v-else-if="prelabelError"
+                data-testid="prelabel-error"
+                class="text-[10px] text-rose-300"
+              >
+                {{ prelabelError }}
+              </p>
+              <template v-else-if="activePrelabel">
+                <p
+                  data-testid="prelabel-summary"
+                  class="text-[10px] text-sky-200"
+                >
+                  {{ formatPrelabelStatus(activePrelabel.status) }} · {{ activePrelabel.box_count }} 框
+                  <span v-if="activePrelabel.model_version" class="text-slate-400">· {{ activePrelabel.model_version }}</span>
+                </p>
+                <p class="text-[10px] text-slate-400">
+                  当前已导入 {{ appliedCurrentPrelabelCount }} 框，画布蓝色虚线为 AI 草稿叠层。
+                </p>
+                <div class="grid grid-cols-2 gap-2">
+                  <button
+                    data-testid="apply-prelabel"
+                    class="text-xs px-2 py-1 rounded border border-sky-700 text-sky-200 disabled:opacity-50"
+                    :disabled="!activeTask || prelabelAnnotations.length === 0"
+                    @click="applyActivePrelabel"
+                  >
+                    应用 AI 草稿
+                  </button>
+                  <button
+                    data-testid="remove-applied-prelabel"
+                    class="text-xs px-2 py-1 rounded border border-slate-700 text-slate-300 disabled:opacity-50"
+                    :disabled="appliedCurrentPrelabelCount === 0"
+                    @click="removeAppliedPrelabel"
+                  >
+                    移除 AI 导入
+                  </button>
+                </div>
+              </template>
+              <p
+                v-else
+                data-testid="prelabel-empty"
+                class="text-[10px] text-slate-500"
+              >
+                当前任务没有可用的 AI 草稿。
+                <span v-if="activeTask?.prelabel_model_version">
+                  最近模型：{{ activeTask.prelabel_model_version }}
+                </span>
+              </p>
+              <p
+                v-if="prelabelMessage"
+                data-testid="prelabel-message"
+                class="text-[10px] px-2 py-1 rounded"
+                :class="prelabelMessageClass"
+              >
+                {{ prelabelMessage }}
+              </p>
+            </div>
             <p
               v-if="saveMessage"
               data-testid="save-message"
@@ -774,6 +893,8 @@ import {
 } from '../fits/brightnessMatch'
 import { fetchAnnotationHistory, fetchAnnotationRevision } from '../services/annotationHistoryApi'
 import { submitAnnotations } from '../services/annotationApi'
+import { authState } from '../services/authStore'
+import { enqueueTaskPrelabel, fetchTaskPrelabel } from '../services/prelabelApi'
 import {
   claimNextTask,
   claimTask,
@@ -803,6 +924,7 @@ const stageScale = ref(1)
 const toolMode = ref('move')
 const middlePanActive = ref(false)
 const annotations = ref([])
+const prelabelAnnotations = ref([])
 const annotationDisplayCounter = ref(1)
 const draftRect = ref(null)
 const drawStart = ref(null)
@@ -841,6 +963,7 @@ const stageRef = ref(null)
 const hotkeysTeleportTarget = ref(null)
 const inspectorTeleportTarget = ref(null)
 const activeTask = ref(null)
+const activePrelabel = ref(null)
 const currentView = ref('new')
 const error = ref('')
 const claimedTaskId = ref('')
@@ -858,6 +981,12 @@ const invertDisplay = ref(false)
 const bboxStrokeWidth = ref(2)
 const pointRadius = ref(4)
 const polygonStrokeWidth = ref(2)
+const prelabelVisible = ref(true)
+const prelabelLoadState = ref('idle')
+const prelabelMessage = ref('')
+const prelabelMessageTone = ref('info')
+const prelabelError = ref('')
+const isRegeneratingPrelabel = ref(false)
 let hostResizeObserver = null
 let taskHeartbeatTimerId = null
 let autoSubmitTimerId = null
@@ -963,6 +1092,38 @@ const filteredTaskCatalog = computed(() => {
   return mapped.filter((item) => String(item.task.task_id || '').toLowerCase().includes(keyword))
 })
 
+function formatPrelabelStatus(status) {
+  const normalized = String(status || '').trim().toLowerCase()
+  const labels = {
+    available: 'AI 草稿可用',
+    accepted: 'AI 已接受',
+    queued: 'AI 排队中',
+    processing: 'AI 处理中',
+    failed: 'AI 失败',
+    cancelled: 'AI 已取消',
+    superseded: 'AI 已过期',
+    completed: 'AI 已完成',
+  }
+  return labels[normalized] || (normalized ? `AI ${normalized}` : 'AI 未生成')
+}
+
+function getPrelabelStatusBadgeClass(status) {
+  const normalized = String(status || '').trim().toLowerCase()
+  if (normalized === 'available') {
+    return 'border-sky-700 text-sky-200 bg-sky-950/30'
+  }
+  if (normalized === 'accepted') {
+    return 'border-emerald-700 text-emerald-200 bg-emerald-950/30'
+  }
+  if (normalized === 'queued' || normalized === 'processing' || normalized === 'completed') {
+    return 'border-amber-700 text-amber-200 bg-amber-950/30'
+  }
+  if (normalized === 'failed' || normalized === 'cancelled') {
+    return 'border-rose-700 text-rose-200 bg-rose-950/30'
+  }
+  return 'border-slate-700 text-slate-300 bg-slate-950/30'
+}
+
 function formatTaskLockExpiry(value) {
   if (!value) {
     return '--'
@@ -1013,6 +1174,38 @@ const revisionOverlayModifiedAfterRects = computed(() => revisionOverlayItems.va
   .filter((item) => item?.change_type === 'modified')
   .map((item) => toOverlayRect(item.after))
   .filter(Boolean))
+
+const visiblePrelabelAnnotations = computed(() => (
+  prelabelVisible.value
+    ? prelabelAnnotations.value.filter((item) => item.type === 'bbox')
+    : []
+))
+
+const isAdmin = computed(() => authState.role === 'admin')
+const regeneratePrelabelModelVersion = computed(() => (
+  String(activePrelabel.value?.model_version || activeTask.value?.prelabel_model_version || '').trim()
+))
+const canRegeneratePrelabel = computed(() => (
+  isAdmin.value
+    && Boolean(activeTask.value?.task_id)
+    && Boolean(regeneratePrelabelModelVersion.value)
+    && !isRegeneratingPrelabel.value
+))
+const prelabelMessageClass = computed(() => (
+  prelabelMessageTone.value === 'error'
+    ? 'bg-rose-950/40 text-rose-200 border border-rose-800/60'
+    : 'bg-slate-900 text-sky-200'
+))
+
+const appliedCurrentPrelabelCount = computed(() => {
+  const prelabelId = String(activePrelabel.value?.prelabel_id || '')
+  if (!prelabelId) {
+    return 0
+  }
+  return annotations.value.filter((item) => item.source_prelabel_id === prelabelId).length
+})
+
+const hasActivePrelabel = computed(() => Boolean(activePrelabel.value?.prelabel_id))
 
 const hasPrevTask = computed(() => currentTaskIndex.value > 0)
 const hasNextTask = computed(() => (
@@ -1458,6 +1651,17 @@ function resetAnnotationStates() {
   currentPolygonPoints.value = []
 }
 
+function resetPrelabelState() {
+  prelabelAnnotations.value = []
+  activePrelabel.value = null
+  prelabelLoadState.value = 'idle'
+  prelabelMessage.value = ''
+  prelabelMessageTone.value = 'info'
+  prelabelError.value = ''
+  prelabelVisible.value = true
+  isRegeneratingPrelabel.value = false
+}
+
 function clearUndoState() {
   undoDeleteVisible.value = false
   undoDeleteMessage.value = ''
@@ -1492,7 +1696,8 @@ async function activateTask(task, index, options = {}) {
 
   currentTaskIndex.value = index
   resetAnnotationStates()
-  await loadLatestRevisionAnnotations(task.task_id)
+  resetPrelabelState()
+  await loadTaskAnnotationState(task.task_id)
   emit('task-changed', task.task_id)
   startTaskHeartbeat(task.task_id)
 
@@ -1571,6 +1776,7 @@ async function loadLatestRevisionAnnotations(taskId) {
       height: Number(ann.height) || 0,
       label: ann.label || 'Unlabeled',
       detail_type: ann.detail_type,
+      origin: 'history',
     }))
 
     annotations.value = restored
@@ -1583,6 +1789,65 @@ async function loadLatestRevisionAnnotations(taskId) {
   } catch {
     // 历史读取失败时保持空状态，避免阻塞任务切换。
   }
+}
+
+async function loadTaskPrelabel(taskId) {
+  if (!taskId) {
+    resetPrelabelState()
+    return
+  }
+
+  prelabelLoadState.value = 'loading'
+  prelabelError.value = ''
+  prelabelMessage.value = ''
+  prelabelMessageTone.value = 'info'
+  try {
+    const detail = await fetchTaskPrelabel(taskId)
+    if (!detail) {
+      prelabelAnnotations.value = []
+      activePrelabel.value = null
+      prelabelLoadState.value = 'loaded'
+      return
+    }
+
+    activePrelabel.value = detail
+    prelabelAnnotations.value = (Array.isArray(detail.annotations) ? detail.annotations : []).map((ann, index) => ({
+      id: `prelabel-${detail.prelabel_id || taskId}-${index}`,
+      type: 'bbox',
+      x: Number(ann.x) || 0,
+      y: Number(ann.y) || 0,
+      width: Number(ann.width) || 0,
+      height: Number(ann.height) || 0,
+      label: ann.label || 'Unlabeled',
+      detail_type: ann.detail_type,
+      confidence: Number.isFinite(Number(ann.confidence)) ? Number(ann.confidence) : undefined,
+      origin: 'prelabel_overlay',
+      source_prelabel_id: detail.prelabel_id,
+      source_model_version: detail.model_version,
+    }))
+    if (activeTask.value?.task_id === taskId) {
+      activeTask.value = {
+        ...activeTask.value,
+        prelabel_status: detail.status,
+        prelabel_model_version: detail.model_version,
+        prelabel_box_count: detail.box_count,
+        prelabel_updated_at: detail.updated_at,
+      }
+    }
+    prelabelLoadState.value = 'loaded'
+  } catch (err) {
+    prelabelAnnotations.value = []
+    activePrelabel.value = null
+    prelabelLoadState.value = 'error'
+    prelabelError.value = err instanceof Error ? err.message : 'Failed to load AI prelabel'
+  }
+}
+
+async function loadTaskAnnotationState(taskId) {
+  await Promise.all([
+    loadLatestRevisionAnnotations(taskId),
+    loadTaskPrelabel(taskId),
+  ])
 }
 
 async function refreshTaskList() {
@@ -1893,6 +2158,13 @@ function buildAnnotationPayload(bboxAnnotations) {
       height: manualCropRect.value.height,
     }
   }
+  if (activePrelabel.value && appliedCurrentPrelabelCount.value > 0) {
+    metadata.applied_prelabel = {
+      prelabel_id: activePrelabel.value.prelabel_id,
+      model_version: activePrelabel.value.model_version,
+      imported_annotation_count: appliedCurrentPrelabelCount.value,
+    }
+  }
 
   return {
     // Keep the legacy bucket field for older deployed backends that still require it.
@@ -2053,7 +2325,45 @@ function createAnnotation(base) {
     display_id: `A${String(annotationDisplayCounter.value).padStart(4, '0')}`,
     label: initialLabel,
     detail_type: initialDetail,
+    origin: 'manual',
     ...base,
+  }
+}
+
+function getBboxGeometrySignature(annotation) {
+  if (!annotation || annotation.type !== 'bbox') {
+    return ''
+  }
+  const x = Number(annotation.x)
+  const y = Number(annotation.y)
+  const width = Number(annotation.width)
+  const height = Number(annotation.height)
+  if (![x, y, width, height].every(Number.isFinite)) {
+    return ''
+  }
+  return [
+    x.toFixed(3),
+    y.toFixed(3),
+    width.toFixed(3),
+    height.toFixed(3),
+  ].join(':')
+}
+
+function createAnnotationFromPrelabel(annotation, offset) {
+  return {
+    id: `prelabel-ann-${Date.now()}-${offset}`,
+    display_id: `A${String(annotationDisplayCounter.value + offset).padStart(4, '0')}`,
+    type: 'bbox',
+    x: Number(annotation.x) || 0,
+    y: Number(annotation.y) || 0,
+    width: Number(annotation.width) || 0,
+    height: Number(annotation.height) || 0,
+    label: annotation.label || 'Unlabeled',
+    detail_type: annotation.detail_type,
+    confidence: Number.isFinite(Number(annotation.confidence)) ? Number(annotation.confidence) : undefined,
+    origin: 'prelabel',
+    source_prelabel_id: activePrelabel.value?.prelabel_id || null,
+    source_model_version: activePrelabel.value?.model_version || null,
   }
 }
 
@@ -2061,6 +2371,96 @@ function addAnnotation(annotation) {
   annotations.value.push(annotation)
   annotationDisplayCounter.value += 1
   selectAnnotation(annotation.id)
+}
+
+function togglePrelabelOverlay() {
+  prelabelVisible.value = !prelabelVisible.value
+}
+
+async function regenerateActivePrelabel() {
+  const taskId = String(activeTask.value?.task_id || '')
+  const modelVersion = regeneratePrelabelModelVersion.value
+  if (!taskId) {
+    return
+  }
+  if (!modelVersion) {
+    prelabelMessageTone.value = 'error'
+    prelabelMessage.value = '当前任务缺少模型版本，无法重新生成 AI 草稿'
+    return
+  }
+
+  isRegeneratingPrelabel.value = true
+  prelabelError.value = ''
+  prelabelMessage.value = ''
+  prelabelMessageTone.value = 'info'
+  try {
+    const result = await enqueueTaskPrelabel(taskId, {
+      modelVersion,
+      force: true,
+    })
+    await refreshTaskList()
+    if (String(activeTask.value?.task_id || '') === taskId) {
+      await loadTaskPrelabel(taskId)
+    }
+    prelabelMessageTone.value = 'info'
+    prelabelMessage.value = result.enqueued_count > 0
+      ? `已请求重新生成 AI 草稿（${modelVersion}）`
+      : `AI 草稿未重新排队（${modelVersion}）`
+  } catch (err) {
+    prelabelMessageTone.value = 'error'
+    prelabelMessage.value = err instanceof Error ? err.message : '请求重新生成 AI 草稿失败'
+  } finally {
+    isRegeneratingPrelabel.value = false
+  }
+}
+
+function applyActivePrelabel() {
+  if (!activePrelabel.value || prelabelAnnotations.value.length === 0) {
+    prelabelMessage.value = '当前任务没有可应用的 AI 草稿'
+    prelabelMessageTone.value = 'info'
+    return
+  }
+
+  const existingSignatures = new Set(
+    annotations.value
+      .map((item) => getBboxGeometrySignature(item))
+      .filter(Boolean),
+  )
+  const created = prelabelAnnotations.value
+    .filter((item) => item.type === 'bbox')
+    .filter((item) => !existingSignatures.has(getBboxGeometrySignature(item)))
+    .map((item, index) => createAnnotationFromPrelabel(item, index))
+
+  if (created.length === 0) {
+    prelabelMessage.value = 'AI 草稿中的框已存在于当前标注中'
+    prelabelMessageTone.value = 'info'
+    return
+  }
+
+  annotations.value = [...annotations.value, ...created]
+  annotationDisplayCounter.value += created.length
+  selectAnnotation(created[created.length - 1].id)
+  prelabelMessage.value = `已导入 ${created.length} 个 AI 草稿框`
+  prelabelMessageTone.value = 'info'
+}
+
+function removeAppliedPrelabel() {
+  const prelabelId = String(activePrelabel.value?.prelabel_id || '')
+  if (!prelabelId) {
+    return
+  }
+
+  const nextAnnotations = annotations.value.filter((item) => item.source_prelabel_id !== prelabelId)
+  const removedCount = annotations.value.length - nextAnnotations.length
+  annotations.value = nextAnnotations
+  if (!annotations.value.some((item) => item.id === selectedAnnotationId.value)) {
+    selectedAnnotationId.value = ''
+    selectedLabel.value = 'Unlabeled'
+  }
+  prelabelMessage.value = removedCount > 0
+    ? `已移除 ${removedCount} 个 AI 导入框`
+    : '当前没有已导入的 AI 草稿框'
+  prelabelMessageTone.value = 'info'
 }
 
 function getAnnotationLabelKey(annotation) {
@@ -2835,7 +3235,8 @@ async function submitCurrentAnnotations() {
 
     saveMessage.value = `Saved ${response.saved_count} annotations`
     resetAnnotationStates()
-    await loadLatestRevisionAnnotations(savedTaskId)
+    await loadTaskAnnotationState(savedTaskId)
+    await refreshTaskList()
 
     emit('annotations-saved', savedTaskId)
     resetAutoSubmitSchedule(Date.now())
@@ -2904,7 +3305,8 @@ watch(
       return
     }
     resetAnnotationStates()
-    await loadLatestRevisionAnnotations(taskId)
+    resetPrelabelState()
+    await loadTaskAnnotationState(taskId)
   },
 )
 

@@ -82,8 +82,9 @@ native-annotation backend
 - `input_fingerprint`
 - `status`
   - `available`
+  - `accepted`
   - `superseded`
-  - 预留后续 `hidden` / `accepted`
+  - 预留后续 `hidden`
 - `box_count`
 - `worker_id`
 - `accepted_revision_id`
@@ -197,6 +198,14 @@ worker 使用独立 token，不复用 annotator/admin JWT。
 3. 写入新的 `task_ai_prelabels` 和 `task_ai_prelabel_boxes`
 4. 把 job 标记为 `completed`
 
+### 6.4 人工接受
+
+1. 前端把已导入的 AI draft 以 `metadata.applied_prelabel` 一并提交
+2. 后端保存正式 `annotation_revision`
+3. 若 `prelabel_id` 仍然有效，则把该 draft 标记为 `accepted`
+4. 记录 `accepted_revision_id`
+5. 同输入、同模型再次 enqueue 时默认跳过，避免重复生成同一份草稿
+
 ## 7. 前端集成约束
 
 前端打开任务时应区分两层数据：
@@ -297,10 +306,13 @@ worker 支持两种读取方式：
 - worker 受控拉取 FITS 资产接口
 - 任务列表中的预标注摘要字段
 - 单任务 AI draft 查询 API
+- 前端 AI draft 叠层显示
+- 前端“应用 AI 草稿 / 移除 AI 导入”交互
+- 管理员可在标注页对当前任务发起“重新生成 AI 草稿”
+- 人工保存后把已应用 draft 回写为 `accepted`
 
 后续再补：
 
-- 前端 overlay 与应用交互
 - worker 本地 spool
 - draft 接受率统计
 - 模型版本回滚与批量重跑工具

@@ -2050,7 +2050,57 @@ class DatasetStorage:
             connection.commit()
         return self._row_to_ai_prelabel(prelabel_row) if prelabel_row is not None else None
 
-    def get_task_prelabel(self, task_id: str) -> tuple[TaskAIPrelabelRecord, list[dict[str, Any]]] | None:
+    def _fetch_task_prelabel_row(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        task_id: str,
+        statuses: Iterable[str] | None = None,
+    ) -> sqlite3.Row | None:
+        filters = ["task_id = ?"]
+        params: list[Any] = [task_id]
+        normalized_statuses = [str(status).strip() for status in (statuses or []) if str(status).strip()]
+        if normalized_statuses:
+            placeholders = ",".join("?" for _ in normalized_statuses)
+            filters.append(f"status IN ({placeholders})")
+            params.extend(normalized_statuses)
+        where_clause = " AND ".join(filters)
+        return connection.execute(
+            f"""
+            SELECT *
+            FROM task_ai_prelabels
+            WHERE {where_clause}
+            ORDER BY updated_at DESC, created_at DESC, rowid DESC
+            LIMIT 1
+            """,
+            tuple(params),
+        ).fetchone()
+
+    def get_latest_task_prelabel_record(
+        self,
+        task_id: str,
+        *,
+        statuses: Iterable[str] | None = None,
+    ) -> TaskAIPrelabelRecord | None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            row = self._fetch_task_prelabel_row(
+                connection,
+                task_id=task_id,
+                statuses=statuses,
+            )
+        return self._row_to_ai_prelabel(row) if row is not None else None
+
+    def mark_prelabel_accepted(
+        self,
+        *,
+        task_id: str,
+        prelabel_id: str,
+        accepted_revision_id: str,
+        accepted_by: str,
+        acceptance_metadata: dict[str, Any] | None = None,
+    ) -> TaskAIPrelabelRecord | None:
+        now = _utc_now_iso()
         with self._connect() as connection:
             self._ensure_schema(connection)
             row = connection.execute(
@@ -2058,12 +2108,63 @@ class DatasetStorage:
                 SELECT *
                 FROM task_ai_prelabels
                 WHERE task_id = ?
-                  AND status = 'available'
-                ORDER BY updated_at DESC, created_at DESC, rowid DESC
+                  AND prelabel_id = ?
                 LIMIT 1
                 """,
-                (task_id,),
+                (task_id, prelabel_id),
             ).fetchone()
+            if row is None:
+                return None
+            prelabel = self._row_to_ai_prelabel(row)
+            if prelabel.status not in {"available", "accepted"}:
+                return None
+
+            metadata = dict(prelabel.metadata or {})
+            metadata["acceptance"] = {
+                "accepted_at": now,
+                "accepted_by": accepted_by,
+                "accepted_revision_id": accepted_revision_id,
+                **(acceptance_metadata or {}),
+            }
+            connection.execute(
+                """
+                UPDATE task_ai_prelabels
+                SET status = 'accepted',
+                    accepted_revision_id = ?,
+                    metadata_json = ?,
+                    updated_at = ?
+                WHERE task_id = ?
+                  AND prelabel_id = ?
+                """,
+                (
+                    accepted_revision_id,
+                    json.dumps(metadata, ensure_ascii=False),
+                    now,
+                    task_id,
+                    prelabel_id,
+                ),
+            )
+            updated_row = connection.execute(
+                """
+                SELECT *
+                FROM task_ai_prelabels
+                WHERE task_id = ?
+                  AND prelabel_id = ?
+                LIMIT 1
+                """,
+                (task_id, prelabel_id),
+            ).fetchone()
+            connection.commit()
+        return self._row_to_ai_prelabel(updated_row) if updated_row is not None else None
+
+    def get_task_prelabel(self, task_id: str) -> tuple[TaskAIPrelabelRecord, list[dict[str, Any]]] | None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            row = self._fetch_task_prelabel_row(
+                connection,
+                task_id=task_id,
+                statuses=("available",),
+            )
             if row is None:
                 return None
             boxes = connection.execute(
@@ -2103,7 +2204,7 @@ class DatasetStorage:
                 INNER JOIN (
                     SELECT task_id, MAX(rowid) AS latest_rowid
                     FROM task_ai_prelabels
-                    WHERE status = 'available'
+                    WHERE status IN ('available', 'accepted', 'hidden')
                       AND task_id IN ({placeholders})
                     GROUP BY task_id
                 ) latest
