@@ -182,7 +182,30 @@ $env:SCANN_ANNOTATION_SYNC_INTERVAL_SECONDS = "300"
 - `SCANN_ANNOTATION_SYNC_INTERVAL_SECONDS`：定时同步间隔，必须大于 `0` 才会启动后台线程
 - `SCANN_ANNOTATION_SYNC_CONNECT_TIMEOUT_SECONDS`：PG 连接超时，默认 `10`
 
-### 8.2 手动同步
+### 8.2 Docker 部署说明
+
+在常规 Docker 部署中：
+
+- 主 `backend` 继续处理普通标注 API，不直接访问云 PostgreSQL
+- 新增的 `sync-backend` 专门处理 `/api/annotation-sync/*`
+- `sync-backend` 使用 `host` 网络访问云 PostgreSQL
+- `frontend` 会把 `/api/annotation-sync/*` 代理到 `sync-backend` 的 Unix socket
+
+这样可以在某些路由器或 OpenWrt 设备上，只让“同步到云 PG”这一条链路绕过 Docker bridge 出网限制，而不改变其余标注功能的部署方式。
+
+首次成功同步前，远端 schema 中不会有 `annotation_sync_state` 等表；这些表会在第一次成功执行同步时自动创建。
+
+如果远端 PostgreSQL 没有启用 SSL，请把 DSN 中的 `sslmode=require` 改成 `sslmode=disable`。如果启用了 SSL，建议继续使用 `sslmode=require`。
+
+远端数据库用户至少需要：
+
+```sql
+GRANT CONNECT ON DATABASE scann_annotation TO scann_sync;
+GRANT USAGE, CREATE ON SCHEMA scann_backup TO scann_sync;
+ALTER SCHEMA scann_backup OWNER TO scann_sync;
+```
+
+### 8.3 手动同步
 
 管理员可以调用：
 
@@ -202,7 +225,7 @@ POST /api/annotation-sync/run?full=true
 GET /api/annotation-sync/status
 ```
 
-远端写入使用幂等 upsert，重复执行不会重复生成相同 revision。
+远端写入使用幂等 upsert，重复执行不会重复生成相同 revision。前端管理员登录后，也可以通过顶部“标注同步”菜单触发增量或全量同步。
 
 ## 9. 本地启动
 

@@ -39,6 +39,54 @@ SCANN_NATIVE_JWT_EXPIRE_MINUTES=120
 SCANN_NATIVE_TASK_LOCK_TIMEOUT_SECONDS=1200
 ```
 
+如果需要启用 PostgreSQL 标注同步，建议同时配置：
+
+```dotenv
+SCANN_ANNOTATION_SYNC_ENABLED=true
+SCANN_ANNOTATION_SYNC_DATABASE_URL=postgresql://user:password@host:5432/scann_annotation?sslmode=require
+SCANN_ANNOTATION_SYNC_DATASET_ID=observatory-2026-04
+SCANN_ANNOTATION_SYNC_SCHEMA=scann_backup
+SCANN_ANNOTATION_SYNC_INTERVAL_SECONDS=300
+SCANN_ANNOTATION_SYNC_CONNECT_TIMEOUT_SECONDS=30
+```
+
+注意：
+- `docker/.env` 必须保持 `KEY=value` 格式，不能写成 `KEY = value` 或 `KEY: value`
+- `SCANN_ANNOTATION_SYNC_DATABASE_URL` 使用 PostgreSQL/libpq DSN，不是 JDBC URL
+- 如果云 PostgreSQL 没有启用 SSL，请把 `sslmode=require` 改成 `sslmode=disable`
+
+## 部署拓扑
+
+当前 Docker 部署包含 3 个服务：
+
+- `backend`
+  - 继续处理常规标注 API、任务锁、FITS 读取和历史查询
+  - 保持原有 bridge 网络和端口暴露方式不变
+- `frontend`
+  - 继续对外提供 Web 界面
+  - 默认把 `/api/*` 代理到 `backend`
+- `sync-backend`
+  - 专门处理 `/api/annotation-sync/*`
+  - 使用 `host` 网络访问云 PostgreSQL
+  - 通过 Unix socket 暴露给 `frontend`，不单独开放宿主机 HTTP 端口
+
+这样做的目的是只让“同步到云 PG”这一条链路绕过某些路由器设备上的 Docker bridge 出网问题，其它功能和原有部署保持一致。
+
+## PostgreSQL 同步注意事项
+
+- 远端表不会预先创建；第一次成功执行同步时会自动创建 `scann_backup.annotation_*` 表
+- 首次部署后如果管理员前端菜单中的“手动同步”还没执行成功，直接查询 `annotation_sync_state` 会提示表不存在，这是预期行为
+- 远端数据库用户至少需要这些权限：
+
+```sql
+GRANT CONNECT ON DATABASE scann_annotation TO scann_sync;
+GRANT USAGE, CREATE ON SCHEMA scann_backup TO scann_sync;
+ALTER SCHEMA scann_backup OWNER TO scann_sync;
+```
+
+- 如果云 PostgreSQL 支持 SSL，建议继续使用 `sslmode=require`
+- 如果使用 DBeaver，请分开填写主机、端口、数据库、用户名和密码；不要把 `postgresql://user:password@host:port/db` 直接当作 JDBC URL
+
 其中数据目录通常至少包含：
 
 - `${SCANN_DATASET_DIR}/new`
@@ -73,6 +121,15 @@ chmod +x deploy.sh
 curl http://127.0.0.1:8000/api/health
 curl http://127.0.0.1:8080/health
 ```
+
+同步链路部署后，还建议检查：
+
+```bash
+docker compose ps
+docker inspect scann-native-sync-backend --format '{{.HostConfig.NetworkMode}}'
+```
+
+预期 `scann-native-sync-backend` 的网络模式为 `host`。管理员登录前端后，可通过顶部“标注同步”菜单触发增量或全量同步。
 
 ## CI/CD 流程
 
