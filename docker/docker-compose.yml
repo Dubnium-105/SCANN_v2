@@ -27,6 +27,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+    networks:
+      - scann_net
 
   frontend:
     build:
@@ -48,3 +50,12 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+    networks:
+      - scann_net
+
+networks:
+  scann_net:
+    name: scann-native-net
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: br-scann
