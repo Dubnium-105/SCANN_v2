@@ -17,6 +17,10 @@ services:
       SCANN_NATIVE_TASK_LOCK_TIMEOUT_SECONDS: ${SCANN_NATIVE_TASK_LOCK_TIMEOUT_SECONDS:-1200}
       SCANN_NATIVE_JWT_SECRET: ${SCANN_NATIVE_JWT_SECRET}
       SCANN_NATIVE_JWT_EXPIRE_MINUTES: ${SCANN_NATIVE_JWT_EXPIRE_MINUTES:-120}
+      SCANN_ANNOTATION_SYNC_ENABLED: "false"
+      SCANN_ANNOTATION_SYNC_DATABASE_URL: ""
+      SCANN_ANNOTATION_SYNC_PG_DSN: ""
+      SCANN_ANNOTATION_SYNC_INTERVAL_SECONDS: "0"
     volumes:
       - ${SCANN_DATASET_DIR:-./runtime/dataset}:/data/dataset
     ports:
@@ -30,6 +34,39 @@ services:
     networks:
       - scann_net
 
+  sync-backend:
+    build:
+      context: ..
+      dockerfile: docker/backend/Dockerfile
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.11-slim}
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-deb.debian.org}
+        DEBIAN_SECURITY_MIRROR: ${DEBIAN_SECURITY_MIRROR:-security.debian.org}
+    container_name: scann-native-sync-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SCANN_NATIVE_DATASET_ROOT: /data/dataset
+      SCANN_NATIVE_DB_PATH: /data/dataset/scann_native.db
+      SCANN_NATIVE_TASK_LOCK_TIMEOUT_SECONDS: ${SCANN_NATIVE_TASK_LOCK_TIMEOUT_SECONDS:-1200}
+      SCANN_NATIVE_JWT_SECRET: ${SCANN_NATIVE_JWT_SECRET}
+      SCANN_NATIVE_JWT_EXPIRE_MINUTES: ${SCANN_NATIVE_JWT_EXPIRE_MINUTES:-120}
+    volumes:
+      - ${SCANN_DATASET_DIR:-./runtime/dataset}:/data/dataset
+      - sync_socket:/sync
+    command:
+      - sh
+      - -c
+      - rm -f /sync/scann-sync.sock && uvicorn scann.native_annotation.app:app --uds /sync/scann-sync.sock
+    network_mode: host
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /sync/scann-sync.sock"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
   frontend:
     build:
       context: ..
@@ -42,8 +79,12 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+      sync-backend:
+        condition: service_healthy
     ports:
       - "${FRONTEND_PORT:-8080}:80"
+    volumes:
+      - sync_socket:/var/run/scann-sync
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/health"]
       interval: 30s
@@ -59,3 +100,6 @@ networks:
     driver: bridge
     driver_opts:
       com.docker.network.bridge.name: br-scann
+
+volumes:
+  sync_socket:
