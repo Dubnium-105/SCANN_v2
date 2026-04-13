@@ -19,6 +19,7 @@ from .dataset_service import DatasetService, TaskSession
 
 
 DEFAULT_PRELABEL_JOB_TIMEOUT_SECONDS = 15 * 60
+_CAPABILITY_WILDCARDS = {"", "auto", "any", "*"}
 
 
 class PrelabelBox(BaseModel):
@@ -299,7 +300,11 @@ class PrelabelService:
     def _normalize_capability_values(raw_values: Any) -> list[str] | None:
         if not isinstance(raw_values, list):
             return None
-        normalized = [str(item).strip() for item in raw_values if str(item).strip()]
+        normalized = [
+            str(item).strip()
+            for item in raw_values
+            if str(item).strip() and str(item).strip().lower() not in _CAPABILITY_WILDCARDS
+        ]
         return normalized or None
 
     @classmethod
@@ -318,9 +323,21 @@ class PrelabelService:
         model_ids: list[str] | None = None,
         model_backbones: list[str] | None = None,
     ) -> bool:
-        normalized_versions = {str(item).strip() for item in (model_versions or []) if str(item).strip()}
-        normalized_ids = {str(item).strip() for item in (model_ids or []) if str(item).strip()}
-        normalized_backbones = {str(item).strip() for item in (model_backbones or []) if str(item).strip()}
+        normalized_versions = {
+            str(item).strip()
+            for item in (model_versions or [])
+            if str(item).strip() and str(item).strip().lower() not in _CAPABILITY_WILDCARDS
+        }
+        normalized_ids = {
+            str(item).strip()
+            for item in (model_ids or [])
+            if str(item).strip() and str(item).strip().lower() not in _CAPABILITY_WILDCARDS
+        }
+        normalized_backbones = {
+            str(item).strip()
+            for item in (model_backbones or [])
+            if str(item).strip() and str(item).strip().lower() not in _CAPABILITY_WILDCARDS
+        }
 
         if normalized_ids and (job.model_id or "").strip():
             if str(job.model_id).strip() not in normalized_ids:

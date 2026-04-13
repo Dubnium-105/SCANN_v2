@@ -230,6 +230,46 @@ def test_prelabel_claim_respects_model_id_and_backbone(tmp_path, monkeypatch) ->
     assert "No compatible queued prelabel job" in claim.json()["detail"]
 
 
+def test_prelabel_claim_treats_auto_backbone_as_wildcard(tmp_path, monkeypatch) -> None:
+    dataset_root = tmp_path / "dataset"
+    _touch(dataset_root / "new" / "PGC 17069.fts")
+
+    monkeypatch.setenv("SCANN_NATIVE_DATASET_ROOT", str(dataset_root))
+    monkeypatch.setenv("SCANN_PRELABEL_WORKER_TOKEN", "worker-secret")
+
+    client = TestClient(app)
+    admin_headers = _auth_headers(client)
+
+    enqueue = client.post(
+        "/api/prelabels/enqueue",
+        json={
+            "model_version": "detector-v1",
+            "model_id": "model-a",
+            "model_backbone": "ViT_B_16",
+        },
+        headers=admin_headers,
+    )
+    assert enqueue.status_code == 200
+    assert enqueue.json()["enqueued_count"] == 1
+
+    claim = client.post(
+        "/api/prelabel-jobs/claim",
+        json={
+            "worker_id": "gpu-worker-1",
+            "capabilities": {
+                "model_versions": ["detector-v1"],
+                "model_ids": ["model-a"],
+                "model_backbones": ["auto"],
+            },
+        },
+        headers=_worker_headers(),
+    )
+    assert claim.status_code == 200
+    claim_payload = claim.json()
+    assert claim_payload["task_id"] == "PGC 17069"
+    assert claim_payload["model_backbone"] == "ViT_B_16"
+
+
 def test_prelabel_worker_endpoints_require_token(tmp_path, monkeypatch) -> None:
     dataset_root = tmp_path / "dataset"
     _touch(dataset_root / "new" / "PGC 17069.fts")

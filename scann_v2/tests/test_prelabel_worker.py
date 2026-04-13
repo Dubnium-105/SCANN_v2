@@ -104,6 +104,13 @@ def test_prelabel_worker_runner_reports_completion(tmp_path) -> None:
     assert client.failed == []
 
 
+def test_worker_config_does_not_advertise_auto_backbone(tmp_path) -> None:
+    config = _worker_config(tmp_path)
+
+    assert config.detection.model_backbone == "auto"
+    assert config.supported_model_backbones == []
+
+
 def test_prelabel_worker_runner_reports_failure(tmp_path) -> None:
     config = _worker_config(tmp_path)
     job = WorkerClaimResponse(

@@ -13,6 +13,7 @@ from typing import Any, Iterable
 
 
 DEFAULT_DATASET_DB_FILE = "scann_dataset.db"
+_CAPABILITY_WILDCARDS = {"", "auto", "any", "*"}
 
 _EXPLORER_COPY_SUFFIX_RE = re.compile(r"^(?P<base>.*?)(?:\s+\((?P<index>\d+)\))$")
 
@@ -1922,9 +1923,21 @@ class DatasetStorage:
         model_ids: list[str] | None = None,
         model_backbones: list[str] | None = None,
     ) -> bool:
-        normalized_versions = {str(item).strip() for item in (model_versions or []) if str(item).strip()}
-        normalized_ids = {str(item).strip() for item in (model_ids or []) if str(item).strip()}
-        normalized_backbones = {str(item).strip() for item in (model_backbones or []) if str(item).strip()}
+        normalized_versions = {
+            str(item).strip()
+            for item in (model_versions or [])
+            if str(item).strip() and str(item).strip().lower() not in _CAPABILITY_WILDCARDS
+        }
+        normalized_ids = {
+            str(item).strip()
+            for item in (model_ids or [])
+            if str(item).strip() and str(item).strip().lower() not in _CAPABILITY_WILDCARDS
+        }
+        normalized_backbones = {
+            str(item).strip()
+            for item in (model_backbones or [])
+            if str(item).strip() and str(item).strip().lower() not in _CAPABILITY_WILDCARDS
+        }
 
         if normalized_ids and (job.model_id or "").strip():
             if str(job.model_id).strip() not in normalized_ids:

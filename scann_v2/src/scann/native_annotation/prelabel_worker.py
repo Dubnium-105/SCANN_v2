@@ -37,6 +37,9 @@ from .prelabel_service import (
 logger = logging.getLogger(__name__)
 
 
+_CAPABILITY_WILDCARDS = {"", "auto", "any", "*"}
+
+
 @dataclass(frozen=True)
 class WorkerDetectionConfig:
     model_path: str
@@ -79,7 +82,9 @@ class PrelabelWorkerConfig:
     @property
     def supported_model_backbones(self) -> list[str]:
         model_backbone = str(self.detection.model_backbone or "").strip()
-        return [model_backbone] if model_backbone else []
+        if model_backbone.lower() in _CAPABILITY_WILDCARDS:
+            return []
+        return [model_backbone]
 
 
 @dataclass(frozen=True)
