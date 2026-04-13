@@ -259,6 +259,8 @@ describe('TrainingLoopMenu', () => {
         expect(body.model_version).toBe('cls-v2')
         expect(body.model_id).toBe('model-0')
         expect(body.model_backbone).toBe('ResNet18')
+        expect(body.candidate_limit).toBe(15)
+        expect(body.confidence_threshold).toBe(0.65)
         return jsonResponse({
           requested_count: 2,
           enqueued_count: 2,
@@ -300,6 +302,8 @@ describe('TrainingLoopMenu', () => {
     expect(wrapper.get('[data-testid="prelabel-model-version"]').element.value).toBe('cls-v2')
     expect(wrapper.get('[data-testid="prelabel-model-id"]').element.value).toBe('model-0')
     expect(wrapper.get('[data-testid="prelabel-model-backbone"]').element.value).toBe('ResNet18')
+    await wrapper.get('[data-testid="prelabel-candidate-limit"]').setValue('15')
+    await wrapper.get('[data-testid="prelabel-confidence-threshold"]').setValue('0.65')
 
     await wrapper.get('[data-testid="prelabel-bulk-enqueue"]').trigger('click')
     await flushPromises()

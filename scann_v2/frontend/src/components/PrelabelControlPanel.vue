@@ -59,6 +59,34 @@
         </label>
       </div>
 
+      <div class="grid grid-cols-2 gap-2">
+        <label class="grid gap-1">
+          <span class="text-[11px] text-slate-500">鏁伴噺闄愬埗</span>
+          <input
+            v-model="modelForm.candidateLimit"
+            data-testid="prelabel-candidate-limit"
+            type="number"
+            min="1"
+            step="1"
+            class="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-100"
+            placeholder="20"
+          >
+        </label>
+        <label class="grid gap-1">
+          <span class="text-[11px] text-slate-500">缃俊搴﹂槇鍊?</span>
+          <input
+            v-model="modelForm.confidenceThreshold"
+            data-testid="prelabel-confidence-threshold"
+            type="number"
+            min="0"
+            max="1"
+            step="0.01"
+            class="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-100"
+            placeholder="0.50"
+          >
+        </label>
+      </div>
+
       <div class="grid gap-2 rounded border border-slate-800 bg-slate-950/60 p-2">
         <div class="flex flex-wrap gap-2">
           <button
@@ -233,6 +261,7 @@
                 <span :class="statusClass(job.status)">{{ job.status }}</span>
               </div>
               <p class="mt-1 break-all text-slate-500">{{ job.model_id || '-' }}</p>
+              <p class="mt-1 text-slate-500">{{ formatJobTuning(job) }}</p>
               <p class="mt-1 text-slate-500">worker={{ job.claim_worker_id || '-' }} · attempts={{ job.attempt_count }}</p>
               <p v-if="job.error_message" class="mt-1 text-rose-300">{{ job.error_message }}</p>
               <div class="mt-2 flex justify-end">
@@ -318,6 +347,8 @@ const modelForm = ref({
   modelVersion: '',
   modelId: '',
   modelBackbone: '',
+  candidateLimit: '',
+  confidenceThreshold: '',
 })
 
 const activeTask = computed(() => taskList.value.find((task) => task.task_id === props.activeTaskId) || null)
@@ -355,6 +386,8 @@ function syncModelFormFromPromoted(force = false) {
     modelVersion: String(promoted.model_version || '').trim(),
     modelId: String(promoted.model_id || '').trim(),
     modelBackbone: String(promoted.model_backbone || '').trim(),
+    candidateLimit: String(modelForm.value.candidateLimit || '').trim(),
+    confidenceThreshold: String(modelForm.value.confidenceThreshold || '').trim(),
   }
 }
 
@@ -474,6 +507,17 @@ function formatWorkerCapabilities(capabilities) {
   return `versions=${versions || '-'} | ids=${ids || '-'} | backbones=${backbones || '-'}`
 }
 
+function formatJobTuning(job) {
+  const parts = []
+  if (Number.isFinite(Number(job?.candidate_limit)) && Number(job.candidate_limit) > 0) {
+    parts.push(`limit=${Math.round(Number(job.candidate_limit))}`)
+  }
+  if (Number.isFinite(Number(job?.confidence_threshold))) {
+    parts.push(`threshold=${Number(job.confidence_threshold).toFixed(2)}`)
+  }
+  return parts.join(' | ') || 'limit=- | threshold=-'
+}
+
 function statusClass(status) {
   const normalized = String(status || '').toLowerCase()
   if (normalized === 'completed' || normalized === 'available' || normalized === 'accepted' || normalized === 'online') {
@@ -517,6 +561,8 @@ async function enqueueSelectedTasks() {
       modelVersion: modelForm.value.modelVersion,
       modelId: modelForm.value.modelId,
       modelBackbone: modelForm.value.modelBackbone,
+      candidateLimit: modelForm.value.candidateLimit,
+      confidenceThreshold: modelForm.value.confidenceThreshold,
       force: forceEnqueue.value,
     })
     message.value = `已请求 ${response.enqueued_count} 个预标注任务，跳过 ${response.skipped_count} 个`

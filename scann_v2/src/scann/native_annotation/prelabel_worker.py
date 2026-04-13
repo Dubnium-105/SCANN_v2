@@ -274,15 +274,61 @@ class DetectionPrelabelProcessor:
             hybrid_low_confidence=config.detection.hybrid_low_confidence,
         )
 
-    def _candidate_to_prelabel_box(self, candidate, image_shape: tuple[int, ...]) -> PrelabelBox:
+    @staticmethod
+    def _clip_box(
+        *,
+        left: int,
+        top: int,
+        box_width: int,
+        box_height: int,
+        image_shape: tuple[int, ...],
+    ) -> tuple[int, int, int, int]:
         height, width = image_shape[:2]
+        safe_left = max(0, min(int(left), max(0, width - 1)))
+        safe_top = max(0, min(int(top), max(0, height - 1)))
+        safe_width = max(1, min(int(box_width), max(1, width - safe_left)))
+        safe_height = max(1, min(int(box_height), max(1, height - safe_top)))
+        return safe_left, safe_top, safe_width, safe_height
+
+    def _candidate_to_prelabel_box(self, candidate, image_shape: tuple[int, ...]) -> PrelabelBox:
+        bbox_width = getattr(candidate, "bbox_width", None)
+        bbox_height = getattr(candidate, "bbox_height", None)
+        if bbox_width is not None and bbox_height is not None:
+            width_value = max(1, int(round(float(bbox_width))))
+            height_value = max(1, int(round(float(bbox_height))))
+            bbox_left = getattr(candidate, "bbox_x", None)
+            bbox_top = getattr(candidate, "bbox_y", None)
+            if bbox_left is None:
+                bbox_left = int(round(float(candidate.x) - width_value / 2.0))
+            if bbox_top is None:
+                bbox_top = int(round(float(candidate.y) - height_value / 2.0))
+            left, top, box_width, box_height = self._clip_box(
+                left=int(bbox_left),
+                top=int(bbox_top),
+                box_width=width_value,
+                box_height=height_value,
+                image_shape=image_shape,
+            )
+            return PrelabelBox(
+                x=float(left),
+                y=float(top),
+                width=float(box_width),
+                height=float(box_height),
+                label=None,
+                detail_type=None,
+                confidence=float(getattr(candidate, "ai_score", 0.0)),
+            )
+
         patch_size = int(self.config.detection.patch_size)
         half_size = patch_size // 2
 
-        left = max(0, int(candidate.x) - half_size)
-        top = max(0, int(candidate.y) - half_size)
-        box_width = min(patch_size, width - left)
-        box_height = min(patch_size, height - top)
+        left, top, box_width, box_height = self._clip_box(
+            left=int(candidate.x) - half_size,
+            top=int(candidate.y) - half_size,
+            box_width=patch_size,
+            box_height=patch_size,
+            image_shape=image_shape,
+        )
         return PrelabelBox(
             x=float(left),
             y=float(top),
@@ -301,15 +347,51 @@ class DetectionPrelabelProcessor:
         old_data = np.asarray(old_image.data if old_image is not None else np.zeros_like(new_image.data), dtype=np.float32)
         new_data = np.asarray(new_image.data, dtype=np.float32)
 
-        result = self.pipeline.process_pair(
-            pair_name=job.task_id,
-            new_data=new_data,
-            old_data=old_data,
-            image_path=job.paths.get("new"),
+        requested_threshold = (
+            float(job.confidence_threshold) if job.confidence_threshold is not None else None
         )
+        requested_limit = int(job.candidate_limit) if job.candidate_limit is not None else None
+        logger.info(
+            "Processing prelabel job %s for task %s with candidate_limit=%s confidence_threshold=%s",
+            job.job_id,
+            job.task_id,
+            requested_limit if requested_limit is not None else "-",
+            f"{requested_threshold:.4f}" if requested_threshold is not None else "-",
+        )
+        original_threshold = getattr(self.inference_engine, "threshold", None)
+        original_topk = getattr(self.pipeline.detection_params, "topk", None)
+
+        if requested_threshold is not None and self.inference_engine is not None:
+            self.inference_engine.threshold = requested_threshold
+        if requested_limit is not None and original_topk is not None:
+            self.pipeline.detection_params.topk = max(1, requested_limit)
+
+        try:
+            result = self.pipeline.process_pair(
+                pair_name=job.task_id,
+                new_data=new_data,
+                old_data=old_data,
+                image_path=job.paths.get("new"),
+            )
+        finally:
+            if original_threshold is not None and self.inference_engine is not None:
+                self.inference_engine.threshold = original_threshold
+            if original_topk is not None:
+                self.pipeline.detection_params.topk = original_topk
+
+        candidates = list(getattr(result, "candidates", []) or [])
+        if requested_threshold is not None:
+            candidates = [
+                candidate
+                for candidate in candidates
+                if float(getattr(candidate, "ai_score", 0.0)) >= requested_threshold
+            ]
+        if requested_limit is not None:
+            candidates = candidates[: max(1, requested_limit)]
+
         annotations = [
             self._candidate_to_prelabel_box(candidate, new_data.shape)
-            for candidate in getattr(result, "candidates", [])
+            for candidate in candidates
         ]
         ai_confidence = max((item.confidence or 0.0 for item in annotations), default=None)
         return PrelabelProcessingResult(
@@ -324,7 +406,10 @@ class DetectionPrelabelProcessor:
                 "model_backbone": self.config.detection.model_backbone,
                 "detection_mode": self.config.detection.detection_mode,
                 "patch_size": self.config.detection.patch_size,
+                "candidate_limit": requested_limit,
+                "confidence_threshold": requested_threshold,
                 "candidate_count": len(annotations),
+                "raw_candidate_count": len(getattr(result, "candidates", []) or []),
                 "pipeline_error": getattr(result, "error", ""),
             },
         )

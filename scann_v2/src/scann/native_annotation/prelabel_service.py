@@ -36,6 +36,8 @@ class PrelabelEnqueueRequest(BaseModel):
     model_version: str = Field(..., min_length=1)
     model_id: Optional[str] = None
     model_backbone: Optional[str] = None
+    candidate_limit: Optional[int] = Field(default=None, ge=1)
+    confidence_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     task_ids: list[str] = Field(default_factory=list)
     priority: int = 100
     force: bool = False
@@ -60,6 +62,8 @@ class TaskPrelabelResponse(BaseModel):
     model_version: Optional[str] = None
     model_id: Optional[str] = None
     model_backbone: Optional[str] = None
+    candidate_limit: Optional[int] = None
+    confidence_threshold: Optional[float] = None
     input_fingerprint: Optional[str] = None
     box_count: int
     worker_id: Optional[str] = None
@@ -78,6 +82,8 @@ class PrelabelJobResponse(BaseModel):
     model_version: str
     model_id: Optional[str] = None
     model_backbone: Optional[str] = None
+    candidate_limit: Optional[int] = None
+    confidence_threshold: Optional[float] = None
     input_fingerprint: str
     priority: int = 100
     claim_worker_id: Optional[str] = None
@@ -132,6 +138,8 @@ class WorkerClaimResponse(BaseModel):
     model_version: str
     model_id: Optional[str] = None
     model_backbone: Optional[str] = None
+    candidate_limit: Optional[int] = None
+    confidence_threshold: Optional[float] = None
     input_fingerprint: str
     paths: dict[str, str] = Field(default_factory=dict)
     claimed_at: Optional[str] = None
@@ -217,6 +225,8 @@ class PrelabelService:
         model_version: str,
         model_id: str | None,
         model_backbone: str | None,
+        candidate_limit: int | None,
+        confidence_threshold: float | None,
     ) -> bool:
         if existing.model_version != model_version:
             return False
@@ -225,6 +235,18 @@ class PrelabelService:
             return False
         normalized_model_backbone = str(model_backbone or "").strip()
         if normalized_model_backbone and (existing.model_backbone or "").strip() != normalized_model_backbone:
+            return False
+        normalized_candidate_limit = int(candidate_limit) if candidate_limit is not None else None
+        if existing.candidate_limit != normalized_candidate_limit:
+            return False
+        normalized_confidence_threshold = (
+            float(confidence_threshold) if confidence_threshold is not None else None
+        )
+        existing_threshold = existing.confidence_threshold
+        if normalized_confidence_threshold is None:
+            if existing_threshold is not None:
+                return False
+        elif existing_threshold is None or abs(float(existing_threshold) - normalized_confidence_threshold) > 1e-9:
             return False
         return True
 
@@ -244,6 +266,8 @@ class PrelabelService:
             model_version=record.model_version,
             model_id=record.model_id,
             model_backbone=record.model_backbone,
+            candidate_limit=record.candidate_limit,
+            confidence_threshold=record.confidence_threshold,
             input_fingerprint=record.input_fingerprint,
             box_count=record.box_count,
             worker_id=record.worker_id,
@@ -264,6 +288,8 @@ class PrelabelService:
             model_version=job.model_version,
             model_id=job.model_id,
             model_backbone=job.model_backbone,
+            candidate_limit=job.candidate_limit,
+            confidence_threshold=job.confidence_threshold,
             input_fingerprint=job.input_fingerprint,
             priority=job.priority,
             claim_worker_id=job.claim_worker_id,
@@ -384,6 +410,10 @@ class PrelabelService:
 
             normalized_model_id = str(payload.model_id or "").strip() or None
             normalized_model_backbone = str(payload.model_backbone or "").strip() or None
+            normalized_candidate_limit = int(payload.candidate_limit) if payload.candidate_limit is not None else None
+            normalized_confidence_threshold = (
+                float(payload.confidence_threshold) if payload.confidence_threshold is not None else None
+            )
             input_fingerprint = self._build_input_fingerprint(
                 task,
                 model_version=payload.model_version,
@@ -402,6 +432,8 @@ class PrelabelService:
                     model_version=payload.model_version,
                     model_id=normalized_model_id,
                     model_backbone=normalized_model_backbone,
+                    candidate_limit=normalized_candidate_limit,
+                    confidence_threshold=normalized_confidence_threshold,
                 )
                 and existing.input_fingerprint == input_fingerprint
             ):
@@ -415,6 +447,8 @@ class PrelabelService:
                 model_version=payload.model_version,
                 model_id=normalized_model_id,
                 model_backbone=normalized_model_backbone,
+                candidate_limit=normalized_candidate_limit,
+                confidence_threshold=normalized_confidence_threshold,
                 input_fingerprint=input_fingerprint,
                 priority=payload.priority,
                 cancel_existing=payload.force,
@@ -448,6 +482,8 @@ class PrelabelService:
                 model_version=summary.prelabel_model_version,
                 model_id=summary.prelabel_model_id,
                 model_backbone=summary.prelabel_model_backbone,
+                candidate_limit=summary.prelabel_candidate_limit,
+                confidence_threshold=summary.prelabel_confidence_threshold,
                 box_count=summary.prelabel_box_count,
                 updated_at=summary.prelabel_updated_at,
                 annotations=[],
@@ -537,6 +573,8 @@ class PrelabelService:
             model_version=job.model_version,
             model_id=job.model_id,
             model_backbone=job.model_backbone,
+            candidate_limit=job.candidate_limit,
+            confidence_threshold=job.confidence_threshold,
             input_fingerprint=job.input_fingerprint,
             paths=self._paths_for_task(task),
             claimed_at=job.claimed_at,

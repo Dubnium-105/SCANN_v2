@@ -124,6 +124,39 @@ def test_ai_prelabel_button_batches_v2_samples_and_persists_results(qapp, fits_d
     qapp.processEvents()
 
 
+def test_candidate_bbox_uses_detector_bbox_when_available(qapp):
+    from scann.gui.dialogs.annotation_dialog import AnnotationDialog
+
+    parent = QWidget()
+    dialog = AnnotationDialog(parent=parent, config=AppConfig())
+    dialog.set_mode("v2")
+
+    bbox = dialog._candidate_to_bbox(
+        Candidate(
+            x=60,
+            y=70,
+            ai_score=0.93,
+            bbox_x=54,
+            bbox_y=66,
+            bbox_width=12,
+            bbox_height=9,
+        ),
+        (120, 140),
+    )
+
+    assert bbox.x == 54
+    assert bbox.y == 66
+    assert bbox.width == 12
+    assert bbox.height == 9
+    assert bbox.confidence == pytest.approx(0.93)
+
+    dialog.close()
+    parent.close()
+    dialog.deleteLater()
+    parent.deleteLater()
+    qapp.processEvents()
+
+
 def test_v2_can_switch_marked_new_new_old_views(qapp, fits_dataset: Path):
     from scann.gui.dialogs.annotation_dialog import AnnotationDialog
     from scann.core.models import AlignResult

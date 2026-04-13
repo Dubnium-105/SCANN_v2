@@ -1560,13 +1560,28 @@ class AnnotationDialog(QDialog):
     def _candidate_to_bbox(self, candidate, image_shape: tuple[int, ...]) -> BBox:
         """将候选体中心点转换为固定大小的标注框。"""
         height, width = image_shape[:2]
-        patch_size = int(self._config.slice_size)
-        half_size = patch_size // 2
-
-        left = max(0, int(candidate.x) - half_size)
-        top = max(0, int(candidate.y) - half_size)
-        bbox_width = min(patch_size, width - left)
-        bbox_height = min(patch_size, height - top)
+        bbox_width = getattr(candidate, "bbox_width", None)
+        bbox_height = getattr(candidate, "bbox_height", None)
+        if bbox_width is not None and bbox_height is not None:
+            resolved_width = max(1, int(round(float(bbox_width))))
+            resolved_height = max(1, int(round(float(bbox_height))))
+            left = getattr(candidate, "bbox_x", None)
+            top = getattr(candidate, "bbox_y", None)
+            if left is None:
+                left = int(round(float(candidate.x) - resolved_width / 2.0))
+            if top is None:
+                top = int(round(float(candidate.y) - resolved_height / 2.0))
+            left = max(0, min(int(left), max(0, width - 1)))
+            top = max(0, min(int(top), max(0, height - 1)))
+            bbox_width = min(resolved_width, width - left)
+            bbox_height = min(resolved_height, height - top)
+        else:
+            patch_size = int(self._config.slice_size)
+            half_size = patch_size // 2
+            left = max(0, int(candidate.x) - half_size)
+            top = max(0, int(candidate.y) - half_size)
+            bbox_width = min(patch_size, width - left)
+            bbox_height = min(patch_size, height - top)
 
         return BBox(
             x=left,

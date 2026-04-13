@@ -187,6 +187,10 @@ class Candidate:
     is_manual: bool = False
     is_known: bool = False
     known_id: str = ""
+    bbox_x: int | None = None
+    bbox_y: int | None = None
+    bbox_width: int | None = None
+    bbox_height: int | None = None
 
 
 # ─────────────────────── AI 检测 ───────────────────────

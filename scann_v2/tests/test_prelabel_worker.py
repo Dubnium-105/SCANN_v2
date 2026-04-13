@@ -169,11 +169,18 @@ def test_detection_processor_candidate_mapping(tmp_path, monkeypatch) -> None:
     processor.inference_engine = None
 
     class _FakePipeline:
+        def __init__(self) -> None:
+            self.detection_params = type("Params", (), {"topk": 20})()
+
         def process_pair(self, **_kwargs):
             class _Candidate:
                 x = 40
                 y = 50
                 ai_score = 0.88
+                bbox_x = 33
+                bbox_y = 46
+                bbox_width = 11
+                bbox_height = 7
 
             class _Result:
                 candidates = [_Candidate()]
@@ -194,6 +201,8 @@ def test_detection_processor_candidate_mapping(tmp_path, monkeypatch) -> None:
             job_id="job-4",
             task_id="task-4",
             model_version="detector-v1",
+            candidate_limit=5,
+            confidence_threshold=0.5,
             input_fingerprint="123",
             paths={"new": "new/task-4.fts"},
         ),
@@ -203,7 +212,67 @@ def test_detection_processor_candidate_mapping(tmp_path, monkeypatch) -> None:
     assert result.ai_suggestion == "real"
     assert result.ai_confidence == 0.88
     assert len(result.annotations) == 1
-    assert result.annotations[0].x == 0
-    assert result.annotations[0].y == 10
-    assert result.annotations[0].width == 80
-    assert result.annotations[0].height == 80
+    assert result.annotations[0].x == 33
+    assert result.annotations[0].y == 46
+    assert result.annotations[0].width == 11
+    assert result.annotations[0].height == 7
+    assert result.metadata["candidate_limit"] == 5
+    assert result.metadata["confidence_threshold"] == 0.5
+
+
+def test_detection_processor_applies_threshold_and_limit(tmp_path) -> None:
+    config = _worker_config(tmp_path)
+    processor = DetectionPrelabelProcessor.__new__(DetectionPrelabelProcessor)
+    processor.config = config
+
+    class _FakeEngine:
+        def __init__(self) -> None:
+            self.threshold = 0.25
+
+    processor.inference_engine = _FakeEngine()
+
+    class _FakePipeline:
+        def __init__(self) -> None:
+            self.detection_params = type("Params", (), {"topk": 20})()
+
+        def process_pair(self, **_kwargs):
+            candidates = []
+            for index, score in enumerate([0.92, 0.61, 0.40]):
+                candidate = type(
+                    "Candidate",
+                    (),
+                    {
+                        "x": 20 + index * 10,
+                        "y": 30 + index * 10,
+                        "ai_score": score,
+                    },
+                )()
+                candidates.append(candidate)
+
+            return type("Result", (), {"candidates": candidates, "error": ""})()
+
+    processor.pipeline = _FakePipeline()
+
+    class _FakeAssets:
+        def load_fits(self, _view_name: str):
+            return FitsImage(data=np.zeros((120, 120), dtype=np.float32), header=FitsHeader(raw={}))
+
+    result = processor.process(
+        WorkerClaimResponse(
+            job_id="job-5",
+            task_id="task-5",
+            model_version="detector-v1",
+            candidate_limit=2,
+            confidence_threshold=0.6,
+            input_fingerprint="abc",
+            paths={"new": "new/task-5.fts"},
+        ),
+        _FakeAssets(),
+    )
+
+    assert len(result.annotations) == 2
+    assert [round(item.confidence, 2) for item in result.annotations] == [0.92, 0.61]
+    assert result.metadata["raw_candidate_count"] == 3
+    assert result.metadata["candidate_count"] == 2
+    assert processor.inference_engine.threshold == 0.25
+    assert processor.pipeline.detection_params.topk == 20

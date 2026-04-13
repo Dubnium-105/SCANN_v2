@@ -97,6 +97,8 @@ class PrelabelJobRecord:
     status: str
     model_id: str | None = None
     model_backbone: str | None = None
+    candidate_limit: int | None = None
+    confidence_threshold: float | None = None
     priority: int = 100
     claim_worker_id: str | None = None
     claimed_at: str | None = None
@@ -120,6 +122,8 @@ class TaskAIPrelabelRecord:
     model_version: str | None = None
     model_id: str | None = None
     model_backbone: str | None = None
+    candidate_limit: int | None = None
+    confidence_threshold: float | None = None
     input_fingerprint: str | None = None
     status: str = "available"
     box_count: int = 0
@@ -152,6 +156,8 @@ class TaskPrelabelSummaryRecord:
     prelabel_model_version: str | None = None
     prelabel_model_id: str | None = None
     prelabel_model_backbone: str | None = None
+    prelabel_candidate_limit: int | None = None
+    prelabel_confidence_threshold: float | None = None
     prelabel_updated_at: str | None = None
     prelabel_box_count: int = 0
     prelabel_id: str | None = None
@@ -455,6 +461,8 @@ class DatasetStorage:
                 model_version TEXT NOT NULL,
                 model_id TEXT,
                 model_backbone TEXT,
+                candidate_limit INTEGER,
+                confidence_threshold REAL,
                 input_fingerprint TEXT NOT NULL,
                 status TEXT NOT NULL CHECK(status IN ('queued', 'claimed', 'completed', 'failed', 'cancelled')),
                 priority INTEGER NOT NULL DEFAULT 100,
@@ -495,6 +503,8 @@ class DatasetStorage:
                 model_version TEXT,
                 model_id TEXT,
                 model_backbone TEXT,
+                candidate_limit INTEGER,
+                confidence_threshold REAL,
                 input_fingerprint TEXT,
                 status TEXT NOT NULL CHECK(status IN ('available', 'superseded', 'hidden', 'accepted')),
                 box_count INTEGER NOT NULL DEFAULT 0,
@@ -666,8 +676,12 @@ class DatasetStorage:
         )
         self._ensure_column(connection, "prelabel_jobs", "model_id", "TEXT")
         self._ensure_column(connection, "prelabel_jobs", "model_backbone", "TEXT")
+        self._ensure_column(connection, "prelabel_jobs", "candidate_limit", "INTEGER")
+        self._ensure_column(connection, "prelabel_jobs", "confidence_threshold", "REAL")
         self._ensure_column(connection, "task_ai_prelabels", "model_id", "TEXT")
         self._ensure_column(connection, "task_ai_prelabels", "model_backbone", "TEXT")
+        self._ensure_column(connection, "task_ai_prelabels", "candidate_limit", "INTEGER")
+        self._ensure_column(connection, "task_ai_prelabels", "confidence_threshold", "REAL")
         connection.commit()
         self._schema_ready_paths.add(db_key)
 
@@ -1772,6 +1786,10 @@ class DatasetStorage:
             model_version=str(row["model_version"]),
             model_id=str(row["model_id"]) if row["model_id"] is not None else None,
             model_backbone=str(row["model_backbone"]) if row["model_backbone"] is not None else None,
+            candidate_limit=int(row["candidate_limit"]) if row["candidate_limit"] is not None else None,
+            confidence_threshold=(
+                float(row["confidence_threshold"]) if row["confidence_threshold"] is not None else None
+            ),
             input_fingerprint=str(row["input_fingerprint"]),
             status=str(row["status"]),
             priority=int(row["priority"] or 100),
@@ -1802,6 +1820,10 @@ class DatasetStorage:
             model_version=str(row["model_version"]) if row["model_version"] is not None else None,
             model_id=str(row["model_id"]) if row["model_id"] is not None else None,
             model_backbone=str(row["model_backbone"]) if row["model_backbone"] is not None else None,
+            candidate_limit=int(row["candidate_limit"]) if row["candidate_limit"] is not None else None,
+            confidence_threshold=(
+                float(row["confidence_threshold"]) if row["confidence_threshold"] is not None else None
+            ),
             input_fingerprint=(
                 str(row["input_fingerprint"]) if row["input_fingerprint"] is not None else None
             ),
@@ -2035,6 +2057,8 @@ class DatasetStorage:
         model_version: str,
         model_id: str | None = None,
         model_backbone: str | None = None,
+        candidate_limit: int | None = None,
+        confidence_threshold: float | None = None,
         input_fingerprint: str,
         priority: int = 100,
         cancel_existing: bool = False,
@@ -2080,6 +2104,8 @@ class DatasetStorage:
                     model_version,
                     model_id,
                     model_backbone,
+                    candidate_limit,
+                    confidence_threshold,
                     input_fingerprint,
                     status,
                     priority,
@@ -2087,7 +2113,7 @@ class DatasetStorage:
                     created_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, 0, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, 0, ?, ?)
                 """,
                 (
                     job_id,
@@ -2096,6 +2122,8 @@ class DatasetStorage:
                     model_version,
                     model_id,
                     model_backbone,
+                    int(candidate_limit) if candidate_limit is not None else None,
+                    float(confidence_threshold) if confidence_threshold is not None else None,
                     input_fingerprint,
                     int(priority),
                     now,
@@ -2453,6 +2481,8 @@ class DatasetStorage:
                     model_version,
                     model_id,
                     model_backbone,
+                    candidate_limit,
+                    confidence_threshold,
                     input_fingerprint,
                     status,
                     box_count,
@@ -2463,7 +2493,7 @@ class DatasetStorage:
                     updated_at,
                     superseded_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'available', ?, ?, NULL, ?, ?, ?, NULL)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'available', ?, ?, NULL, ?, ?, ?, NULL)
                 """,
                 (
                     prelabel_id,
@@ -2475,6 +2505,8 @@ class DatasetStorage:
                     job.model_version,
                     job.model_id,
                     job.model_backbone,
+                    job.candidate_limit,
+                    job.confidence_threshold,
                     job.input_fingerprint,
                     len(annotations),
                     worker_id,
@@ -2735,6 +2767,8 @@ class DatasetStorage:
                 prelabel_model_version=job.model_version,
                 prelabel_model_id=job.model_id,
                 prelabel_model_backbone=job.model_backbone,
+                prelabel_candidate_limit=job.candidate_limit,
+                prelabel_confidence_threshold=job.confidence_threshold,
                 prelabel_updated_at=job.updated_at,
                 prelabel_box_count=0,
                 prelabel_job_id=job.job_id,
@@ -2748,6 +2782,8 @@ class DatasetStorage:
                 prelabel_model_version=prelabel.model_version,
                 prelabel_model_id=prelabel.model_id,
                 prelabel_model_backbone=prelabel.model_backbone,
+                prelabel_candidate_limit=prelabel.candidate_limit,
+                prelabel_confidence_threshold=prelabel.confidence_threshold,
                 prelabel_updated_at=prelabel.updated_at,
                 prelabel_box_count=prelabel.box_count,
                 prelabel_id=prelabel.prelabel_id,

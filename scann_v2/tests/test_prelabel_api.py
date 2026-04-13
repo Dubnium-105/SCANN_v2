@@ -44,6 +44,8 @@ def test_prelabel_enqueue_claim_complete_and_list_status(tmp_path, monkeypatch) 
             "model_version": "detector-v1",
             "model_id": "model-20260413-001",
             "model_backbone": "ViT_B_16",
+            "candidate_limit": 12,
+            "confidence_threshold": 0.42,
         },
         headers=admin_headers,
     )
@@ -86,6 +88,8 @@ def test_prelabel_enqueue_claim_complete_and_list_status(tmp_path, monkeypatch) 
     assert claim_payload["model_version"] == "detector-v1"
     assert claim_payload["model_id"] == "model-20260413-001"
     assert claim_payload["model_backbone"] == "ViT_B_16"
+    assert claim_payload["candidate_limit"] == 12
+    assert claim_payload["confidence_threshold"] == 0.42
     assert claim_payload["paths"]["new"] == "new/PGC 17069.fts"
     assert claim_payload["paths"]["old"] == "old/PGC 17069.fts"
 
@@ -140,6 +144,8 @@ def test_prelabel_enqueue_claim_complete_and_list_status(tmp_path, monkeypatch) 
     assert prelabel_payload["model_version"] == "detector-v1"
     assert prelabel_payload["model_id"] == "model-20260413-001"
     assert prelabel_payload["model_backbone"] == "ViT_B_16"
+    assert prelabel_payload["candidate_limit"] == 12
+    assert prelabel_payload["confidence_threshold"] == 0.42
     assert prelabel_payload["ai_suggestion"] == "real"
     assert prelabel_payload["box_count"] == 1
 
@@ -154,7 +160,11 @@ def test_prelabel_enqueue_claim_complete_and_list_status(tmp_path, monkeypatch) 
 
     enqueue_again = client.post(
         "/api/prelabels/enqueue",
-        json={"model_version": "detector-v1"},
+        json={
+            "model_version": "detector-v1",
+            "candidate_limit": 12,
+            "confidence_threshold": 0.42,
+        },
         headers=admin_headers,
     )
     assert enqueue_again.status_code == 200
@@ -268,6 +278,60 @@ def test_prelabel_claim_treats_auto_backbone_as_wildcard(tmp_path, monkeypatch) 
     claim_payload = claim.json()
     assert claim_payload["task_id"] == "PGC 17069"
     assert claim_payload["model_backbone"] == "ViT_B_16"
+
+
+def test_prelabel_enqueue_treats_threshold_and_limit_as_distinct_config(tmp_path, monkeypatch) -> None:
+    dataset_root = tmp_path / "dataset"
+    _touch(dataset_root / "new" / "PGC 17069.fts")
+
+    monkeypatch.setenv("SCANN_NATIVE_DATASET_ROOT", str(dataset_root))
+    monkeypatch.setenv("SCANN_PRELABEL_WORKER_TOKEN", "worker-secret")
+
+    client = TestClient(app)
+    admin_headers = _auth_headers(client)
+
+    first_enqueue = client.post(
+        "/api/prelabels/enqueue",
+        json={
+            "model_version": "detector-v1",
+            "candidate_limit": 10,
+            "confidence_threshold": 0.30,
+        },
+        headers=admin_headers,
+    )
+    assert first_enqueue.status_code == 200
+    assert first_enqueue.json()["enqueued_count"] == 1
+
+    claim = client.post(
+        "/api/prelabel-jobs/claim",
+        json={"worker_id": "gpu-worker-1"},
+        headers=_worker_headers(),
+    )
+    assert claim.status_code == 200
+    claim_payload = claim.json()
+
+    complete = client.post(
+        f"/api/prelabel-jobs/{claim_payload['job_id']}/complete",
+        json={
+            "worker_id": "gpu-worker-1",
+            "annotations": [],
+        },
+        headers=_worker_headers(),
+    )
+    assert complete.status_code == 200
+
+    second_enqueue = client.post(
+        "/api/prelabels/enqueue",
+        json={
+            "model_version": "detector-v1",
+            "candidate_limit": 5,
+            "confidence_threshold": 0.70,
+        },
+        headers=admin_headers,
+    )
+    assert second_enqueue.status_code == 200
+    assert second_enqueue.json()["enqueued_count"] == 1
+    assert second_enqueue.json()["skipped_count"] == 0
 
 
 def test_prelabel_worker_endpoints_require_token(tmp_path, monkeypatch) -> None:

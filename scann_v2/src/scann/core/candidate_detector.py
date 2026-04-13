@@ -104,7 +104,17 @@ def detect_candidates(
         if features is None:
             continue
 
-        candidates.append(Candidate(x=cx, y=cy, features=features))
+        candidates.append(
+            Candidate(
+                x=cx,
+                y=cy,
+                features=features,
+                bbox_x=int(bx),
+                bbox_y=int(by),
+                bbox_width=int(bw),
+                bbox_height=int(bh),
+            )
+        )
 
     # Top-K 排序（按 cheap_score 降序）
     candidates.sort(key=lambda c: _cheap_score(c.features), reverse=True)

@@ -358,6 +358,10 @@ class DetectionPipeline:
                     x=int(detection.x),
                     y=int(detection.y),
                     ai_score=float(detection.confidence),
+                    bbox_x=int(round(float(detection.x) - float(detection.width) / 2.0)),
+                    bbox_y=int(round(float(detection.y) - float(detection.height) / 2.0)),
+                    bbox_width=int(detection.width),
+                    bbox_height=int(detection.height),
                 )
             )
         if not candidates:

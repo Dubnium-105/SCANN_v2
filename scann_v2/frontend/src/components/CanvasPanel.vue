@@ -1846,6 +1846,8 @@ async function loadTaskPrelabel(taskId) {
         prelabel_model_version: detail.model_version,
         prelabel_model_id: detail.model_id,
         prelabel_model_backbone: detail.model_backbone,
+        prelabel_candidate_limit: detail.candidate_limit,
+        prelabel_confidence_threshold: detail.confidence_threshold,
         prelabel_box_count: detail.box_count,
         prelabel_updated_at: detail.updated_at,
       }
@@ -2418,6 +2420,8 @@ async function regenerateActivePrelabel() {
       modelVersion,
       modelId: String(activePrelabel.value?.model_id || activeTask.value?.prelabel_model_id || '').trim(),
       modelBackbone: String(activePrelabel.value?.model_backbone || activeTask.value?.prelabel_model_backbone || '').trim(),
+      candidateLimit: activePrelabel.value?.candidate_limit,
+      confidenceThreshold: activePrelabel.value?.confidence_threshold,
       force: true,
     })
     await refreshTaskList()

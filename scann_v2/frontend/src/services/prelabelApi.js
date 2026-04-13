@@ -24,6 +24,29 @@ function normalizeStatuses(statuses) {
     .filter(Boolean)
 }
 
+function normalizePositiveInteger(value) {
+  if (value === null || value === undefined || value === '') {
+    return null
+  }
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) {
+    return null
+  }
+  const rounded = Math.round(parsed)
+  return rounded > 0 ? rounded : null
+}
+
+function normalizeThreshold(value) {
+  if (value === null || value === undefined || value === '') {
+    return null
+  }
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) {
+    return null
+  }
+  return Math.max(0, Math.min(1, parsed))
+}
+
 function formatErrorDetail(detail) {
   if (Array.isArray(detail)) {
     return detail
@@ -74,6 +97,8 @@ export async function enqueuePrelabels(options = {}, fetchImpl = authFetch) {
   const modelVersion = String(options.modelVersion || '').trim()
   const modelId = String(options.modelId || '').trim()
   const modelBackbone = String(options.modelBackbone || '').trim()
+  const candidateLimit = normalizePositiveInteger(options.candidateLimit)
+  const confidenceThreshold = normalizeThreshold(options.confidenceThreshold)
   if (!modelVersion) {
     throw new Error('当前缺少模型版本，无法创建预标注任务')
   }
@@ -87,6 +112,8 @@ export async function enqueuePrelabels(options = {}, fetchImpl = authFetch) {
       model_version: modelVersion,
       model_id: modelId || null,
       model_backbone: modelBackbone || null,
+      candidate_limit: candidateLimit,
+      confidence_threshold: confidenceThreshold,
       task_ids: taskIds,
       priority: Number.isFinite(Number(options.priority)) ? Number(options.priority) : 100,
       force: options.force !== false,
