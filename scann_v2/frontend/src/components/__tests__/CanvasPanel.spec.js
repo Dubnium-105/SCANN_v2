@@ -18,7 +18,7 @@ function createPrelabel(taskId, overrides = {}) {
     task_id: taskId,
     status: 'available',
     source_view: 'new',
-    ai_suggestion: 'real',
+    ai_suggestion: 'asteroid',
     ai_confidence: 0.91,
     model_version: 'detector-v1',
     model_id: 'model-20260413-001',
@@ -31,7 +31,7 @@ function createPrelabel(taskId, overrides = {}) {
         width: 20,
         height: 28,
         label: null,
-        detail_type: null,
+        detail_type: 'asteroid',
         confidence: 0.91,
       },
     ],
@@ -208,7 +208,10 @@ describe('CanvasPanel', () => {
     'v-stage': StageStub,
     'v-layer': { template: '<div><slot /></div>' },
     'v-image': { template: '<div />' },
-    'v-rect': { template: '<div data-testid="bbox-rect" />' },
+    'v-rect': {
+      props: ['config'],
+      template: '<div data-testid="bbox-rect" :data-stroke="config?.stroke || \'\'" :data-fill="config?.fill || \'\'" />',
+    },
     'v-circle': { template: '<div data-testid="point-shape" />' },
     'v-line': { template: '<div data-testid="polygon-shape" />' },
   }
@@ -418,14 +421,19 @@ describe('CanvasPanel', () => {
     expect(wrapper.findAll('[data-testid="prelabel-review-item"]')).toHaveLength(1)
 
     await wrapper.get('[data-testid="prelabel-review-item"]').trigger('click')
-    await wrapper.get('[data-testid="prelabel-review-label-select"]').setValue('real:asteroid')
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' }))
     await flushPromises()
+
+    const selectedPrelabelOverlay = wrapper
+      .findAll('[data-testid="bbox-rect"]')
+      .find((item) => item.attributes('data-stroke') === '#fbbf24')
+    expect(selectedPrelabelOverlay).toBeTruthy()
 
     await wrapper.get('[data-testid="confirm-prelabel-review"]').trigger('click')
     await flushPromises()
 
     expect(wrapper.findAll('[data-testid="annotation-item"]')).toHaveLength(1)
-    expect(wrapper.get('[data-testid="annotation-label-select"]').element.value).toBe('real:asteroid')
+    expect(wrapper.get('[data-testid="annotation-label-select"]').element.value).toBe('supernova')
     expect(wrapper.get('[data-testid="prelabel-message"]').text()).toContain('AI')
 
     await wrapper.get('[data-testid="remove-applied-prelabel"]').trigger('click')
@@ -499,7 +507,7 @@ describe('CanvasPanel', () => {
     const item = wrapper.findAll('[data-testid="annotation-item"]')[0]
     await item.trigger('click')
     const select = wrapper.get('[data-testid="annotation-label-select"]')
-    await select.setValue('real:asteroid')
+    await select.setValue('asteroid')
     await flushPromises()
 
     await wrapper.get('[data-testid="submit-annotations"]').trigger('click')
@@ -522,9 +530,9 @@ describe('CanvasPanel', () => {
       y: 18,
       width: 30,
       height: 40,
-      label: 'real',
       detail_type: 'asteroid',
     })
+    expect(payload.annotations[0].label).toBeUndefined()
   })
 
   it('allows submitting manual crop boundary without bbox annotations', async () => {
@@ -580,7 +588,7 @@ describe('CanvasPanel', () => {
 
     const item = wrapper.findAll('[data-testid="annotation-item"]')[0]
     await item.trigger('click')
-    await wrapper.get('[data-testid="annotation-label-select"]').setValue('real:asteroid')
+    await wrapper.get('[data-testid="annotation-label-select"]').setValue('asteroid')
     await flushPromises()
 
     await wrapper.get('[data-testid="auto-submit-interval"]').setValue('30')
@@ -786,10 +794,10 @@ describe('CanvasPanel', () => {
     await item.trigger('click')
 
     const select = wrapper.get('[data-testid="annotation-label-select"]')
-    await select.setValue('real:asteroid')
+    await select.setValue('asteroid')
     await flushPromises()
 
-    expect(wrapper.findAll('[data-testid="annotation-item"]')[0].attributes('data-ann-label')).toBe('real')
+    expect(wrapper.findAll('[data-testid="annotation-item"]')[0].attributes('data-ann-label')).toBe('asteroid')
   })
 
   it('selects an existing annotation by clicking it on the canvas in move mode', async () => {
@@ -886,21 +894,21 @@ describe('CanvasPanel', () => {
 
     const select = wrapper.get('[data-testid="annotation-label-select"]')
     const optionValues = select.findAll('option').map((option) => option.element.value)
-    expect(optionValues).toContain('bogus:disappeared_asteroid')
-    expect(optionValues).toContain('bogus:disappeared_star')
-    expect(optionValues).toContain('bogus:disappeared_galaxy')
+    expect(optionValues).toContain('disappeared_asteroid')
+    expect(optionValues).toContain('disappeared_star')
+    expect(optionValues).toContain('disappeared_galaxy')
 
     window.dispatchEvent(new KeyboardEvent('keydown', { key: '9' }))
     await flushPromises()
-    expect(wrapper.get('[data-testid="annotation-label-select"]').element.value).toBe('bogus:disappeared_asteroid')
+    expect(wrapper.get('[data-testid="annotation-label-select"]').element.value).toBe('disappeared_asteroid')
 
     window.dispatchEvent(new KeyboardEvent('keydown', { key: '0' }))
     await flushPromises()
-    expect(wrapper.get('[data-testid="annotation-label-select"]').element.value).toBe('bogus:disappeared_star')
+    expect(wrapper.get('[data-testid="annotation-label-select"]').element.value).toBe('disappeared_star')
 
     window.dispatchEvent(new KeyboardEvent('keydown', { key: '-' }))
     await flushPromises()
-    expect(wrapper.get('[data-testid="annotation-label-select"]').element.value).toBe('bogus:disappeared_galaxy')
+    expect(wrapper.get('[data-testid="annotation-label-select"]').element.value).toBe('disappeared_galaxy')
   })
 
   it('requires second click to delete and supports undo for annotation item', async () => {

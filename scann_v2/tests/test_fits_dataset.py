@@ -34,8 +34,8 @@ class TestFitsDetectionDataset:
                     "width": 1000,
                     "height": 1000,
                     "annotations": [
-                        {"x": 100, "y": 100, "width": 20, "height": 20, "label": "real"},
-                        {"x": 500, "y": 500, "width": 15, "height": 15, "label": "bogus"},
+                        {"x": 100, "y": 100, "width": 20, "height": 20, "detail_type": "asteroid"},
+                        {"x": 500, "y": 500, "width": 15, "height": 15, "detail_type": "noise"},
                     ]
                 }
             ]
@@ -186,8 +186,8 @@ class TestFitsDetectionDataset:
                     "width": 1000,
                     "height": 1000,
                     "annotations": [
-                        {"x": 100, "y": 100, "width": 20, "height": 20, "label": "real"},
-                        {"x": 500, "y": 500, "width": 15, "height": 15, "label": "bogus"},
+                        {"x": 100, "y": 100, "width": 20, "height": 20, "detail_type": "asteroid"},
+                        {"x": 500, "y": 500, "width": 15, "height": 15, "detail_type": "noise"},
                     ]
                 }
             ]
@@ -417,8 +417,8 @@ class TestFitsDenseDetectionDataset:
                 {
                     "id": "PAIR_A",
                     "annotations": [
-                        {"x": 4, "y": 4, "width": 8, "height": 8, "label": "real"},
-                        {"x": 10, "y": 10, "height": 5, "label": "real"},
+                        {"x": 4, "y": 4, "width": 8, "height": 8, "detail_type": "asteroid"},
+                        {"x": 10, "y": 10, "height": 5, "detail_type": "asteroid"},
                         {"x": 1, "y": 1, "width": 2, "height": 2, "label": "unknown"},
                     ],
                 }

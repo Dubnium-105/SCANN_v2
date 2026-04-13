@@ -114,7 +114,7 @@ def test_prelabel_enqueue_claim_complete_and_list_status(tmp_path, monkeypatch) 
         json={
             "worker_id": "gpu-worker-1",
             "source_view": "new",
-            "ai_suggestion": "real",
+            "ai_suggestion": "asteroid",
             "ai_confidence": 0.97,
             "metadata": {"pipeline": "detector-v1"},
             "annotations": [
@@ -123,8 +123,8 @@ def test_prelabel_enqueue_claim_complete_and_list_status(tmp_path, monkeypatch) 
                     "y": 20.0,
                     "width": 30.0,
                     "height": 40.0,
-                    "label": "Positive",
-                    "detail_type": "candidate",
+                    "label": None,
+                    "detail_type": "asteroid",
                     "confidence": 0.97,
                 }
             ],
@@ -146,7 +146,7 @@ def test_prelabel_enqueue_claim_complete_and_list_status(tmp_path, monkeypatch) 
     assert prelabel_payload["model_backbone"] == "ViT_B_16"
     assert prelabel_payload["candidate_limit"] == 12
     assert prelabel_payload["confidence_threshold"] == 0.42
-    assert prelabel_payload["ai_suggestion"] == "real"
+    assert prelabel_payload["ai_suggestion"] == "asteroid"
     assert prelabel_payload["box_count"] == 1
 
     tasks_after_complete = client.get("/api/tasks", headers=admin_headers)
@@ -388,7 +388,7 @@ def test_annotation_save_accepts_applied_prelabel_and_skips_duplicate_enqueue(tm
         json={
             "worker_id": "gpu-worker-1",
             "source_view": "new",
-            "ai_suggestion": "real",
+            "ai_suggestion": "asteroid",
             "ai_confidence": 0.97,
             "annotations": [
                 {
@@ -396,8 +396,8 @@ def test_annotation_save_accepts_applied_prelabel_and_skips_duplicate_enqueue(tm
                     "y": 18.0,
                     "width": 32.0,
                     "height": 26.0,
-                    "label": "Positive",
-                    "detail_type": "candidate",
+                    "label": None,
+                    "detail_type": "asteroid",
                     "confidence": 0.97,
                 }
             ],

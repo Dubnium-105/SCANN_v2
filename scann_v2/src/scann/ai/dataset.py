@@ -299,6 +299,24 @@ class FitsDetectionDataset:
 
         return samples
 
+    @staticmethod
+    def _resolve_annotation_bucket(annotation: dict) -> str:
+        detail_type = str(annotation.get("detail_type") or "").strip()
+        if detail_type:
+            try:
+                from scann.core.annotation_models import DETAIL_TYPE_TO_LABEL, DetailType
+
+                return DETAIL_TYPE_TO_LABEL[DetailType(detail_type)].value
+            except Exception:
+                normalized_detail_type = detail_type.lower()
+                if normalized_detail_type in {"real", "bogus"}:
+                    return normalized_detail_type
+
+        label = str(annotation.get("label", "real")).strip().lower()
+        if label in {"real", "bogus"}:
+            return label
+        return "real"
+
     def __len__(self) -> int:
         return len(self.samples)
 
@@ -468,7 +486,7 @@ class FitsDetectionDataset:
             rel_h = ann_h / crop_height
 
             # 映射标签
-            label = ann.get("label", "real")
+            label = self._resolve_annotation_bucket(ann)
             class_id = self.label_map.get(label, 0)
 
             targets.append([rel_x, rel_y, rel_w, rel_h, class_id])
@@ -480,7 +498,7 @@ class FitsDetectionDataset:
         counts = {}
         for sample in self.samples:
             for ann in sample["annotations"]:
-                label = ann.get("label", "real")
+                label = self._resolve_annotation_bucket(ann)
                 counts[label] = counts.get(label, 0) + 1
         return counts
 
@@ -588,10 +606,6 @@ class FitsDenseDetectionDataset:
 
     @staticmethod
     def _resolve_annotation_label(ann: dict[str, Any], image_info: dict[str, Any]) -> str | None:
-        label = str(ann.get("label") or "").strip().lower()
-        if label in {"real", "bogus"}:
-            return label
-
         detail_type = str(ann.get("detail_type") or image_info.get("detail_type") or "").strip()
         if detail_type:
             try:
@@ -603,6 +617,10 @@ class FitsDenseDetectionDataset:
                 detail_lower = detail_type.lower()
                 if detail_lower in {"real", "bogus"}:
                     return detail_lower
+
+        label = str(ann.get("label") or "").strip().lower()
+        if label in {"real", "bogus"}:
+            return label
 
         image_label = str(image_info.get("label") or "").strip().lower()
         if image_label in {"real", "bogus"}:

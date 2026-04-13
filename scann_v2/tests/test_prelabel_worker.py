@@ -87,7 +87,7 @@ def test_prelabel_worker_runner_reports_completion(tmp_path) -> None:
     )
     result = PrelabelProcessingResult(
         source_view="new",
-        ai_suggestion="real",
+        ai_suggestion="asteroid",
         ai_confidence=0.91,
         annotations=[],
         metadata={"candidate_count": 0},
@@ -171,8 +171,10 @@ def test_detection_processor_candidate_mapping(tmp_path, monkeypatch) -> None:
     class _FakePipeline:
         def __init__(self) -> None:
             self.detection_params = type("Params", (), {"topk": 20})()
+            self.last_kwargs = None
 
-        def process_pair(self, **_kwargs):
+        def process_pair(self, **kwargs):
+            self.last_kwargs = kwargs
             class _Candidate:
                 x = 40
                 y = 50
@@ -181,6 +183,7 @@ def test_detection_processor_candidate_mapping(tmp_path, monkeypatch) -> None:
                 bbox_y = 46
                 bbox_width = 11
                 bbox_height = 7
+                detail_type = "asteroid"
 
             class _Result:
                 candidates = [_Candidate()]
@@ -209,16 +212,19 @@ def test_detection_processor_candidate_mapping(tmp_path, monkeypatch) -> None:
         _FakeAssets(),
     )
 
-    assert result.ai_suggestion == "real"
+    assert result.ai_suggestion == "asteroid"
     assert result.ai_confidence == 0.88
     assert len(result.annotations) == 1
     assert result.annotations[0].x == 33
     assert result.annotations[0].y == 46
     assert result.annotations[0].width == 11
     assert result.annotations[0].height == 7
-    assert result.annotations[0].label == "real"
+    assert result.annotations[0].label is None
+    assert result.annotations[0].detail_type == "asteroid"
+    assert processor.pipeline.last_kwargs["skip_align"] is True
     assert result.metadata["candidate_limit"] == 5
     assert result.metadata["confidence_threshold"] == 0.5
+    assert result.metadata["skip_align"] is True
 
 
 def test_detection_processor_applies_threshold_and_limit(tmp_path) -> None:
@@ -273,6 +279,7 @@ def test_detection_processor_applies_threshold_and_limit(tmp_path) -> None:
 
     assert len(result.annotations) == 2
     assert [round(item.confidence, 2) for item in result.annotations] == [0.92, 0.61]
+    assert all(item.label is None for item in result.annotations)
     assert result.metadata["raw_candidate_count"] == 3
     assert result.metadata["candidate_count"] == 2
     assert processor.inference_engine.threshold == 0.25

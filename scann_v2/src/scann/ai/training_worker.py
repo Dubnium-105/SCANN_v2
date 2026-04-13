@@ -172,10 +172,6 @@ class TrainingWorker(QThread):
         )
 
     def _resolve_annotation_label(self, ann: dict[str, Any], image_info: dict[str, Any]) -> str | None:
-        label = str(ann.get("label") or "").strip().lower()
-        if label in {"real", "bogus"}:
-            return label
-
         detail_type = str(ann.get("detail_type") or image_info.get("detail_type") or "").strip()
         if detail_type:
             try:
@@ -184,6 +180,10 @@ class TrainingWorker(QThread):
                 normalized = detail_type.lower()
                 if normalized in {"real", "bogus"}:
                     return normalized
+
+        label = str(ann.get("label") or "").strip().lower()
+        if label in {"real", "bogus"}:
+            return label
 
         image_label = str(image_info.get("label") or "").strip().lower()
         if image_label in {"real", "bogus"}:

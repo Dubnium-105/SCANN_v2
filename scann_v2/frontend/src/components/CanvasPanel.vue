@@ -464,17 +464,7 @@
             <v-rect
               v-for="ann in visiblePrelabelAnnotations"
               :key="ann.id"
-              :config="{
-                x: ann.x,
-                y: ann.y,
-                width: ann.width,
-                height: ann.height,
-                stroke: '#60a5fa',
-                strokeWidth: Math.max(1.5, bboxStrokeWidth),
-                fill: 'rgba(96, 165, 250, 0.10)',
-                dash: [6, 4],
-                listening: false,
-              }"
+              :config="getPrelabelOverlayRectConfig(ann)"
             />
             <v-rect
               v-for="ann in annotations.filter((item) => item.type === 'bbox')"
@@ -769,7 +759,7 @@
                         @click="selectPrelabelReviewAnnotation(item.id)"
                       >
                         <span class="font-semibold">{{ item.display_id }}</span>
-                        <span class="ml-2">{{ item.label === 'Unlabeled' ? 'Unlabeled' : (item.detail_type ? `${item.label}:${item.detail_type}` : item.label) }}</span>
+                        <span class="ml-2">{{ getAnnotationDisplayName(item) }}</span>
                         <span v-if="Number.isFinite(Number(item.confidence))" class="ml-2 text-slate-500">
                           {{ Number(item.confidence).toFixed(2) }}
                         </span>
@@ -797,21 +787,19 @@
                     >
                       <option value="Unlabeled">Unlabeled (未标记)</option>
                       <optgroup label="Real (真实目标)">
-                        <option value="real">Real (真实目标)</option>
-                        <option value="real:asteroid">Asteroid (小行星)</option>
-                        <option value="real:supernova">Supernova (超新星)</option>
-                        <option value="real:variable_star">Variable Star (变星)</option>
+                        <option value="asteroid">Asteroid (小行星)</option>
+                        <option value="supernova">Supernova (超新星)</option>
+                        <option value="variable_star">Variable Star (变星)</option>
                       </optgroup>
                       <optgroup label="Bogus (伪目标)">
-                        <option value="bogus">Bogus (伪目标)</option>
-                        <option value="bogus:satellite_trail">Satellite Trail (卫星轨迹)</option>
-                        <option value="bogus:noise">Noise (噪声)</option>
-                        <option value="bogus:diffraction_spike">Diffraction Spike (衍射芒)</option>
-                        <option value="bogus:cmos_condensation">CMOS Condensation (CMOS结露)</option>
-                        <option value="bogus:corresponding">Corresponding (对应体)</option>
-                        <option value="bogus:disappeared_asteroid">Disappeared Asteroid (消失小行星)</option>
-                        <option value="bogus:disappeared_star">Disappeared Star (消失恒星)</option>
-                        <option value="bogus:disappeared_galaxy">Disappeared Galaxy (消失星系)</option>
+                        <option value="satellite_trail">Satellite Trail (卫星轨迹)</option>
+                        <option value="noise">Noise (噪声)</option>
+                        <option value="diffraction_spike">Diffraction Spike (衍射芒)</option>
+                        <option value="cmos_condensation">CMOS Condensation (CMOS结露)</option>
+                        <option value="corresponding">Corresponding (对应体)</option>
+                        <option value="disappeared_asteroid">Disappeared Asteroid (消失小行星)</option>
+                        <option value="disappeared_star">Disappeared Star (消失恒星)</option>
+                        <option value="disappeared_galaxy">Disappeared Galaxy (消失星系)</option>
                       </optgroup>
                     </select>
                   </label>
@@ -902,7 +890,7 @@
                       :data-ann-id="entry.annotation.id"
                       :data-ann-display-id="entry.annotation.display_id"
                       :data-ann-type="entry.annotation.type"
-                      :data-ann-label="entry.annotation.label"
+                      :data-ann-label="getAnnotationLabelKey(entry.annotation)"
                       @click="selectAnnotation(entry.annotation.id)"
                     >
                         <span class="inline-flex items-center gap-2">
@@ -911,7 +899,7 @@
                             :style="{ backgroundColor: getAnnotationColor(entry.annotation) }"
                           />
                           <span class="font-semibold">{{ entry.annotation.display_id }}</span>
-                          <span>{{ entry.annotation.type }} · {{ entry.annotation.detail_type ? entry.annotation.detail_type : entry.annotation.label }}</span>
+                          <span>{{ entry.annotation.type }} · {{ getAnnotationDisplayName(entry.annotation) }}</span>
                         </span>
                     </button>
                     <button
@@ -939,21 +927,19 @@
               >
                 <option value="Unlabeled">Unlabeled (未标记)</option>
                 <optgroup label="Real (真实目标)">
-                  <option value="real">Real (真实目标)</option>
-                  <option value="real:asteroid">Asteroid (小行星)</option>
-                  <option value="real:supernova">Supernova (超新星)</option>
-                  <option value="real:variable_star">Variable Star (变星)</option>
+                  <option value="asteroid">Asteroid (小行星)</option>
+                  <option value="supernova">Supernova (超新星)</option>
+                  <option value="variable_star">Variable Star (变星)</option>
                 </optgroup>
                 <optgroup label="Bogus (伪目标)">
-                  <option value="bogus">Bogus (伪目标)</option>
-                  <option value="bogus:satellite_trail">Satellite Trail (卫星轨迹)</option>
-                  <option value="bogus:noise">Noise (噪声)</option>
-                  <option value="bogus:diffraction_spike">Diffraction Spike (衍射芒)</option>
-                  <option value="bogus:cmos_condensation">CMOS Condensation (CMOS结露)</option>
-                  <option value="bogus:corresponding">Corresponding (对应体)</option>
-                  <option value="bogus:disappeared_asteroid">Disappeared Asteroid (消失小行星)</option>
-                  <option value="bogus:disappeared_star">Disappeared Star (消失恒星)</option>
-                  <option value="bogus:disappeared_galaxy">Disappeared Galaxy (消失星系)</option>
+                  <option value="satellite_trail">Satellite Trail (卫星轨迹)</option>
+                  <option value="noise">Noise (噪声)</option>
+                  <option value="diffraction_spike">Diffraction Spike (衍射芒)</option>
+                  <option value="cmos_condensation">CMOS Condensation (CMOS结露)</option>
+                  <option value="corresponding">Corresponding (对应体)</option>
+                  <option value="disappeared_asteroid">Disappeared Asteroid (消失小行星)</option>
+                  <option value="disappeared_star">Disappeared Star (消失恒星)</option>
+                  <option value="disappeared_galaxy">Disappeared Galaxy (消失星系)</option>
                 </optgroup>
               </select>
             </label>
@@ -1102,6 +1088,32 @@ const AUTO_SUBMIT_MAX_SECONDS = 3600
 const CANVAS_CLICK_SELECTION_TOLERANCE = 6
 const CANVAS_DRAW_CLICK_TOLERANCE = 2
 const ANNOTATION_HIT_SCREEN_TOLERANCE = 8
+const DETAIL_TYPE_BUCKETS = Object.freeze({
+  asteroid: 'real',
+  supernova: 'real',
+  variable_star: 'real',
+  satellite_trail: 'bogus',
+  noise: 'bogus',
+  diffraction_spike: 'bogus',
+  cmos_condensation: 'bogus',
+  corresponding: 'bogus',
+  disappeared_asteroid: 'bogus',
+  disappeared_star: 'bogus',
+  disappeared_galaxy: 'bogus',
+})
+const DETAIL_TYPE_SHORTCUTS = Object.freeze({
+  '1': 'asteroid',
+  '2': 'supernova',
+  '3': 'variable_star',
+  '4': 'satellite_trail',
+  '5': 'noise',
+  '6': 'diffraction_spike',
+  '7': 'cmos_condensation',
+  '8': 'corresponding',
+  '9': 'disappeared_asteroid',
+  '0': 'disappeared_star',
+  '-': 'disappeared_galaxy',
+})
 
 const taskProgressText = computed(() => {
   if (taskList.value.length === 0 || currentTaskIndex.value < 0) {
@@ -1211,6 +1223,40 @@ function formatPrelabelStatus(status) {
     completed: 'AI 已完成',
   }
   return labels[normalized] || (normalized ? `AI ${normalized}` : 'AI 未生成')
+}
+
+function normalizeAnnotationDetailTypeValue(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (!normalized || normalized === 'unlabeled' || normalized === 'real' || normalized === 'bogus') {
+    return ''
+  }
+  return normalized
+}
+
+function getAnnotationBucketFromDetailType(detailType) {
+  const normalized = normalizeAnnotationDetailTypeValue(detailType)
+  return normalized ? (DETAIL_TYPE_BUCKETS[normalized] || null) : null
+}
+
+function getAnnotationDetailType(annotation) {
+  const detailType = normalizeAnnotationDetailTypeValue(annotation?.detail_type)
+  if (detailType) {
+    return detailType
+  }
+  const label = normalizeAnnotationDetailTypeValue(annotation?.label)
+  return label || ''
+}
+
+function getAnnotationDisplayName(annotation) {
+  const detailType = getAnnotationDetailType(annotation)
+  if (detailType) {
+    return detailType
+  }
+  const coarseLabel = String(annotation?.label || '').trim()
+  if (coarseLabel && coarseLabel !== 'Unlabeled') {
+    return coarseLabel
+  }
+  return 'Unlabeled'
 }
 
 function getPrelabelStatusBadgeClass(status) {
@@ -1884,8 +1930,8 @@ async function loadLatestRevisionAnnotations(taskId) {
       y: Number(ann.y) || 0,
       width: Number(ann.width) || 0,
       height: Number(ann.height) || 0,
-      label: ann.label || 'Unlabeled',
-      detail_type: ann.detail_type,
+      label: undefined,
+      detail_type: getAnnotationDetailType(ann) || undefined,
       origin: 'history',
     }))
 
@@ -1932,8 +1978,11 @@ async function loadTaskPrelabel(taskId) {
       y: Number(ann.y) || 0,
       width: Number(ann.width) || 0,
       height: Number(ann.height) || 0,
-      label: ann.label || detail.ai_suggestion || 'Unlabeled',
-      detail_type: ann.detail_type,
+      label: undefined,
+      detail_type: getAnnotationDetailType({
+        label: ann.label || detail.ai_suggestion,
+        detail_type: ann.detail_type,
+      }) || undefined,
       confidence: Number.isFinite(Number(ann.confidence)) ? Number(ann.confidence) : undefined,
       origin: 'prelabel_overlay',
       source_prelabel_id: detail.prelabel_id,
@@ -2242,7 +2291,7 @@ function getSubmittableBboxAnnotations() {
     .filter(
       (ann) => (
         ann.type === 'bbox'
-        && ann.label !== 'Unlabeled'
+        && Boolean(getAnnotationDetailType(ann))
         && Number.isFinite(Number(ann.x))
         && Number.isFinite(Number(ann.y))
         && Number.isFinite(Number(ann.width))
@@ -2270,7 +2319,12 @@ function getSubmittableBboxAnnotations() {
 }
 
 function deriveLegacyBucket(bboxAnnotations) {
-  return bboxAnnotations.every((ann) => ann.label === 'bogus') ? 'negative' : 'positive'
+  if (!Array.isArray(bboxAnnotations) || bboxAnnotations.length === 0) {
+    return 'positive'
+  }
+  return bboxAnnotations.every((ann) => getAnnotationBucketFromDetailType(getAnnotationDetailType(ann)) === 'bogus')
+    ? 'negative'
+    : 'positive'
 }
 
 function buildAnnotationPayload(bboxAnnotations) {
@@ -2306,8 +2360,8 @@ function buildAnnotationPayload(bboxAnnotations) {
       y: ann.y,
       width: ann.width,
       height: ann.height,
-      label: ann.label,
-      detail_type: ann.detail_type,
+      label: undefined,
+      detail_type: getAnnotationDetailType(ann) || undefined,
     })),
   }
 }
@@ -2439,15 +2493,11 @@ function getAnnotationHitTolerance() {
 }
 
 function createAnnotation(base) {
-  let initialLabel = 'Unlabeled'
+  let initialLabel = undefined
   let initialDetail = undefined
 
   if (selectedLabel.value && selectedLabel.value !== 'Unlabeled') {
-    const parts = selectedLabel.value.split(':')
-    initialLabel = parts[0]
-    if (parts.length > 1) {
-      initialDetail = parts[1]
-    }
+    initialDetail = normalizeAnnotationDetailTypeValue(selectedLabel.value) || undefined
   }
 
   return {
@@ -2480,6 +2530,7 @@ function getBboxGeometrySignature(annotation) {
 }
 
 function createAnnotationFromPrelabel(annotation, offset) {
+  const detailType = getAnnotationDetailType(annotation) || undefined
   return {
     id: `prelabel-ann-${Date.now()}-${offset}`,
     display_id: `A${String(annotationDisplayCounter.value + offset).padStart(4, '0')}`,
@@ -2488,8 +2539,8 @@ function createAnnotationFromPrelabel(annotation, offset) {
     y: Number(annotation.y) || 0,
     width: Number(annotation.width) || 0,
     height: Number(annotation.height) || 0,
-    label: annotation.label || 'Unlabeled',
-    detail_type: annotation.detail_type,
+    label: undefined,
+    detail_type: detailType,
     confidence: Number.isFinite(Number(annotation.confidence)) ? Number(annotation.confidence) : undefined,
     origin: 'prelabel',
     source_prelabel_id: activePrelabel.value?.prelabel_id || null,
@@ -2500,16 +2551,11 @@ function createAnnotationFromPrelabel(annotation, offset) {
 }
 
 function getPrelabelReviewLabelKey(annotation) {
-  if (!annotation || annotation.label === 'Unlabeled' || !annotation.label) {
-    return 'Unlabeled'
-  }
-  if (annotation.detail_type) {
-    return `${annotation.label}:${annotation.detail_type}`
-  }
-  return annotation.label
+  return getAnnotationLabelKey(annotation)
 }
 
 function createReviewAnnotationFromPrelabel(annotation, index) {
+  const detailType = getAnnotationDetailType(annotation) || undefined
   return {
     id: `prelabel-review-${activePrelabel.value?.prelabel_id || 'draft'}-${index}`,
     display_id: `P${String(index + 1).padStart(4, '0')}`,
@@ -2518,9 +2564,10 @@ function createReviewAnnotationFromPrelabel(annotation, index) {
     y: Number(annotation.y) || 0,
     width: Number(annotation.width) || 0,
     height: Number(annotation.height) || 0,
-    label: annotation.label || activePrelabel.value?.ai_suggestion || 'Unlabeled',
-    detail_type: annotation.detail_type,
+    label: undefined,
+    detail_type: detailType,
     confidence: Number.isFinite(Number(annotation.confidence)) ? Number(annotation.confidence) : undefined,
+    source_overlay_id: annotation.id,
   }
 }
 
@@ -2536,6 +2583,7 @@ function beginPrelabelReview() {
     prelabelMessageTone.value = 'info'
     return
   }
+  prelabelVisible.value = true
   prelabelReviewAnnotations.value = prelabelAnnotations.value.map((item, index) => createReviewAnnotationFromPrelabel(item, index))
   prelabelReviewOpen.value = true
   if (prelabelReviewAnnotations.value.length > 0) {
@@ -2575,21 +2623,15 @@ function onSelectedPrelabelReviewLabelChange(event) {
     return
   }
 
-  let newLabel = 'Unlabeled'
-  let newDetailType = undefined
-  if (value !== 'Unlabeled') {
-    const parts = value.split(':')
-    newLabel = parts[0]
-    if (parts.length > 1) {
-      newDetailType = parts[1]
-    }
-  }
+  const newDetailType = value !== 'Unlabeled'
+    ? (normalizeAnnotationDetailTypeValue(value) || undefined)
+    : undefined
 
   prelabelReviewAnnotations.value = prelabelReviewAnnotations.value.map((item) =>
     item.id === selectedPrelabelReviewId.value
       ? {
           ...item,
-          label: newLabel,
+          label: undefined,
           detail_type: newDetailType,
         }
       : item,
@@ -2658,6 +2700,13 @@ function confirmApprovedPrelabel() {
     return
   }
 
+  const unresolvedCount = prelabelReviewAnnotations.value.filter((item) => !getAnnotationDetailType(item)).length
+  if (unresolvedCount > 0) {
+    prelabelMessage.value = `仍有 ${unresolvedCount} 个 AI 草稿未指定细分类，请先修改类型或删除`
+    prelabelMessageTone.value = 'error'
+    return
+  }
+
   const existingSignatures = new Set(
     annotations.value
       .map((item) => getBboxGeometrySignature(item))
@@ -2702,34 +2751,54 @@ function removeAppliedPrelabel() {
 }
 
 function getAnnotationLabelKey(annotation) {
-  if (!annotation || annotation.label === 'Unlabeled' || !annotation.label) {
-    return 'Unlabeled'
-  }
-  if (annotation.detail_type) {
-    return `${annotation.label}:${annotation.detail_type}`
-  }
-  return annotation.label
+  const detailType = getAnnotationDetailType(annotation)
+  return detailType || 'Unlabeled'
 }
 
 function getAnnotationColor(annotation) {
   const key = getAnnotationLabelKey(annotation)
   const colorMap = {
     Unlabeled: '#94a3b8',
-    'real:asteroid': '#22c55e',
-    'real:supernova': '#16a34a',
-    'real:variable_star': '#4ade80',
-    'bogus:satellite_trail': '#f43f5e',
-    'bogus:noise': '#ef4444',
-    'bogus:diffraction_spike': '#e11d48',
-    'bogus:cmos_condensation': '#fb7185',
-    'bogus:corresponding': '#be123c',
-    'bogus:disappeared_asteroid': '#d946ef',
-    'bogus:disappeared_star': '#a855f7',
-    'bogus:disappeared_galaxy': '#8b5e3c',
+    asteroid: '#22c55e',
+    supernova: '#16a34a',
+    variable_star: '#4ade80',
+    satellite_trail: '#f43f5e',
+    noise: '#ef4444',
+    diffraction_spike: '#e11d48',
+    cmos_condensation: '#fb7185',
+    corresponding: '#be123c',
+    disappeared_asteroid: '#d946ef',
+    disappeared_star: '#a855f7',
+    disappeared_galaxy: '#8b5e3c',
     real: '#22c55e',
     bogus: '#ef4444',
   }
   return colorMap[key] || '#94a3b8'
+}
+
+function isSelectedPrelabelOverlay(annotation) {
+  if (!prelabelReviewOpen.value || !selectedPrelabelReviewId.value) {
+    return false
+  }
+  const selected = prelabelReviewAnnotations.value.find((item) => item.id === selectedPrelabelReviewId.value)
+  return Boolean(selected && selected.source_overlay_id === annotation?.id)
+}
+
+function getPrelabelOverlayRectConfig(annotation) {
+  const isSelected = isSelectedPrelabelOverlay(annotation)
+  return {
+    x: annotation.x,
+    y: annotation.y,
+    width: annotation.width,
+    height: annotation.height,
+    stroke: isSelected ? '#fbbf24' : '#60a5fa',
+    strokeWidth: isSelected ? Math.max(3, bboxStrokeWidth.value + 1.5) : Math.max(1.5, bboxStrokeWidth.value),
+    fill: isSelected ? 'rgba(251, 191, 36, 0.16)' : 'rgba(96, 165, 250, 0.10)',
+    dash: isSelected ? [10, 4] : [6, 4],
+    shadowColor: isSelected ? '#fbbf24' : undefined,
+    shadowBlur: isSelected ? 12 : 0,
+    listening: false,
+  }
 }
 
 function hexToRgba(hexColor, alpha) {
@@ -2832,8 +2901,9 @@ function scrollAnnotationIntoListView(annotationId) {
 function selectAnnotation(annotationId) {
   selectedAnnotationId.value = annotationId
   const selected = annotations.value.find((item) => item.id === annotationId)
-  if (selected && selected.label && selected.label !== 'Unlabeled') {
-    selectedLabel.value = selected.detail_type ? `${selected.label}:${selected.detail_type}` : selected.label
+  const detailType = getAnnotationDetailType(selected)
+  if (detailType) {
+    selectedLabel.value = detailType
   } else {
     selectedLabel.value = 'Unlabeled'
   }
@@ -2897,22 +2967,15 @@ function onSelectedLabelChange(event) {
     return
   }
 
-  let newLabel = 'Unlabeled'
-  let newDetailType = undefined
-
-  if (value !== 'Unlabeled') {
-    const parts = value.split(':')
-    newLabel = parts[0]
-    if (parts.length > 1) {
-      newDetailType = parts[1]
-    }
-  }
+  const newDetailType = value !== 'Unlabeled'
+    ? (normalizeAnnotationDetailTypeValue(value) || undefined)
+    : undefined
 
   annotations.value = annotations.value.map((item) =>
     item.id === selectedAnnotationId.value
       ? {
           ...item,
-          label: newLabel,
+          label: undefined,
           detail_type: newDetailType,
         }
       : item,
@@ -3609,26 +3672,27 @@ function onKeyDown(event) {
     return
   }
 
-  if (!selectedAnnotationId.value) return
-
-  const keyMap = {
-    '1': 'real:asteroid',
-    '2': 'real:supernova',
-    '3': 'real:variable_star',
-    '4': 'bogus:satellite_trail',
-    '5': 'bogus:noise',
-    '6': 'bogus:diffraction_spike',
-    '7': 'bogus:cmos_condensation',
-    '8': 'bogus:corresponding',
-    '9': 'bogus:disappeared_asteroid',
-    '0': 'bogus:disappeared_star',
-    '-': 'bogus:disappeared_galaxy',
+  const newLabelStr = DETAIL_TYPE_SHORTCUTS[event.key]
+  if (prelabelReviewOpen.value && selectedPrelabelReviewId.value) {
+    if (newLabelStr) {
+      event.preventDefault()
+      onSelectedPrelabelReviewLabelChange({ target: { value: newLabelStr } })
+      return
+    }
+    if (event.key === 'Backspace' || event.key === 'Delete') {
+      event.preventDefault()
+      removePrelabelReviewAnnotation(selectedPrelabelReviewId.value)
+      return
+    }
   }
 
-  const newLabelStr = keyMap[event.key]
+  if (!selectedAnnotationId.value) return
+
   if (newLabelStr) {
+    event.preventDefault()
     onSelectedLabelChange({ target: { value: newLabelStr } })
   } else if (event.key === 'Backspace' || event.key === 'Delete') {
+    event.preventDefault()
     annotations.value = annotations.value.filter((ann) => ann.id !== selectedAnnotationId.value)
     selectedAnnotationId.value = ''
     selectedLabel.value = 'Unlabeled'

@@ -291,6 +291,7 @@ class DetectionPrelabelProcessor:
         return safe_left, safe_top, safe_width, safe_height
 
     def _candidate_to_prelabel_box(self, candidate, image_shape: tuple[int, ...]) -> PrelabelBox:
+        detail_type = str(getattr(candidate, "detail_type", "")).strip() or None
         bbox_width = getattr(candidate, "bbox_width", None)
         bbox_height = getattr(candidate, "bbox_height", None)
         if bbox_width is not None and bbox_height is not None:
@@ -314,8 +315,8 @@ class DetectionPrelabelProcessor:
                 y=float(top),
                 width=float(box_width),
                 height=float(box_height),
-                label="real",
-                detail_type=(str(getattr(candidate, "detail_type", "")).strip() or None),
+                label=None,
+                detail_type=detail_type,
                 confidence=float(getattr(candidate, "ai_score", 0.0)),
             )
 
@@ -334,8 +335,8 @@ class DetectionPrelabelProcessor:
             y=float(top),
             width=float(max(1, box_width)),
             height=float(max(1, box_height)),
-            label="real",
-            detail_type=(str(getattr(candidate, "detail_type", "")).strip() or None),
+            label=None,
+            detail_type=detail_type,
             confidence=float(getattr(candidate, "ai_score", 0.0)),
         )
 
@@ -371,6 +372,7 @@ class DetectionPrelabelProcessor:
                 pair_name=job.task_id,
                 new_data=new_data,
                 old_data=old_data,
+                skip_align=True,
                 image_path=job.paths.get("new"),
             )
         finally:
@@ -393,10 +395,16 @@ class DetectionPrelabelProcessor:
             self._candidate_to_prelabel_box(candidate, new_data.shape)
             for candidate in candidates
         ]
+        detail_types = [
+            str(item.detail_type).strip()
+            for item in annotations
+            if str(item.detail_type or "").strip()
+        ]
+        ai_suggestion = detail_types[0] if detail_types else None
         ai_confidence = max((item.confidence or 0.0 for item in annotations), default=None)
         return PrelabelProcessingResult(
             source_view="new",
-            ai_suggestion="real" if annotations else None,
+            ai_suggestion=ai_suggestion,
             ai_confidence=ai_confidence,
             annotations=annotations,
             metadata={
@@ -408,6 +416,7 @@ class DetectionPrelabelProcessor:
                 "patch_size": self.config.detection.patch_size,
                 "candidate_limit": requested_limit,
                 "confidence_threshold": requested_threshold,
+                "skip_align": True,
                 "candidate_count": len(annotations),
                 "raw_candidate_count": len(getattr(result, "candidates", []) or []),
                 "pipeline_error": getattr(result, "error", ""),

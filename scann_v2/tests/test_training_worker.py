@@ -61,7 +61,7 @@ class TestTrainingWorkerDatasetParsing:
                             "y": 48,
                             "width": 18,
                             "height": 18,
-                            "label": "bogus",
+                            "detail_type": "noise",
                         },
                     ],
                 }
@@ -175,14 +175,14 @@ class TestTrainingWorkerDatasetParsing:
                             "y": 10,
                             "width": 12,
                             "height": 12,
-                            "label": "real",
+                            "detail_type": "asteroid",
                         },
                         {
                             "x": 96,
                             "y": 96,
                             "width": 12,
                             "height": 12,
-                            "label": "bogus",
+                            "detail_type": "noise",
                         },
                     ],
                 }
@@ -230,7 +230,7 @@ class TestTrainingWorkerDatasetParsing:
                             "y": 14,
                             "width": 20,
                             "height": 24,
-                            "label": "real",
+                            "detail_type": "asteroid",
                         },
                     ],
                 }
