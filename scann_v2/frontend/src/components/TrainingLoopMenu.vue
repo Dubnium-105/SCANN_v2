@@ -11,7 +11,7 @@
     <div
       v-if="menuOpen"
       data-testid="header-training-menu"
-      class="absolute right-0 top-full z-40 mt-2 w-[28rem] max-w-[85vw] rounded border border-slate-700 bg-slate-950 p-3 text-xs text-slate-300 shadow-xl"
+      class="absolute right-0 top-full z-40 mt-2 w-[36rem] max-w-[92vw] rounded border border-slate-700 bg-slate-950 p-3 text-xs text-slate-300 shadow-xl"
     >
       <div class="flex items-center justify-between gap-2">
         <div>
@@ -363,6 +363,12 @@
             </li>
           </ul>
         </section>
+
+        <PrelabelControlPanel
+          :active-task-id="activeTaskId"
+          :promoted-model="promotedModel"
+          :open="menuOpen"
+        />
       </div>
     </div>
   </div>
@@ -371,6 +377,7 @@
 <script setup>
 import { ref } from 'vue'
 
+import PrelabelControlPanel from './PrelabelControlPanel.vue'
 import {
   createTrainingJob,
   createTrainingSnapshot,

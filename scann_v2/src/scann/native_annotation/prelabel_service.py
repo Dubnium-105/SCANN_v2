@@ -49,7 +49,7 @@ class PrelabelEnqueueResponse(BaseModel):
 
 
 class TaskPrelabelResponse(BaseModel):
-    prelabel_id: str
+    prelabel_id: Optional[str] = None
     task_id: str
     job_id: Optional[str] = None
     status: str
@@ -67,6 +67,54 @@ class TaskPrelabelResponse(BaseModel):
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     annotations: list[PrelabelBox] = Field(default_factory=list)
+
+
+class PrelabelJobResponse(BaseModel):
+    job_id: str
+    task_id: str
+    requested_by: str
+    status: str
+    model_version: str
+    model_id: Optional[str] = None
+    model_backbone: Optional[str] = None
+    input_fingerprint: str
+    priority: int = 100
+    claim_worker_id: Optional[str] = None
+    claimed_at: Optional[str] = None
+    claim_expires_at: Optional[str] = None
+    last_heartbeat_at: Optional[str] = None
+    attempt_count: int = 0
+    error_message: Optional[str] = None
+    result_prelabel_id: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class PrelabelWorkerResponse(BaseModel):
+    worker_id: str
+    display_name: Optional[str] = None
+    host_name: Optional[str] = None
+    device_label: Optional[str] = None
+    status: str = "online"
+    capabilities: dict[str, Any] = Field(default_factory=dict)
+    last_seen_at: Optional[str] = None
+    last_claimed_at: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class PrelabelJobsCancelRequest(BaseModel):
+    job_ids: list[str] = Field(default_factory=list)
+    task_ids: list[str] = Field(default_factory=list)
+    statuses: list[str] = Field(default_factory=lambda: ["queued", "claimed"])
+    reason: Optional[str] = None
+
+
+class PrelabelJobsCancelResponse(BaseModel):
+    requested_job_count: int
+    requested_task_count: int
+    cancelled_count: int
+    jobs: list[PrelabelJobResponse] = Field(default_factory=list)
 
 
 class WorkerClaimRequest(BaseModel):
@@ -205,6 +253,97 @@ class PrelabelService:
             annotations=[PrelabelBox.model_validate(item) for item in annotations if isinstance(item, dict)],
         )
 
+    @staticmethod
+    def _job_to_response(job: PrelabelJobRecord) -> PrelabelJobResponse:
+        return PrelabelJobResponse(
+            job_id=job.job_id,
+            task_id=job.task_id,
+            requested_by=job.requested_by,
+            status=job.status,
+            model_version=job.model_version,
+            model_id=job.model_id,
+            model_backbone=job.model_backbone,
+            input_fingerprint=job.input_fingerprint,
+            priority=job.priority,
+            claim_worker_id=job.claim_worker_id,
+            claimed_at=job.claimed_at,
+            claim_expires_at=job.claim_expires_at,
+            last_heartbeat_at=job.last_heartbeat_at,
+            attempt_count=job.attempt_count,
+            error_message=job.error_message,
+            result_prelabel_id=job.result_prelabel_id,
+            created_at=job.created_at,
+            updated_at=job.updated_at,
+        )
+
+    @staticmethod
+    def _worker_to_response(capabilities: dict[str, Any]) -> dict[str, Any]:
+        return capabilities if isinstance(capabilities, dict) else {}
+
+    @classmethod
+    def _worker_record_to_response(cls, worker) -> PrelabelWorkerResponse:
+        return PrelabelWorkerResponse(
+            worker_id=worker.worker_id,
+            display_name=worker.display_name,
+            host_name=worker.host_name,
+            device_label=worker.device_label,
+            status=worker.status,
+            capabilities=cls._worker_to_response(worker.capabilities or {}),
+            last_seen_at=worker.last_seen_at,
+            last_claimed_at=worker.last_claimed_at,
+            created_at=worker.created_at,
+            updated_at=worker.updated_at,
+        )
+
+    @staticmethod
+    def _normalize_capability_values(raw_values: Any) -> list[str] | None:
+        if not isinstance(raw_values, list):
+            return None
+        normalized = [str(item).strip() for item in raw_values if str(item).strip()]
+        return normalized or None
+
+    @classmethod
+    def _worker_capabilities(cls, payload: WorkerClaimRequest) -> tuple[list[str] | None, list[str] | None, list[str] | None]:
+        return (
+            cls._normalize_capability_values(payload.capabilities.get("model_versions")),
+            cls._normalize_capability_values(payload.capabilities.get("model_ids")),
+            cls._normalize_capability_values(payload.capabilities.get("model_backbones")),
+        )
+
+    @staticmethod
+    def _job_matches_worker_capabilities(
+        job: PrelabelJobRecord,
+        *,
+        model_versions: list[str] | None = None,
+        model_ids: list[str] | None = None,
+        model_backbones: list[str] | None = None,
+    ) -> bool:
+        normalized_versions = {str(item).strip() for item in (model_versions or []) if str(item).strip()}
+        normalized_ids = {str(item).strip() for item in (model_ids or []) if str(item).strip()}
+        normalized_backbones = {str(item).strip() for item in (model_backbones or []) if str(item).strip()}
+
+        if normalized_ids and (job.model_id or "").strip():
+            if str(job.model_id).strip() not in normalized_ids:
+                return False
+        elif normalized_versions and job.model_version not in normalized_versions:
+            return False
+
+        if normalized_backbones and (job.model_backbone or "").strip():
+            if str(job.model_backbone).strip() not in normalized_backbones:
+                return False
+        return True
+
+    @staticmethod
+    def _format_models_for_diagnostics(jobs: list[PrelabelJobRecord]) -> str:
+        variants: list[str] = []
+        for job in jobs:
+            item = f"{job.model_version}/{job.model_id or '-'}/{job.model_backbone or '-'}"
+            if item not in variants:
+                variants.append(item)
+            if len(variants) >= 6:
+                break
+        return ", ".join(variants) if variants else "-"
+
     def enqueue(
         self,
         *,
@@ -281,12 +420,60 @@ class PrelabelService:
     def get_task_prelabel(self, task_id: str) -> TaskPrelabelResponse | None:
         result = self._storage.get_task_prelabel(task_id)
         if result is None:
-            return None
+            summary = self._storage.list_task_prelabel_summaries([task_id]).get(task_id)
+            if summary is None or not summary.prelabel_status:
+                return None
+            return TaskPrelabelResponse(
+                prelabel_id=None,
+                task_id=task_id,
+                job_id=summary.prelabel_job_id,
+                status=summary.prelabel_status,
+                model_version=summary.prelabel_model_version,
+                model_id=summary.prelabel_model_id,
+                model_backbone=summary.prelabel_model_backbone,
+                box_count=summary.prelabel_box_count,
+                updated_at=summary.prelabel_updated_at,
+                annotations=[],
+            )
         record, annotations = result
         return self._record_to_response(record, annotations)
 
     def list_task_prelabel_summaries(self, task_ids: list[str]) -> dict[str, TaskPrelabelSummaryRecord]:
         return self._storage.list_task_prelabel_summaries(task_ids)
+
+    def list_jobs(
+        self,
+        *,
+        limit: int = 100,
+        statuses: list[str] | None = None,
+        task_ids: list[str] | None = None,
+    ) -> list[PrelabelJobResponse]:
+        jobs = self._storage.list_prelabel_jobs(limit=limit, statuses=statuses, task_ids=task_ids)
+        return [self._job_to_response(job) for job in jobs]
+
+    def list_workers(self, *, limit: int = 100) -> list[PrelabelWorkerResponse]:
+        workers = self._storage.list_worker_nodes(limit=limit)
+        return [self._worker_record_to_response(worker) for worker in workers]
+
+    def cancel_jobs(
+        self,
+        *,
+        payload: PrelabelJobsCancelRequest,
+        cancelled_by: str,
+    ) -> PrelabelJobsCancelResponse:
+        jobs = self._storage.cancel_prelabel_jobs(
+            job_ids=payload.job_ids,
+            task_ids=payload.task_ids,
+            statuses=payload.statuses,
+            cancelled_by=cancelled_by,
+            reason=payload.reason,
+        )
+        return PrelabelJobsCancelResponse(
+            requested_job_count=len([item for item in payload.job_ids if str(item).strip()]),
+            requested_task_count=len([item for item in payload.task_ids if str(item).strip()]),
+            cancelled_count=len(jobs),
+            jobs=[self._job_to_response(job) for job in jobs],
+        )
 
     @staticmethod
     def _paths_for_task(task: TaskSession) -> dict[str, str]:
@@ -298,24 +485,7 @@ class PrelabelService:
         return paths
 
     def claim_next_job(self, payload: WorkerClaimRequest) -> WorkerClaimResponse | None:
-        model_versions_raw = payload.capabilities.get("model_versions")
-        model_versions = (
-            [str(item) for item in model_versions_raw if str(item).strip()]
-            if isinstance(model_versions_raw, list)
-            else None
-        )
-        model_ids_raw = payload.capabilities.get("model_ids")
-        model_ids = (
-            [str(item) for item in model_ids_raw if str(item).strip()]
-            if isinstance(model_ids_raw, list)
-            else None
-        )
-        model_backbones_raw = payload.capabilities.get("model_backbones")
-        model_backbones = (
-            [str(item) for item in model_backbones_raw if str(item).strip()]
-            if isinstance(model_backbones_raw, list)
-            else None
-        )
+        model_versions, model_ids, model_backbones = self._worker_capabilities(payload)
         self._storage.upsert_worker_node(
             worker_id=payload.worker_id,
             display_name=payload.display_name,
@@ -354,6 +524,37 @@ class PrelabelService:
             paths=self._paths_for_task(task),
             claimed_at=job.claimed_at,
             claim_expires_at=job.claim_expires_at,
+        )
+
+    def explain_claim_miss(self, payload: WorkerClaimRequest) -> str:
+        queued_jobs = self._storage.list_prelabel_jobs(limit=64, statuses=["queued"])
+        if not queued_jobs:
+            return "No queued prelabel job"
+
+        model_versions, model_ids, model_backbones = self._worker_capabilities(payload)
+        compatible_jobs = [
+            job
+            for job in queued_jobs
+            if self._job_matches_worker_capabilities(
+                job,
+                model_versions=model_versions,
+                model_ids=model_ids,
+                model_backbones=model_backbones,
+            )
+        ]
+        if compatible_jobs:
+            return (
+                "Compatible prelabel jobs were observed but became unavailable before claim completed; "
+                f"queued_jobs={len(queued_jobs)} compatible_jobs={len(compatible_jobs)}"
+            )
+
+        return (
+            "No compatible queued prelabel job"
+            f"; queued_jobs={len(queued_jobs)}"
+            f"; worker_model_versions={model_versions or []}"
+            f"; worker_model_ids={model_ids or []}"
+            f"; worker_model_backbones={model_backbones or []}"
+            f"; queued_models={self._format_models_for_diagnostics(queued_jobs)}"
         )
 
     def get_claimed_job_asset_path(

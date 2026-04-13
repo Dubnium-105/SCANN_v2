@@ -1999,6 +1999,21 @@ class DatasetStorage:
             connection.commit()
         return self._row_to_worker_node(row) if row is not None else WorkerNodeRecord(worker_id=worker_id)
 
+    def list_worker_nodes(self, *, limit: int = 100) -> list[WorkerNodeRecord]:
+        normalized_limit = max(1, min(int(limit), 500))
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM worker_nodes
+                ORDER BY last_seen_at DESC, updated_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                (normalized_limit,),
+            ).fetchall()
+        return [self._row_to_worker_node(row) for row in rows]
+
     def enqueue_prelabel_job(
         self,
         *,
@@ -2111,6 +2126,118 @@ class DatasetStorage:
                 (job_id,),
             ).fetchone()
         return self._row_to_prelabel_job(row) if row is not None else None
+
+    def list_prelabel_jobs(
+        self,
+        *,
+        limit: int = 100,
+        statuses: Iterable[str] | None = None,
+        task_ids: Iterable[str] | None = None,
+    ) -> list[PrelabelJobRecord]:
+        normalized_limit = max(1, min(int(limit), 500))
+        normalized_statuses = [str(item).strip() for item in (statuses or []) if str(item).strip()]
+        normalized_task_ids = [str(item).strip() for item in dict.fromkeys(task_ids or []) if str(item).strip()]
+
+        filters: list[str] = []
+        params: list[Any] = []
+        if normalized_statuses:
+            placeholders = ",".join("?" for _ in normalized_statuses)
+            filters.append(f"status IN ({placeholders})")
+            params.extend(normalized_statuses)
+        if normalized_task_ids:
+            placeholders = ",".join("?" for _ in normalized_task_ids)
+            filters.append(f"task_id IN ({placeholders})")
+            params.extend(normalized_task_ids)
+
+        where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            rows = connection.execute(
+                f"""
+                SELECT *
+                FROM prelabel_jobs
+                {where_clause}
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                (*params, normalized_limit),
+            ).fetchall()
+        return [self._row_to_prelabel_job(row) for row in rows]
+
+    def cancel_prelabel_jobs(
+        self,
+        *,
+        job_ids: Iterable[str] | None = None,
+        task_ids: Iterable[str] | None = None,
+        statuses: Iterable[str] | None = None,
+        cancelled_by: str | None = None,
+        reason: str | None = None,
+    ) -> list[PrelabelJobRecord]:
+        normalized_job_ids = [str(item).strip() for item in dict.fromkeys(job_ids or []) if str(item).strip()]
+        normalized_task_ids = [str(item).strip() for item in dict.fromkeys(task_ids or []) if str(item).strip()]
+        normalized_statuses = [str(item).strip() for item in (statuses or []) if str(item).strip()]
+        if not normalized_statuses:
+            normalized_statuses = ["queued", "claimed"]
+        if not normalized_job_ids and not normalized_task_ids:
+            return []
+
+        target_filters: list[str] = []
+        target_params: list[Any] = []
+        if normalized_job_ids:
+            placeholders = ",".join("?" for _ in normalized_job_ids)
+            target_filters.append(f"job_id IN ({placeholders})")
+            target_params.extend(normalized_job_ids)
+        if normalized_task_ids:
+            placeholders = ",".join("?" for _ in normalized_task_ids)
+            target_filters.append(f"task_id IN ({placeholders})")
+            target_params.extend(normalized_task_ids)
+
+        status_placeholders = ",".join("?" for _ in normalized_statuses)
+        cancel_reason = str(reason or "").strip() or "cancelled by admin"
+        if cancelled_by and str(cancelled_by).strip():
+            cancel_reason = f"{cancel_reason} ({str(cancelled_by).strip()})"
+        now = _utc_now_iso()
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            rows = connection.execute(
+                f"""
+                SELECT rowid
+                FROM prelabel_jobs
+                WHERE ({' OR '.join(target_filters)})
+                  AND status IN ({status_placeholders})
+                ORDER BY created_at DESC, rowid DESC
+                """,
+                (*target_params, *normalized_statuses),
+            ).fetchall()
+            rowids = [int(row["rowid"]) for row in rows]
+            if not rowids:
+                connection.commit()
+                return []
+
+            rowid_placeholders = ",".join("?" for _ in rowids)
+            connection.execute(
+                f"""
+                UPDATE prelabel_jobs
+                SET status = 'cancelled',
+                    claim_expires_at = NULL,
+                    error_message = ?,
+                    updated_at = ?
+                WHERE rowid IN ({rowid_placeholders})
+                """,
+                (cancel_reason, now, *rowids),
+            )
+            updated_rows = connection.execute(
+                f"""
+                SELECT *
+                FROM prelabel_jobs
+                WHERE rowid IN ({rowid_placeholders})
+                ORDER BY updated_at DESC, rowid DESC
+                """,
+                tuple(rowids),
+            ).fetchall()
+            connection.commit()
+        return [self._row_to_prelabel_job(row) for row in updated_rows]
 
     def claim_next_prelabel_job(
         self,

@@ -1,5 +1,62 @@
 import { authFetch } from './authStore'
 
+function normalizeTaskIds(taskIds) {
+  if (Array.isArray(taskIds)) {
+    return taskIds
+      .map((item) => String(item || '').trim())
+      .filter(Boolean)
+  }
+  return String(taskIds || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function normalizeStatuses(statuses) {
+  if (Array.isArray(statuses)) {
+    return statuses
+      .map((item) => String(item || '').trim())
+      .filter(Boolean)
+  }
+  return String(statuses || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function formatErrorDetail(detail) {
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        if (!item || typeof item !== 'object') {
+          return ''
+        }
+        const location = Array.isArray(item.loc) ? item.loc.join('.') : ''
+        const message = typeof item.msg === 'string' ? item.msg : ''
+        return location ? `${location}: ${message}` : message
+      })
+      .filter(Boolean)
+      .join('; ')
+  }
+  if (typeof detail === 'string') {
+    return detail
+  }
+  return ''
+}
+
+async function readErrorMessage(response, fallback) {
+  try {
+    const payload = await response.json()
+    const detail = formatErrorDetail(payload?.detail)
+    if (detail) {
+      return detail
+    }
+  } catch {
+    // Ignore malformed payloads and fall back to caller-provided text.
+  }
+  return fallback
+}
+
 export async function fetchTaskPrelabel(taskId, fetchImpl = authFetch) {
   const encodedTaskId = encodeURIComponent(taskId)
   const response = await fetchImpl(`/api/prelabels/${encodedTaskId}`)
@@ -7,28 +64,18 @@ export async function fetchTaskPrelabel(taskId, fetchImpl = authFetch) {
     return null
   }
   if (!response.ok) {
-    throw new Error('Failed to load AI prelabel')
+    throw new Error(await readErrorMessage(response, 'Failed to load AI prelabel'))
   }
   return response.json()
 }
 
-function formatErrorDetail(detail) {
-  if (typeof detail === 'string') {
-    return detail
-  }
-  return ''
-}
-
-export async function enqueueTaskPrelabel(taskId, options = {}, fetchImpl = authFetch) {
-  const normalizedTaskId = String(taskId || '').trim()
+export async function enqueuePrelabels(options = {}, fetchImpl = authFetch) {
+  const taskIds = normalizeTaskIds(options.taskIds)
   const modelVersion = String(options.modelVersion || '').trim()
   const modelId = String(options.modelId || '').trim()
   const modelBackbone = String(options.modelBackbone || '').trim()
-  if (!normalizedTaskId) {
-    throw new Error('任务不存在，无法重新生成 AI 草稿')
-  }
   if (!modelVersion) {
-    throw new Error('当前任务缺少模型版本，无法重新生成 AI 草稿')
+    throw new Error('当前缺少模型版本，无法创建预标注任务')
   }
 
   const response = await fetchImpl('/api/prelabels/enqueue', {
@@ -40,31 +87,83 @@ export async function enqueueTaskPrelabel(taskId, options = {}, fetchImpl = auth
       model_version: modelVersion,
       model_id: modelId || null,
       model_backbone: modelBackbone || null,
-      task_ids: [normalizedTaskId],
+      task_ids: taskIds,
       priority: Number.isFinite(Number(options.priority)) ? Number(options.priority) : 100,
       force: options.force !== false,
     }),
   })
 
   if (!response.ok) {
-    let detail = ''
-    try {
-      const payload = await response.json()
-      detail = formatErrorDetail(payload?.detail)
-    } catch {
-      detail = ''
-    }
-    if (response.status === 401) {
-      throw new Error('会话已过期，请重新登录')
-    }
-    if (response.status === 403) {
-      throw new Error(detail || '只有管理员可以重新生成 AI 草稿')
-    }
-    if (response.status === 422) {
-      throw new Error(detail || '重新生成 AI 草稿的请求无效')
-    }
-    throw new Error(detail || '请求重新生成 AI 草稿失败')
+    throw new Error(await readErrorMessage(response, '请求预标注任务失败'))
   }
+  return response.json()
+}
 
+export async function enqueueTaskPrelabel(taskId, options = {}, fetchImpl = authFetch) {
+  const normalizedTaskId = String(taskId || '').trim()
+  if (!normalizedTaskId) {
+    throw new Error('当前任务不存在，无法重新生成 AI 草稿')
+  }
+  return enqueuePrelabels(
+    {
+      ...options,
+      taskIds: [normalizedTaskId],
+    },
+    fetchImpl,
+  )
+}
+
+export async function fetchPrelabelJobs(options = {}, fetchImpl = authFetch) {
+  const params = new URLSearchParams()
+  if (Number.isFinite(Number(options.limit)) && Number(options.limit) > 0) {
+    params.set('limit', String(Math.round(Number(options.limit))))
+  }
+  const statuses = normalizeStatuses(options.statuses)
+  if (statuses.length > 0) {
+    params.set('statuses', statuses.join(','))
+  }
+  const taskIds = normalizeTaskIds(options.taskIds)
+  if (taskIds.length > 0) {
+    params.set('task_ids', taskIds.join(','))
+  }
+  const suffix = params.size ? `?${params.toString()}` : ''
+  const response = await fetchImpl(`/api/prelabels/jobs${suffix}`)
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response, 'Failed to load prelabel jobs'))
+  }
+  return response.json()
+}
+
+export async function fetchPrelabelWorkers(options = {}, fetchImpl = authFetch) {
+  const params = new URLSearchParams()
+  if (Number.isFinite(Number(options.limit)) && Number(options.limit) > 0) {
+    params.set('limit', String(Math.round(Number(options.limit))))
+  }
+  const suffix = params.size ? `?${params.toString()}` : ''
+  const response = await fetchImpl(`/api/prelabels/workers${suffix}`)
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response, 'Failed to load prelabel workers'))
+  }
+  return response.json()
+}
+
+export async function cancelPrelabelJobs(options = {}, fetchImpl = authFetch) {
+  const response = await fetchImpl('/api/prelabels/jobs/cancel', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      job_ids: Array.isArray(options.jobIds)
+        ? options.jobIds.map((item) => String(item || '').trim()).filter(Boolean)
+        : [],
+      task_ids: normalizeTaskIds(options.taskIds),
+      statuses: normalizeStatuses(options.statuses),
+      reason: String(options.reason || '').trim() || null,
+    }),
+  })
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response, 'Failed to cancel prelabel jobs'))
+  }
   return response.json()
 }

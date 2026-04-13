@@ -95,6 +95,7 @@ class PrelabelWorkerClient:
     def __init__(self, config: PrelabelWorkerConfig, session: requests.Session | None = None) -> None:
         self.config = config
         self._session = session or requests.Session()
+        self.last_claim_detail = ""
 
     def _url(self, path: str) -> str:
         return f"{self.config.server_url.rstrip('/')}{path}"
@@ -103,6 +104,7 @@ class PrelabelWorkerClient:
         return {"X-SCANN-Worker-Token": self.config.worker_token}
 
     def claim_job(self) -> WorkerClaimResponse | None:
+        self.last_claim_detail = ""
         payload = WorkerClaimRequest(
             worker_id=self.config.worker_id,
             display_name=self.config.display_name,
@@ -121,6 +123,14 @@ class PrelabelWorkerClient:
             timeout=self.config.request_timeout_seconds,
         )
         if response.status_code == 404:
+            detail = ""
+            try:
+                body = response.json()
+                if isinstance(body, dict):
+                    detail = str(body.get("detail") or "").strip()
+            except Exception:
+                detail = ""
+            self.last_claim_detail = detail or "No queued prelabel job"
             return None
         response.raise_for_status()
         return WorkerClaimResponse.model_validate(response.json())
@@ -221,7 +231,19 @@ class PrelabelTaskAssetResolver:
             return None
         local_path = self._local_path(view_name)
         if local_path is not None:
+            logger.info(
+                "Prelabel job %s loading %s FITS from local path %s",
+                self.job.job_id,
+                view_name,
+                local_path,
+            )
             return read_fits(local_path)
+        logger.info(
+            "Prelabel job %s fetching %s FITS from server path %s",
+            self.job.job_id,
+            view_name,
+            relpath,
+        )
         return self._read_fits_from_bytes(self.client.fetch_job_fits(self.job.job_id, view_name))
 
 
@@ -337,6 +359,9 @@ class PrelabelWorkerRunner:
         self.config = config
         self.client = client or PrelabelWorkerClient(config)
         self.processor = processor or DetectionPrelabelProcessor(config)
+        self._idle_miss_count = 0
+        self._last_idle_log_monotonic = 0.0
+        self._last_idle_reason = ""
 
     def _process_job(self, job: WorkerClaimResponse) -> None:
         heartbeat = _HeartbeatThread(
@@ -362,7 +387,30 @@ class PrelabelWorkerRunner:
     def run_once(self) -> bool:
         job = self.client.claim_job()
         if job is None:
+            self._idle_miss_count += 1
+            detail = str(getattr(self.client, "last_claim_detail", "") or "No queued prelabel job").strip()
+            now = time.monotonic()
+            should_log = (
+                self._idle_miss_count == 1
+                or detail != self._last_idle_reason
+                or (now - self._last_idle_log_monotonic) >= max(30.0, self.config.idle_poll_seconds * 4)
+            )
+            if should_log:
+                logger.info(
+                    "Prelabel worker idle (miss #%s): %s | server=%s worker_id=%s model_version=%s model_id=%s model_backbone=%s",
+                    self._idle_miss_count,
+                    detail,
+                    self.config.server_url,
+                    self.config.worker_id,
+                    self.config.detection.model_version,
+                    self.config.detection.model_id or "-",
+                    self.config.detection.model_backbone or "-",
+                )
+                self._last_idle_reason = detail
+                self._last_idle_log_monotonic = now
             return False
+        self._idle_miss_count = 0
+        self._last_idle_reason = ""
         logger.info("Claimed prelabel job %s for task %s", job.job_id, job.task_id)
         self._process_job(job)
         return True
@@ -473,6 +521,18 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     config = load_prelabel_worker_config_from_env()
+    logger.info(
+        "Starting prelabel worker %s (%s) server=%s dataset_root=%s device=%s model_version=%s model_id=%s model_backbone=%s compute_device=%s",
+        config.worker_id,
+        config.display_name,
+        config.server_url,
+        str(config.dataset_root) if config.dataset_root is not None else "<remote-only>",
+        config.device_label or "-",
+        config.detection.model_version,
+        config.detection.model_id or "-",
+        config.detection.model_backbone or "-",
+        config.detection.compute_device,
+    )
     runner = PrelabelWorkerRunner(config)
     processed = runner.run_forever(max_jobs=args.max_jobs)
     logger.info("Prelabel worker stopped after processing %s jobs", processed)

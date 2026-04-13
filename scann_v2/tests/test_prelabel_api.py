@@ -63,6 +63,14 @@ def test_prelabel_enqueue_claim_complete_and_list_status(tmp_path, monkeypatch) 
     assert task_payload["prelabel_model_id"] == "model-20260413-001"
     assert task_payload["prelabel_model_backbone"] == "ViT_B_16"
 
+    queued_prelabel = client.get("/api/prelabels/PGC%2017069", headers=admin_headers)
+    assert queued_prelabel.status_code == 200
+    queued_prelabel_payload = queued_prelabel.json()
+    assert queued_prelabel_payload["status"] == "queued"
+    assert queued_prelabel_payload["model_version"] == "detector-v1"
+    assert queued_prelabel_payload.get("prelabel_id") is None
+    assert queued_prelabel_payload["box_count"] == 0
+
     claim = client.post(
         "/api/prelabel-jobs/claim",
         json={
@@ -181,7 +189,7 @@ def test_prelabel_claim_respects_supported_model_versions(tmp_path, monkeypatch)
         headers=_worker_headers(),
     )
     assert claim.status_code == 404
-    assert claim.json()["detail"] == "No queued prelabel job"
+    assert "No compatible queued prelabel job" in claim.json()["detail"]
 
 
 def test_prelabel_claim_respects_model_id_and_backbone(tmp_path, monkeypatch) -> None:
@@ -219,7 +227,7 @@ def test_prelabel_claim_respects_model_id_and_backbone(tmp_path, monkeypatch) ->
         headers=_worker_headers(),
     )
     assert claim.status_code == 404
-    assert claim.json()["detail"] == "No queued prelabel job"
+    assert "No compatible queued prelabel job" in claim.json()["detail"]
 
 
 def test_prelabel_worker_endpoints_require_token(tmp_path, monkeypatch) -> None:
@@ -328,7 +336,11 @@ def test_annotation_save_accepts_applied_prelabel_and_skips_duplicate_enqueue(tm
     assert save_payload["revision_id"]
 
     prelabel = client.get("/api/prelabels/PGC%2017069", headers=annotator_headers)
-    assert prelabel.status_code == 404
+    assert prelabel.status_code == 200
+    prelabel_payload = prelabel.json()
+    assert prelabel_payload["status"] == "accepted"
+    assert prelabel_payload.get("prelabel_id") is None
+    assert prelabel_payload["box_count"] == 1
 
     tasks = client.get("/api/tasks", headers=annotator_headers)
     assert tasks.status_code == 200
@@ -347,3 +359,83 @@ def test_annotation_save_accepts_applied_prelabel_and_skips_duplicate_enqueue(tm
     assert enqueue_again.status_code == 200
     assert enqueue_again.json()["enqueued_count"] == 0
     assert enqueue_again.json()["skipped_count"] == 1
+
+
+def test_prelabel_management_list_cancel_and_worker_status(tmp_path, monkeypatch) -> None:
+    dataset_root = tmp_path / "dataset"
+    _touch(dataset_root / "new" / "PGC 17069.fts")
+    _touch(dataset_root / "new" / "PGC 17070.fts")
+
+    monkeypatch.setenv("SCANN_NATIVE_DATASET_ROOT", str(dataset_root))
+    monkeypatch.setenv("SCANN_PRELABEL_WORKER_TOKEN", "worker-secret")
+
+    client = TestClient(app)
+    admin_headers = _auth_headers(client)
+
+    enqueue = client.post(
+        "/api/prelabels/enqueue",
+        json={
+            "model_version": "detector-v2",
+            "model_id": "model-manage-001",
+            "model_backbone": "ViT_B_16",
+        },
+        headers=admin_headers,
+    )
+    assert enqueue.status_code == 200
+    assert enqueue.json()["enqueued_count"] == 2
+
+    claim = client.post(
+        "/api/prelabel-jobs/claim",
+        json={
+            "worker_id": "gpu-worker-9",
+            "display_name": "GPU Worker",
+            "host_name": "pc-09",
+            "device_label": "RTX-4090",
+            "capabilities": {
+                "model_versions": ["detector-v2"],
+                "model_ids": ["model-manage-001"],
+                "model_backbones": ["ViT_B_16"],
+            },
+        },
+        headers=_worker_headers(),
+    )
+    assert claim.status_code == 200
+
+    listed_jobs = client.get("/api/prelabels/jobs?limit=10", headers=admin_headers)
+    assert listed_jobs.status_code == 200
+    listed_job_payload = listed_jobs.json()
+    assert len(listed_job_payload) == 2
+    assert {item["status"] for item in listed_job_payload} == {"queued", "claimed"}
+
+    workers = client.get("/api/prelabels/workers?limit=10", headers=admin_headers)
+    assert workers.status_code == 200
+    workers_payload = workers.json()
+    assert len(workers_payload) == 1
+    assert workers_payload[0]["worker_id"] == "gpu-worker-9"
+    assert workers_payload[0]["capabilities"]["model_ids"] == ["model-manage-001"]
+
+    cancel = client.post(
+        "/api/prelabels/jobs/cancel",
+        json={
+            "task_ids": ["PGC 17069", "PGC 17070"],
+            "statuses": ["queued", "claimed"],
+            "reason": "cancelled from test",
+        },
+        headers=admin_headers,
+    )
+    assert cancel.status_code == 200
+    cancel_payload = cancel.json()
+    assert cancel_payload["cancelled_count"] == 2
+    assert all(item["status"] == "cancelled" for item in cancel_payload["jobs"])
+
+    tasks = client.get("/api/tasks", headers=admin_headers)
+    assert tasks.status_code == 200
+    by_id = {item["task_id"]: item for item in tasks.json()}
+    assert by_id["PGC 17069"]["prelabel_status"] == "cancelled"
+    assert by_id["PGC 17070"]["prelabel_status"] == "cancelled"
+
+    cancelled_summary = client.get("/api/prelabels/PGC%2017069", headers=admin_headers)
+    assert cancelled_summary.status_code == 200
+    cancelled_payload = cancelled_summary.json()
+    assert cancelled_payload["status"] == "cancelled"
+    assert cancelled_payload.get("prelabel_id") is None

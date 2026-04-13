@@ -37,7 +37,11 @@ from .fits_engine import FITSEngine
 from .prelabel_service import (
     PrelabelEnqueueRequest,
     PrelabelEnqueueResponse,
+    PrelabelJobsCancelRequest,
+    PrelabelJobsCancelResponse,
+    PrelabelJobResponse,
     PrelabelService,
+    PrelabelWorkerResponse,
     TaskPrelabelResponse,
     WorkerClaimRequest,
     WorkerClaimResponse,
@@ -314,6 +318,44 @@ def enqueue_prelabels(
     return service.enqueue(payload=payload, requested_by=current_user.username)
 
 
+@api_router.get("/prelabels/jobs", response_model=list[PrelabelJobResponse])
+def list_prelabel_jobs(
+    limit: int = Query(100, ge=1, le=500),
+    statuses: Optional[str] = Query(None),
+    task_ids: Optional[str] = Query(None),
+    current_user: AuthUser = Depends(get_current_user),
+) -> list[PrelabelJobResponse]:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can list prelabel jobs")
+    parsed_statuses = [item.strip() for item in str(statuses or "").split(",") if item and item.strip()]
+    parsed_task_ids = [item.strip() for item in str(task_ids or "").split(",") if item and item.strip()]
+    return get_prelabel_service().list_jobs(
+        limit=limit,
+        statuses=parsed_statuses or None,
+        task_ids=parsed_task_ids or None,
+    )
+
+
+@api_router.get("/prelabels/workers", response_model=list[PrelabelWorkerResponse])
+def list_prelabel_workers(
+    limit: int = Query(100, ge=1, le=500),
+    current_user: AuthUser = Depends(get_current_user),
+) -> list[PrelabelWorkerResponse]:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can list prelabel workers")
+    return get_prelabel_service().list_workers(limit=limit)
+
+
+@api_router.post("/prelabels/jobs/cancel", response_model=PrelabelJobsCancelResponse)
+def cancel_prelabel_jobs(
+    payload: PrelabelJobsCancelRequest,
+    current_user: AuthUser = Depends(get_current_user),
+) -> PrelabelJobsCancelResponse:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can cancel prelabel jobs")
+    return get_prelabel_service().cancel_jobs(payload=payload, cancelled_by=current_user.username)
+
+
 @api_router.get("/prelabels/{task_id}", response_model=TaskPrelabelResponse, response_model_exclude_none=True)
 def get_task_prelabel(
     task_id: str,
@@ -335,7 +377,7 @@ def claim_prelabel_job(
     service = get_prelabel_service()
     response = service.claim_next_job(payload)
     if response is None:
-        raise HTTPException(status_code=404, detail="No queued prelabel job")
+        raise HTTPException(status_code=404, detail=service.explain_claim_miss(payload))
     return response
 
 
