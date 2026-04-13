@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 class WorkerDetectionConfig:
     model_path: str
     model_version: str
+    model_id: str | None = None
     model_format: str = "auto"
     model_backbone: str = "auto"
     compute_device: str = "auto"
@@ -70,6 +71,16 @@ class PrelabelWorkerConfig:
     def supported_model_versions(self) -> list[str]:
         return [self.detection.model_version]
 
+    @property
+    def supported_model_ids(self) -> list[str]:
+        model_id = str(self.detection.model_id or "").strip()
+        return [model_id] if model_id else []
+
+    @property
+    def supported_model_backbones(self) -> list[str]:
+        model_backbone = str(self.detection.model_backbone or "").strip()
+        return [model_backbone] if model_backbone else []
+
 
 @dataclass(frozen=True)
 class PrelabelProcessingResult:
@@ -97,7 +108,11 @@ class PrelabelWorkerClient:
             display_name=self.config.display_name,
             host_name=self.config.host_name,
             device_label=self.config.device_label,
-            capabilities={"model_versions": self.config.supported_model_versions},
+            capabilities={
+                "model_versions": self.config.supported_model_versions,
+                "model_ids": self.config.supported_model_ids,
+                "model_backbones": self.config.supported_model_backbones,
+            },
         )
         response = self._session.post(
             self._url("/api/prelabel-jobs/claim"),
@@ -278,6 +293,8 @@ class DetectionPrelabelProcessor:
             metadata={
                 "processor": "detection_pipeline",
                 "model_version": self.config.detection.model_version,
+                "model_id": self.config.detection.model_id,
+                "model_backbone": self.config.detection.model_backbone,
                 "detection_mode": self.config.detection.detection_mode,
                 "patch_size": self.config.detection.patch_size,
                 "candidate_count": len(annotations),
@@ -389,6 +406,7 @@ def load_prelabel_worker_config_from_env() -> PrelabelWorkerConfig:
     if not model_path:
         raise ValueError("SCANN_PRELABEL_WORKER_MODEL_PATH or config.model_path is required")
     model_version = _env_str("SCANN_PRELABEL_WORKER_MODEL_VERSION") or Path(model_path).stem
+    model_id = _env_str("SCANN_PRELABEL_WORKER_MODEL_ID") or Path(model_path).stem
 
     detection_params = DetectionParams(
         thresh=int(_env_str("SCANN_PRELABEL_THRESH", str(getattr(app_config, "thresh", 80))) or 80),
@@ -408,6 +426,7 @@ def load_prelabel_worker_config_from_env() -> PrelabelWorkerConfig:
     detection = WorkerDetectionConfig(
         model_path=model_path,
         model_version=model_version,
+        model_id=model_id,
         model_format=_env_str("SCANN_PRELABEL_WORKER_MODEL_FORMAT") or str(getattr(app_config, "model_format", "auto")),
         model_backbone=_env_str("SCANN_PRELABEL_WORKER_MODEL_BACKBONE") or str(getattr(app_config, "model_backbone", "auto")),
         compute_device=_env_str("SCANN_PRELABEL_WORKER_COMPUTE_DEVICE") or str(getattr(app_config, "compute_device", "auto")),

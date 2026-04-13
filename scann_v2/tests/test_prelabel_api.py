@@ -40,7 +40,11 @@ def test_prelabel_enqueue_claim_complete_and_list_status(tmp_path, monkeypatch) 
 
     enqueue = client.post(
         "/api/prelabels/enqueue",
-        json={"model_version": "detector-v1"},
+        json={
+            "model_version": "detector-v1",
+            "model_id": "model-20260413-001",
+            "model_backbone": "ViT_B_16",
+        },
         headers=admin_headers,
     )
 
@@ -56,6 +60,8 @@ def test_prelabel_enqueue_claim_complete_and_list_status(tmp_path, monkeypatch) 
     task_payload = tasks_after_enqueue.json()[0]
     assert task_payload["prelabel_status"] == "queued"
     assert task_payload["prelabel_model_version"] == "detector-v1"
+    assert task_payload["prelabel_model_id"] == "model-20260413-001"
+    assert task_payload["prelabel_model_backbone"] == "ViT_B_16"
 
     claim = client.post(
         "/api/prelabel-jobs/claim",
@@ -70,6 +76,8 @@ def test_prelabel_enqueue_claim_complete_and_list_status(tmp_path, monkeypatch) 
     claim_payload = claim.json()
     assert claim_payload["task_id"] == "PGC 17069"
     assert claim_payload["model_version"] == "detector-v1"
+    assert claim_payload["model_id"] == "model-20260413-001"
+    assert claim_payload["model_backbone"] == "ViT_B_16"
     assert claim_payload["paths"]["new"] == "new/PGC 17069.fts"
     assert claim_payload["paths"]["old"] == "old/PGC 17069.fts"
 
@@ -122,6 +130,8 @@ def test_prelabel_enqueue_claim_complete_and_list_status(tmp_path, monkeypatch) 
     assert prelabel.status_code == 200
     prelabel_payload = prelabel.json()
     assert prelabel_payload["model_version"] == "detector-v1"
+    assert prelabel_payload["model_id"] == "model-20260413-001"
+    assert prelabel_payload["model_backbone"] == "ViT_B_16"
     assert prelabel_payload["ai_suggestion"] == "real"
     assert prelabel_payload["box_count"] == 1
 
@@ -130,6 +140,8 @@ def test_prelabel_enqueue_claim_complete_and_list_status(tmp_path, monkeypatch) 
     final_task_payload = tasks_after_complete.json()[0]
     assert final_task_payload["prelabel_status"] == "available"
     assert final_task_payload["prelabel_model_version"] == "detector-v1"
+    assert final_task_payload["prelabel_model_id"] == "model-20260413-001"
+    assert final_task_payload["prelabel_model_backbone"] == "ViT_B_16"
     assert final_task_payload["prelabel_box_count"] == 1
 
     enqueue_again = client.post(
@@ -172,6 +184,44 @@ def test_prelabel_claim_respects_supported_model_versions(tmp_path, monkeypatch)
     assert claim.json()["detail"] == "No queued prelabel job"
 
 
+def test_prelabel_claim_respects_model_id_and_backbone(tmp_path, monkeypatch) -> None:
+    dataset_root = tmp_path / "dataset"
+    _touch(dataset_root / "new" / "PGC 17069.fts")
+
+    monkeypatch.setenv("SCANN_NATIVE_DATASET_ROOT", str(dataset_root))
+    monkeypatch.setenv("SCANN_PRELABEL_WORKER_TOKEN", "worker-secret")
+
+    client = TestClient(app)
+    admin_headers = _auth_headers(client)
+
+    enqueue = client.post(
+        "/api/prelabels/enqueue",
+        json={
+            "model_version": "detector-v1",
+            "model_id": "model-a",
+            "model_backbone": "ViT_B_16",
+        },
+        headers=admin_headers,
+    )
+    assert enqueue.status_code == 200
+    assert enqueue.json()["enqueued_count"] == 1
+
+    claim = client.post(
+        "/api/prelabel-jobs/claim",
+        json={
+            "worker_id": "gpu-worker-1",
+            "capabilities": {
+                "model_versions": ["detector-v1"],
+                "model_ids": ["model-b"],
+                "model_backbones": ["ResNet18"],
+            },
+        },
+        headers=_worker_headers(),
+    )
+    assert claim.status_code == 404
+    assert claim.json()["detail"] == "No queued prelabel job"
+
+
 def test_prelabel_worker_endpoints_require_token(tmp_path, monkeypatch) -> None:
     dataset_root = tmp_path / "dataset"
     _touch(dataset_root / "new" / "PGC 17069.fts")
@@ -203,7 +253,11 @@ def test_annotation_save_accepts_applied_prelabel_and_skips_duplicate_enqueue(tm
 
     enqueue = client.post(
         "/api/prelabels/enqueue",
-        json={"model_version": "detector-v1"},
+        json={
+            "model_version": "detector-v1",
+            "model_id": "model-accept-001",
+            "model_backbone": "ViT_B_16",
+        },
         headers=admin_headers,
     )
     assert enqueue.status_code == 200
@@ -250,6 +304,8 @@ def test_annotation_save_accepts_applied_prelabel_and_skips_duplicate_enqueue(tm
                 "applied_prelabel": {
                     "prelabel_id": prelabel_id,
                     "model_version": "detector-v1",
+                    "model_id": "model-accept-001",
+                    "model_backbone": "ViT_B_16",
                     "imported_annotation_count": 1,
                 },
             },
@@ -279,6 +335,8 @@ def test_annotation_save_accepts_applied_prelabel_and_skips_duplicate_enqueue(tm
     task_payload = tasks.json()[0]
     assert task_payload["prelabel_status"] == "accepted"
     assert task_payload["prelabel_model_version"] == "detector-v1"
+    assert task_payload["prelabel_model_id"] == "model-accept-001"
+    assert task_payload["prelabel_model_backbone"] == "ViT_B_16"
     assert task_payload["prelabel_box_count"] == 1
 
     enqueue_again = client.post(

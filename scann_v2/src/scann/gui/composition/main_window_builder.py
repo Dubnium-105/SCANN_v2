@@ -44,6 +44,7 @@ class MenuBarParts:
     act_histogram: QAction
     act_detect: QAction
     act_train: QAction
+    act_worker_console: QAction
     act_load_model: QAction
     act_model_info: QAction
     act_annotation: QAction
@@ -193,6 +194,7 @@ class MainWindowBuilder:
         act_detect.setShortcut(QKeySequence("F5"))
         ai_menu.addSeparator()
         act_train = ai_menu.addAction("训练模型...")
+        act_worker_console = ai_menu.addAction("长期运行控制台...")
         act_load_model = ai_menu.addAction("加载模型...")
         act_model_info = ai_menu.addAction("模型信息")
         ai_menu.addSeparator()
@@ -265,6 +267,7 @@ class MainWindowBuilder:
             act_histogram=act_histogram,
             act_detect=act_detect,
             act_train=act_train,
+            act_worker_console=act_worker_console,
             act_load_model=act_load_model,
             act_model_info=act_model_info,
             act_annotation=act_annotation,

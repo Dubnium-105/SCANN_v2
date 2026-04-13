@@ -4,6 +4,7 @@
       :username="authState.username"
       :token="authState.token"
       :role="authState.role"
+      :active-task-id="activeTaskId"
       @logout="onLogout"
     />
     <main

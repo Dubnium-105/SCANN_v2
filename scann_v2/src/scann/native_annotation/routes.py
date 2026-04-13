@@ -47,6 +47,24 @@ from .prelabel_service import (
     WorkerJobAckResponse,
 )
 from .task_lock_service import TaskLockService
+from .training_lifecycle_service import (
+    DatasetSnapshotCreateRequest,
+    DatasetSnapshotResponse,
+    PromoteModelResponse,
+    RegisteredModelResponse,
+    TrainingArtifactUploadResponse,
+    TrainingJobCreateRequest,
+    TrainingJobLifecycleResponse,
+    TrainingJobResponse,
+    TrainingLifecycleService,
+    TrainingRunResponse,
+    TrainingWorkerClaimRequest,
+    TrainingWorkerClaimResponse,
+    TrainingWorkerCompleteRequest,
+    TrainingWorkerFailRequest,
+    TrainingWorkerHeartbeatRequest,
+    TrainingWorkerJobAckResponse,
+)
 from scann.services.dataset_preprocess_service import DatasetPreprocessService
 
 api_router = APIRouter(prefix="/api", tags=["api"])
@@ -64,6 +82,8 @@ class TaskListResponse(TaskSession):
     locked_by_current_client: Optional[bool] = None
     prelabel_status: Optional[str] = None
     prelabel_model_version: Optional[str] = None
+    prelabel_model_id: Optional[str] = None
+    prelabel_model_backbone: Optional[str] = None
     prelabel_updated_at: Optional[str] = None
     prelabel_box_count: Optional[int] = None
 
@@ -137,12 +157,28 @@ def get_prelabel_service() -> PrelabelService:
     return PrelabelService(dataset_root=get_dataset_root())
 
 
+def get_training_service() -> TrainingLifecycleService:
+    return TrainingLifecycleService(dataset_root=get_dataset_root())
+
+
 def require_prelabel_worker_token(
     x_scann_worker_token: Optional[str] = Header(None),
 ) -> str:
     expected = os.getenv("SCANN_PRELABEL_WORKER_TOKEN", "").strip()
     if not expected:
         raise HTTPException(status_code=503, detail="Prelabel worker token is not configured")
+    presented = (x_scann_worker_token or "").strip()
+    if not presented or not hmac.compare_digest(presented, expected):
+        raise HTTPException(status_code=401, detail="Invalid worker token")
+    return presented
+
+
+def require_training_worker_token(
+    x_scann_worker_token: Optional[str] = Header(None),
+) -> str:
+    expected = os.getenv("SCANN_TRAINING_WORKER_TOKEN", "").strip()
+    if not expected:
+        raise HTTPException(status_code=503, detail="Training worker token is not configured")
     presented = (x_scann_worker_token or "").strip()
     if not presented or not hmac.compare_digest(presented, expected):
         raise HTTPException(status_code=401, detail="Invalid worker token")
@@ -242,6 +278,8 @@ def list_tasks(
         if summary is not None:
             task_payload["prelabel_status"] = summary.prelabel_status
             task_payload["prelabel_model_version"] = summary.prelabel_model_version
+            task_payload["prelabel_model_id"] = summary.prelabel_model_id
+            task_payload["prelabel_model_backbone"] = summary.prelabel_model_backbone
             task_payload["prelabel_updated_at"] = summary.prelabel_updated_at
             task_payload["prelabel_box_count"] = summary.prelabel_box_count
         responses.append(TaskListResponse(**task_payload))
@@ -360,6 +398,219 @@ def fetch_prelabel_job_fits(
             raise HTTPException(status_code=404, detail=message) from exc
         raise HTTPException(status_code=409, detail=message) from exc
     return Response(content=file_path.read_bytes(), media_type="application/octet-stream")
+
+
+@api_router.post("/training/snapshots", response_model=DatasetSnapshotResponse)
+def create_training_snapshot(
+    payload: DatasetSnapshotCreateRequest,
+    current_user: AuthUser = Depends(get_current_user),
+) -> DatasetSnapshotResponse:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can create training snapshots")
+    service = get_training_service()
+    try:
+        return service.create_snapshot(payload=payload, created_by=current_user.username)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@api_router.get("/training/snapshots", response_model=list[DatasetSnapshotResponse])
+def list_training_snapshots(
+    limit: int = Query(100, ge=1, le=500),
+    current_user: AuthUser = Depends(get_current_user),
+) -> list[DatasetSnapshotResponse]:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can list training snapshots")
+    return get_training_service().list_snapshots(limit=limit)
+
+
+@api_router.post("/training/jobs", response_model=TrainingJobResponse)
+def create_training_job(
+    payload: TrainingJobCreateRequest,
+    current_user: AuthUser = Depends(get_current_user),
+) -> TrainingJobResponse:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can create training jobs")
+    service = get_training_service()
+    try:
+        return service.create_training_job(payload=payload, requested_by=current_user.username)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@api_router.get("/training/jobs", response_model=list[TrainingJobResponse])
+def list_training_jobs(
+    limit: int = Query(100, ge=1, le=500),
+    current_user: AuthUser = Depends(get_current_user),
+) -> list[TrainingJobResponse]:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can list training jobs")
+    return get_training_service().list_training_jobs(limit=limit)
+
+
+@api_router.get("/training/runs", response_model=list[TrainingRunResponse])
+def list_training_runs(
+    limit: int = Query(100, ge=1, le=500),
+    current_user: AuthUser = Depends(get_current_user),
+) -> list[TrainingRunResponse]:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can list training runs")
+    return get_training_service().list_runs(limit=limit)
+
+
+@api_router.get("/training/models", response_model=list[RegisteredModelResponse])
+def list_registered_models(
+    task_type: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    current_user: AuthUser = Depends(get_current_user),
+) -> list[RegisteredModelResponse]:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can list registered models")
+    return get_training_service().list_models(task_type=task_type, limit=limit)
+
+
+@api_router.get("/training/models/promoted", response_model=RegisteredModelResponse, response_model_exclude_none=True)
+def get_promoted_training_model(
+    task_type: str = Query("classification"),
+    current_user: AuthUser = Depends(get_current_user),
+) -> RegisteredModelResponse:
+    _ = current_user
+    response = get_training_service().get_promoted_model(task_type=task_type)
+    if response is None:
+        raise HTTPException(status_code=404, detail="Promoted model not found")
+    return response
+
+
+@api_router.post("/training/models/{model_id}/promote", response_model=PromoteModelResponse)
+def promote_training_model(
+    model_id: str,
+    enqueue_prelabels: bool = Query(False),
+    force_prelabel: bool = Query(False),
+    task_ids: Optional[str] = Query(None),
+    current_user: AuthUser = Depends(get_current_user),
+) -> PromoteModelResponse:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can promote models")
+    parsed_task_ids = [
+        item.strip()
+        for item in str(task_ids or "").split(",")
+        if item and item.strip()
+    ]
+    response = get_training_service().promote_model(
+        model_id=model_id,
+        promoted_by=current_user.username,
+        enqueue_prelabels=enqueue_prelabels,
+        force_prelabel=force_prelabel,
+        prelabel_task_ids=parsed_task_ids or None,
+    )
+    if response is None:
+        raise HTTPException(status_code=404, detail="Model not found")
+    return response
+
+
+@api_router.get("/training/models/{model_id}/artifact")
+def fetch_training_model_artifact(
+    model_id: str,
+    current_user: AuthUser = Depends(get_current_user),
+) -> Response:
+    _ = current_user
+    service = get_training_service()
+    try:
+        file_path = service.get_model_artifact_path(model_id)
+    except ValueError as exc:
+        message = str(exc)
+        if message in {"model not found"}:
+            raise HTTPException(status_code=404, detail=message) from exc
+        raise HTTPException(status_code=409, detail=message) from exc
+    return Response(content=file_path.read_bytes(), media_type="application/octet-stream")
+
+
+@api_router.post("/training-jobs/claim", response_model=TrainingWorkerClaimResponse)
+def claim_training_job(
+    payload: TrainingWorkerClaimRequest,
+    _worker_token: str = Depends(require_training_worker_token),
+) -> TrainingWorkerClaimResponse:
+    response = get_training_service().claim_next_job(payload)
+    if response is None:
+        raise HTTPException(status_code=404, detail="No queued training job")
+    return response
+
+
+@api_router.post("/training-jobs/{job_id}/heartbeat", response_model=TrainingWorkerJobAckResponse)
+def heartbeat_training_job(
+    job_id: str,
+    payload: TrainingWorkerHeartbeatRequest,
+    _worker_token: str = Depends(require_training_worker_token),
+) -> TrainingWorkerJobAckResponse:
+    response = get_training_service().heartbeat_job(job_id=job_id, payload=payload)
+    if not response.accepted:
+        raise HTTPException(status_code=409, detail="Training job is not claimed by this worker")
+    return response
+
+
+@api_router.get("/training-jobs/{job_id}/snapshot")
+def fetch_training_job_snapshot(
+    job_id: str,
+    worker_id: str = Query(..., min_length=1),
+    _worker_token: str = Depends(require_training_worker_token),
+) -> Response:
+    service = get_training_service()
+    try:
+        file_path = service.get_claimed_job_snapshot_path(job_id=job_id, worker_id=worker_id)
+    except ValueError as exc:
+        message = str(exc)
+        if message in {"job not found", "snapshot not found"}:
+            raise HTTPException(status_code=404, detail=message) from exc
+        raise HTTPException(status_code=409, detail=message) from exc
+    return Response(content=file_path.read_bytes(), media_type="application/json")
+
+
+@api_router.post("/training-jobs/{job_id}/artifact", response_model=TrainingArtifactUploadResponse)
+async def upload_training_job_artifact(
+    job_id: str,
+    request: Request,
+    worker_id: str = Query(..., min_length=1),
+    filename: str = Query(..., min_length=1),
+    _worker_token: str = Depends(require_training_worker_token),
+) -> TrainingArtifactUploadResponse:
+    content = await request.body()
+    service = get_training_service()
+    try:
+        return service.store_uploaded_model_artifact(
+            job_id=job_id,
+            worker_id=worker_id,
+            filename=filename,
+            content=content,
+        )
+    except ValueError as exc:
+        message = str(exc)
+        if message == "job not found":
+            raise HTTPException(status_code=404, detail=message) from exc
+        raise HTTPException(status_code=409, detail=message) from exc
+
+
+@api_router.post("/training-jobs/{job_id}/complete", response_model=TrainingJobLifecycleResponse)
+def complete_training_job(
+    job_id: str,
+    payload: TrainingWorkerCompleteRequest,
+    _worker_token: str = Depends(require_training_worker_token),
+) -> TrainingJobLifecycleResponse:
+    response = get_training_service().complete_job(job_id=job_id, payload=payload)
+    if response is None:
+        raise HTTPException(status_code=409, detail="Training job is not claimed by this worker")
+    return response
+
+
+@api_router.post("/training-jobs/{job_id}/fail", response_model=TrainingWorkerJobAckResponse)
+def fail_training_job(
+    job_id: str,
+    payload: TrainingWorkerFailRequest,
+    _worker_token: str = Depends(require_training_worker_token),
+) -> TrainingWorkerJobAckResponse:
+    response = get_training_service().fail_job(job_id=job_id, payload=payload)
+    if not response.accepted:
+        raise HTTPException(status_code=409, detail="Training job is not claimed by this worker")
+    return response
 
 
 @api_router.get("/annotation-sync/status", response_model=AnnotationSyncStatus)

@@ -17,6 +17,7 @@ class TrainingController:
     def __init__(self, window: MainWindow) -> None:
         self._window = window
         self._training_dialog = None
+        self._worker_console_dialog = None
         self._training_worker = None
         self._training_params: dict = {}
 
@@ -47,6 +48,26 @@ class TrainingController:
         self._training_dialog = dialog
         self._training_worker = None
         dialog.exec_()
+
+    def open_worker_console(self) -> None:
+        if self._worker_console_dialog is not None:
+            self._worker_console_dialog.raise_()
+            self._worker_console_dialog.activateWindow()
+            return
+
+        from scann.gui.dialogs.worker_console_dialog import WorkerConsoleDialog
+
+        dialog = WorkerConsoleDialog(self._window)
+        dialog.setModal(False)
+        dialog.finished.connect(self._clear_worker_console_dialog)
+        dialog.destroyed.connect(self._clear_worker_console_dialog)
+        self._worker_console_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _clear_worker_console_dialog(self, *_args) -> None:
+        self._worker_console_dialog = None
 
     def training_started(self, params: dict) -> None:
         self._window._show_message(

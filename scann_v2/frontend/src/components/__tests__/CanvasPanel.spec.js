@@ -21,6 +21,8 @@ function createPrelabel(taskId, overrides = {}) {
     ai_suggestion: 'real',
     ai_confidence: 0.91,
     model_version: 'detector-v1',
+    model_id: 'model-20260413-001',
+    model_backbone: 'ViT_B_16',
     box_count: 1,
     annotations: [
       {
@@ -400,6 +402,8 @@ describe('CanvasPanel', () => {
         createTask('PGC 17069', {
           prelabel_status: 'accepted',
           prelabel_model_version: 'detector-v1',
+          prelabel_model_id: 'model-20260413-001',
+          prelabel_model_backbone: 'ViT_B_16',
         }),
       ],
     })
@@ -424,6 +428,8 @@ describe('CanvasPanel', () => {
     expect(enqueueCall).toBeTruthy()
     expect(JSON.parse(enqueueCall.options?.body)).toEqual({
       model_version: 'detector-v1',
+      model_id: 'model-20260413-001',
+      model_backbone: 'ViT_B_16',
       task_ids: ['PGC 17069'],
       priority: 100,
       force: true,

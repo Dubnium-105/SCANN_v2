@@ -498,6 +498,10 @@ class MainWindow(QMainWindow):
         """打开训练对话框"""
         self.training_controller.open_training()
 
+    def _on_open_worker_console(self) -> None:
+        """打开长期运行 GPU worker 控制台。"""
+        self.training_controller.open_worker_console()
+
     def _on_open_annotation(self) -> None:
         """打开标注工具对话框 (非模态)"""
         self.annotation_controller.open_annotation()

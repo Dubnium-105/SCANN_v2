@@ -296,7 +296,7 @@ class TrainingWorker(QThread):
         if not pairs:
             raise ValueError("v2 数据集未找到可配对的 new/old 图像")
 
-        annotations_doc = load_v2_annotation_document(dataset_root)
+        annotations_doc = self._load_v2_annotations_document(dataset_root)
 
         images = annotations_doc.get("images", [])
         if not images:
@@ -362,6 +362,18 @@ class TrainingWorker(QThread):
         if not all_samples:
             raise ValueError("v2 数据集里未找到可训练的已标注样本")
         return all_samples
+
+    def _load_v2_annotations_document(self, dataset_root: Path) -> dict[str, Any]:
+        snapshot_path_raw = str(self._params.get("annotations_document_path", "")).strip()
+        if snapshot_path_raw:
+            snapshot_path = Path(snapshot_path_raw)
+            if not snapshot_path.is_file():
+                raise ValueError(f"快照标注文档不存在: {snapshot_path}")
+            payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or not isinstance(payload.get("images"), list):
+                raise ValueError("快照标注文档格式无效")
+            return payload
+        return load_v2_annotation_document(dataset_root)
 
     def _build_sample_pool(self) -> tuple[list[tuple[Any, int]], str]:
         pos_dir = self._params.get("pos_dir")

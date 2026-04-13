@@ -7,11 +7,13 @@
 - `architecture.md`
   - 当前代码结构、模块边界、主要业务流与数据层分工
 - `dataset_pipeline.md`
-  - 数据集预处理流程、任务生成规则与 `scann_dataset.db` 数据库设计
+  - 数据集预处理流程、任务生成规则与 `scann_dataset.db` 设计
 - `native_annotation.md`
   - 原生 FITS 标注平台的后端、前端、数据集、锁与标注链路说明
 - `native_annotation_prelabel.md`
   - 原生 FITS 标注平台的长期预标注架构、外部 GPU worker 控制面与当前实现边界
+- `native_annotation_training_loop.md`
+  - 原生 FITS 标注平台的训练闭环、训练 worker、模型注册表与长期运行控制面
 
 ## 相关目录文档
 
@@ -25,5 +27,5 @@
 ## 维护规则
 
 - `docs/` 中只放长期有效的“当前实现说明”
-- 一次性的计划、backlog、阶段总结、临时设计草案不要再放回这里
+- 一次性的计划、backlog、阶段总结、临时设计草案不再放回这里
 - 如果某份内容只服务于一次开发任务，应优先放到 issue、PR 或外部任务系统

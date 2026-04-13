@@ -55,6 +55,7 @@ class MainWindowWiring:
 
         window.act_detect.triggered.connect(window._on_batch_detect)
         window.act_train.triggered.connect(window._on_open_training)
+        window.act_worker_console.triggered.connect(window._on_open_worker_console)
         window.act_load_model.triggered.connect(window._on_load_model)
         window.act_model_info.triggered.connect(window._on_model_info)
         window.act_annotation.triggered.connect(window._on_open_annotation)

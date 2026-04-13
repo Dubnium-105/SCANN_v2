@@ -33,6 +33,8 @@ class PrelabelBox(BaseModel):
 
 class PrelabelEnqueueRequest(BaseModel):
     model_version: str = Field(..., min_length=1)
+    model_id: Optional[str] = None
+    model_backbone: Optional[str] = None
     task_ids: list[str] = Field(default_factory=list)
     priority: int = 100
     force: bool = False
@@ -55,6 +57,8 @@ class TaskPrelabelResponse(BaseModel):
     ai_suggestion: Optional[str] = None
     ai_confidence: Optional[float] = None
     model_version: Optional[str] = None
+    model_id: Optional[str] = None
+    model_backbone: Optional[str] = None
     input_fingerprint: Optional[str] = None
     box_count: int
     worker_id: Optional[str] = None
@@ -77,6 +81,8 @@ class WorkerClaimResponse(BaseModel):
     job_id: str
     task_id: str
     model_version: str
+    model_id: Optional[str] = None
+    model_backbone: Optional[str] = None
     input_fingerprint: str
     paths: dict[str, str] = Field(default_factory=dict)
     claimed_at: Optional[str] = None
@@ -121,10 +127,16 @@ class PrelabelService:
     def _task_sessions_by_id(self) -> dict[str, TaskSession]:
         return {task.task_id: task for task in self._dataset_service.list_tasks()}
 
-    def _build_input_fingerprint(self, task: TaskSession, *, model_version: str) -> str:
+    def _build_input_fingerprint(
+        self,
+        task: TaskSession,
+        *,
+        model_version: str,
+        model_id: str | None = None,
+        model_backbone: str | None = None,
+    ) -> str:
         payload: dict[str, Any] = {
             "task_id": task.task_id,
-            "model_version": model_version,
             "paths": {
                 "new": task.new_path,
                 "old": task.old_path,
@@ -150,6 +162,24 @@ class PrelabelService:
         return hashlib.sha256(encoded).hexdigest()
 
     @staticmethod
+    def _request_matches_existing_model(
+        existing: TaskAIPrelabelRecord,
+        *,
+        model_version: str,
+        model_id: str | None,
+        model_backbone: str | None,
+    ) -> bool:
+        if existing.model_version != model_version:
+            return False
+        normalized_model_id = str(model_id or "").strip()
+        if normalized_model_id and (existing.model_id or "").strip() != normalized_model_id:
+            return False
+        normalized_model_backbone = str(model_backbone or "").strip()
+        if normalized_model_backbone and (existing.model_backbone or "").strip() != normalized_model_backbone:
+            return False
+        return True
+
+    @staticmethod
     def _record_to_response(
         record: TaskAIPrelabelRecord,
         annotations: list[dict[str, Any]],
@@ -163,6 +193,8 @@ class PrelabelService:
             ai_suggestion=record.ai_suggestion,
             ai_confidence=record.ai_confidence,
             model_version=record.model_version,
+            model_id=record.model_id,
+            model_backbone=record.model_backbone,
             input_fingerprint=record.input_fingerprint,
             box_count=record.box_count,
             worker_id=record.worker_id,
@@ -194,7 +226,14 @@ class PrelabelService:
                 skipped_count += 1
                 continue
 
-            input_fingerprint = self._build_input_fingerprint(task, model_version=payload.model_version)
+            normalized_model_id = str(payload.model_id or "").strip() or None
+            normalized_model_backbone = str(payload.model_backbone or "").strip() or None
+            input_fingerprint = self._build_input_fingerprint(
+                task,
+                model_version=payload.model_version,
+                model_id=normalized_model_id,
+                model_backbone=normalized_model_backbone,
+            )
             existing = self._storage.get_latest_task_prelabel_record(
                 task.task_id,
                 statuses=("available", "accepted"),
@@ -202,7 +241,12 @@ class PrelabelService:
             if (
                 existing is not None
                 and not payload.force
-                and existing.model_version == payload.model_version
+                and self._request_matches_existing_model(
+                    existing,
+                    model_version=payload.model_version,
+                    model_id=normalized_model_id,
+                    model_backbone=normalized_model_backbone,
+                )
                 and existing.input_fingerprint == input_fingerprint
             ):
                 skipped_task_ids.append(task.task_id)
@@ -213,6 +257,8 @@ class PrelabelService:
                 task_id=task.task_id,
                 requested_by=requested_by,
                 model_version=payload.model_version,
+                model_id=normalized_model_id,
+                model_backbone=normalized_model_backbone,
                 input_fingerprint=input_fingerprint,
                 priority=payload.priority,
                 cancel_existing=payload.force,
@@ -258,6 +304,18 @@ class PrelabelService:
             if isinstance(model_versions_raw, list)
             else None
         )
+        model_ids_raw = payload.capabilities.get("model_ids")
+        model_ids = (
+            [str(item) for item in model_ids_raw if str(item).strip()]
+            if isinstance(model_ids_raw, list)
+            else None
+        )
+        model_backbones_raw = payload.capabilities.get("model_backbones")
+        model_backbones = (
+            [str(item) for item in model_backbones_raw if str(item).strip()]
+            if isinstance(model_backbones_raw, list)
+            else None
+        )
         self._storage.upsert_worker_node(
             worker_id=payload.worker_id,
             display_name=payload.display_name,
@@ -270,6 +328,8 @@ class PrelabelService:
             worker_id=payload.worker_id,
             timeout_seconds=self.job_timeout_seconds,
             model_versions=model_versions,
+            model_ids=model_ids,
+            model_backbones=model_backbones,
         )
         if job is None:
             return None
@@ -288,6 +348,8 @@ class PrelabelService:
             job_id=job.job_id,
             task_id=job.task_id,
             model_version=job.model_version,
+            model_id=job.model_id,
+            model_backbone=job.model_backbone,
             input_fingerprint=job.input_fingerprint,
             paths=self._paths_for_task(task),
             claimed_at=job.claimed_at,

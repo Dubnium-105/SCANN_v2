@@ -2,6 +2,11 @@
   <header class="border-b border-slate-800 bg-slate-900 px-4 flex items-center justify-between">
     <h1 class="text-lg font-semibold">SCANN Native Annotation</h1>
     <div class="flex items-center gap-3">
+      <TrainingLoopMenu
+        v-if="isAdmin"
+        :active-task-id="activeTaskId"
+      />
+
       <div v-if="isAdmin" class="relative">
         <button
           type="button"
@@ -112,6 +117,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import { fetchAnnotationSyncStatus, runAnnotationSync } from '../services/annotationSyncApi'
+import TrainingLoopMenu from './TrainingLoopMenu.vue'
 
 const props = defineProps({
   username: {
@@ -123,6 +129,10 @@ const props = defineProps({
     default: '',
   },
   role: {
+    type: String,
+    default: '',
+  },
+  activeTaskId: {
     type: String,
     default: '',
   },

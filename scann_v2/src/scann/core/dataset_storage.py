@@ -94,6 +94,8 @@ class PrelabelJobRecord:
     model_version: str
     input_fingerprint: str
     status: str
+    model_id: str | None = None
+    model_backbone: str | None = None
     priority: int = 100
     claim_worker_id: str | None = None
     claimed_at: str | None = None
@@ -115,6 +117,8 @@ class TaskAIPrelabelRecord:
     ai_suggestion: str | None = None
     ai_confidence: float | None = None
     model_version: str | None = None
+    model_id: str | None = None
+    model_backbone: str | None = None
     input_fingerprint: str | None = None
     status: str = "available"
     box_count: int = 0
@@ -145,10 +149,91 @@ class TaskPrelabelSummaryRecord:
     task_id: str
     prelabel_status: str | None = None
     prelabel_model_version: str | None = None
+    prelabel_model_id: str | None = None
+    prelabel_model_backbone: str | None = None
     prelabel_updated_at: str | None = None
     prelabel_box_count: int = 0
     prelabel_id: str | None = None
     prelabel_job_id: str | None = None
+
+
+@dataclass(frozen=True)
+class DatasetSnapshotRecord:
+    snapshot_id: str
+    snapshot_name: str
+    document_relpath: str
+    task_count: int = 0
+    annotation_count: int = 0
+    created_by: str | None = None
+    metadata: dict[str, Any] | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+@dataclass(frozen=True)
+class TrainingJobRecord:
+    job_id: str
+    snapshot_id: str
+    requested_by: str
+    task_type: str
+    model_version: str
+    model_id: str
+    model_backbone: str
+    status: str
+    train_config: dict[str, Any] | None = None
+    priority: int = 100
+    promote_on_success: bool = False
+    enqueue_prelabels_on_success: bool = False
+    prelabel_task_ids: list[str] | None = None
+    force_prelabel: bool = False
+    claim_worker_id: str | None = None
+    claimed_at: str | None = None
+    claim_expires_at: str | None = None
+    last_heartbeat_at: str | None = None
+    attempt_count: int = 0
+    error_message: str | None = None
+    run_id: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+@dataclass(frozen=True)
+class TrainingRunRecord:
+    run_id: str
+    job_id: str
+    snapshot_id: str
+    task_type: str
+    status: str
+    worker_id: str | None = None
+    model_id: str | None = None
+    model_version: str | None = None
+    model_backbone: str | None = None
+    artifact_path: str | None = None
+    metrics: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+@dataclass(frozen=True)
+class RegisteredModelRecord:
+    model_id: str
+    model_version: str
+    model_backbone: str
+    task_type: str
+    training_run_id: str | None = None
+    snapshot_id: str | None = None
+    artifact_path: str | None = None
+    metrics: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
+    created_by: str | None = None
+    is_promoted: bool = False
+    promoted_at: str | None = None
+    promoted_by: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
 
 
 class DatasetStorage:
@@ -367,6 +452,8 @@ class DatasetStorage:
                 task_id TEXT NOT NULL,
                 requested_by TEXT NOT NULL,
                 model_version TEXT NOT NULL,
+                model_id TEXT,
+                model_backbone TEXT,
                 input_fingerprint TEXT NOT NULL,
                 status TEXT NOT NULL CHECK(status IN ('queued', 'claimed', 'completed', 'failed', 'cancelled')),
                 priority INTEGER NOT NULL DEFAULT 100,
@@ -405,6 +492,8 @@ class DatasetStorage:
                 ai_suggestion TEXT,
                 ai_confidence REAL,
                 model_version TEXT,
+                model_id TEXT,
+                model_backbone TEXT,
                 input_fingerprint TEXT,
                 status TEXT NOT NULL CHECK(status IN ('available', 'superseded', 'hidden', 'accepted')),
                 box_count INTEGER NOT NULL DEFAULT 0,
@@ -458,8 +547,140 @@ class DatasetStorage:
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dataset_snapshots (
+                snapshot_id TEXT PRIMARY KEY,
+                snapshot_name TEXT NOT NULL,
+                document_relpath TEXT NOT NULL,
+                task_count INTEGER NOT NULL DEFAULT 0,
+                annotation_count INTEGER NOT NULL DEFAULT 0,
+                created_by TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_dataset_snapshots_created_at
+            ON dataset_snapshots(created_at)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS training_jobs (
+                job_id TEXT PRIMARY KEY,
+                snapshot_id TEXT NOT NULL,
+                requested_by TEXT NOT NULL,
+                task_type TEXT NOT NULL,
+                model_version TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                model_backbone TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('queued', 'claimed', 'completed', 'failed', 'cancelled')),
+                train_config_json TEXT NOT NULL DEFAULT '{}',
+                priority INTEGER NOT NULL DEFAULT 100,
+                promote_on_success INTEGER NOT NULL DEFAULT 0,
+                enqueue_prelabels_on_success INTEGER NOT NULL DEFAULT 0,
+                prelabel_task_ids_json TEXT NOT NULL DEFAULT '[]',
+                force_prelabel INTEGER NOT NULL DEFAULT 0,
+                claim_worker_id TEXT,
+                claimed_at TEXT,
+                claim_expires_at TEXT,
+                last_heartbeat_at TEXT,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                error_message TEXT,
+                run_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(snapshot_id) REFERENCES dataset_snapshots(snapshot_id) ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_training_jobs_status_priority
+            ON training_jobs(status, priority DESC, created_at)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS training_runs (
+                run_id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                snapshot_id TEXT NOT NULL,
+                task_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                worker_id TEXT,
+                model_id TEXT,
+                model_version TEXT,
+                model_backbone TEXT,
+                artifact_path TEXT,
+                metrics_json TEXT NOT NULL DEFAULT '{}',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                started_at TEXT,
+                finished_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(job_id) REFERENCES training_jobs(job_id) ON DELETE CASCADE,
+                FOREIGN KEY(snapshot_id) REFERENCES dataset_snapshots(snapshot_id) ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_training_runs_job_id
+            ON training_runs(job_id)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS model_registry (
+                model_id TEXT PRIMARY KEY,
+                model_version TEXT NOT NULL,
+                model_backbone TEXT NOT NULL,
+                task_type TEXT NOT NULL,
+                training_run_id TEXT,
+                snapshot_id TEXT,
+                artifact_path TEXT,
+                metrics_json TEXT NOT NULL DEFAULT '{}',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_by TEXT,
+                is_promoted INTEGER NOT NULL DEFAULT 0,
+                promoted_at TEXT,
+                promoted_by TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(training_run_id) REFERENCES training_runs(run_id) ON DELETE SET NULL,
+                FOREIGN KEY(snapshot_id) REFERENCES dataset_snapshots(snapshot_id) ON DELETE SET NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_model_registry_task_type_promoted
+            ON model_registry(task_type, is_promoted, created_at)
+            """
+        )
+        self._ensure_column(connection, "prelabel_jobs", "model_id", "TEXT")
+        self._ensure_column(connection, "prelabel_jobs", "model_backbone", "TEXT")
+        self._ensure_column(connection, "task_ai_prelabels", "model_id", "TEXT")
+        self._ensure_column(connection, "task_ai_prelabels", "model_backbone", "TEXT")
         connection.commit()
         self._schema_ready_paths.add(db_key)
+
+    @staticmethod
+    def _ensure_column(
+        connection: sqlite3.Connection,
+        table_name: str,
+        column_name: str,
+        column_sql: str,
+    ) -> None:
+        columns = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+        if any(str(column["name"]) == column_name for column in columns):
+            return
+        connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}")
 
     @staticmethod
     def strip_explorer_copy_suffix(stem: str) -> tuple[str, int]:
@@ -1527,6 +1748,16 @@ class DatasetStorage:
         return parsed if isinstance(parsed, dict) else {}
 
     @staticmethod
+    def _load_json_list(raw: Any) -> list[Any]:
+        if raw is None:
+            return []
+        try:
+            parsed = json.loads(str(raw))
+        except Exception:
+            return []
+        return parsed if isinstance(parsed, list) else []
+
+    @staticmethod
     def _expires_after(now: datetime, timeout_seconds: int) -> str:
         timeout = max(1, int(timeout_seconds))
         return (now + timedelta(seconds=timeout)).isoformat(timespec="seconds")
@@ -1538,6 +1769,8 @@ class DatasetStorage:
             task_id=str(row["task_id"]),
             requested_by=str(row["requested_by"]),
             model_version=str(row["model_version"]),
+            model_id=str(row["model_id"]) if row["model_id"] is not None else None,
+            model_backbone=str(row["model_backbone"]) if row["model_backbone"] is not None else None,
             input_fingerprint=str(row["input_fingerprint"]),
             status=str(row["status"]),
             priority=int(row["priority"] or 100),
@@ -1566,6 +1799,8 @@ class DatasetStorage:
             ai_suggestion=str(row["ai_suggestion"]) if row["ai_suggestion"] is not None else None,
             ai_confidence=float(row["ai_confidence"]) if row["ai_confidence"] is not None else None,
             model_version=str(row["model_version"]) if row["model_version"] is not None else None,
+            model_id=str(row["model_id"]) if row["model_id"] is not None else None,
+            model_backbone=str(row["model_backbone"]) if row["model_backbone"] is not None else None,
             input_fingerprint=(
                 str(row["input_fingerprint"]) if row["input_fingerprint"] is not None else None
             ),
@@ -1595,6 +1830,112 @@ class DatasetStorage:
             created_at=str(row["created_at"]) if row["created_at"] is not None else None,
             updated_at=str(row["updated_at"]) if row["updated_at"] is not None else None,
         )
+
+    @classmethod
+    def _row_to_dataset_snapshot(cls, row: sqlite3.Row) -> DatasetSnapshotRecord:
+        return DatasetSnapshotRecord(
+            snapshot_id=str(row["snapshot_id"]),
+            snapshot_name=str(row["snapshot_name"]),
+            document_relpath=str(row["document_relpath"]),
+            task_count=int(row["task_count"] or 0),
+            annotation_count=int(row["annotation_count"] or 0),
+            created_by=str(row["created_by"]) if row["created_by"] is not None else None,
+            metadata=cls._load_json_dict(row["metadata_json"]),
+            created_at=str(row["created_at"]) if row["created_at"] is not None else None,
+            updated_at=str(row["updated_at"]) if row["updated_at"] is not None else None,
+        )
+
+    @classmethod
+    def _row_to_training_job(cls, row: sqlite3.Row) -> TrainingJobRecord:
+        return TrainingJobRecord(
+            job_id=str(row["job_id"]),
+            snapshot_id=str(row["snapshot_id"]),
+            requested_by=str(row["requested_by"]),
+            task_type=str(row["task_type"]),
+            model_version=str(row["model_version"]),
+            model_id=str(row["model_id"]),
+            model_backbone=str(row["model_backbone"]),
+            status=str(row["status"]),
+            train_config=cls._load_json_dict(row["train_config_json"]),
+            priority=int(row["priority"] or 100),
+            promote_on_success=bool(int(row["promote_on_success"] or 0)),
+            enqueue_prelabels_on_success=bool(int(row["enqueue_prelabels_on_success"] or 0)),
+            prelabel_task_ids=[str(item) for item in cls._load_json_list(row["prelabel_task_ids_json"]) if str(item)],
+            force_prelabel=bool(int(row["force_prelabel"] or 0)),
+            claim_worker_id=str(row["claim_worker_id"]) if row["claim_worker_id"] is not None else None,
+            claimed_at=str(row["claimed_at"]) if row["claimed_at"] is not None else None,
+            claim_expires_at=str(row["claim_expires_at"]) if row["claim_expires_at"] is not None else None,
+            last_heartbeat_at=str(row["last_heartbeat_at"]) if row["last_heartbeat_at"] is not None else None,
+            attempt_count=int(row["attempt_count"] or 0),
+            error_message=str(row["error_message"]) if row["error_message"] is not None else None,
+            run_id=str(row["run_id"]) if row["run_id"] is not None else None,
+            created_at=str(row["created_at"]) if row["created_at"] is not None else None,
+            updated_at=str(row["updated_at"]) if row["updated_at"] is not None else None,
+        )
+
+    @classmethod
+    def _row_to_training_run(cls, row: sqlite3.Row) -> TrainingRunRecord:
+        return TrainingRunRecord(
+            run_id=str(row["run_id"]),
+            job_id=str(row["job_id"]),
+            snapshot_id=str(row["snapshot_id"]),
+            task_type=str(row["task_type"]),
+            status=str(row["status"]),
+            worker_id=str(row["worker_id"]) if row["worker_id"] is not None else None,
+            model_id=str(row["model_id"]) if row["model_id"] is not None else None,
+            model_version=str(row["model_version"]) if row["model_version"] is not None else None,
+            model_backbone=str(row["model_backbone"]) if row["model_backbone"] is not None else None,
+            artifact_path=str(row["artifact_path"]) if row["artifact_path"] is not None else None,
+            metrics=cls._load_json_dict(row["metrics_json"]),
+            metadata=cls._load_json_dict(row["metadata_json"]),
+            started_at=str(row["started_at"]) if row["started_at"] is not None else None,
+            finished_at=str(row["finished_at"]) if row["finished_at"] is not None else None,
+            created_at=str(row["created_at"]) if row["created_at"] is not None else None,
+            updated_at=str(row["updated_at"]) if row["updated_at"] is not None else None,
+        )
+
+    @classmethod
+    def _row_to_registered_model(cls, row: sqlite3.Row) -> RegisteredModelRecord:
+        return RegisteredModelRecord(
+            model_id=str(row["model_id"]),
+            model_version=str(row["model_version"]),
+            model_backbone=str(row["model_backbone"]),
+            task_type=str(row["task_type"]),
+            training_run_id=str(row["training_run_id"]) if row["training_run_id"] is not None else None,
+            snapshot_id=str(row["snapshot_id"]) if row["snapshot_id"] is not None else None,
+            artifact_path=str(row["artifact_path"]) if row["artifact_path"] is not None else None,
+            metrics=cls._load_json_dict(row["metrics_json"]),
+            metadata=cls._load_json_dict(row["metadata_json"]),
+            created_by=str(row["created_by"]) if row["created_by"] is not None else None,
+            is_promoted=bool(int(row["is_promoted"] or 0)),
+            promoted_at=str(row["promoted_at"]) if row["promoted_at"] is not None else None,
+            promoted_by=str(row["promoted_by"]) if row["promoted_by"] is not None else None,
+            created_at=str(row["created_at"]) if row["created_at"] is not None else None,
+            updated_at=str(row["updated_at"]) if row["updated_at"] is not None else None,
+        )
+
+    @staticmethod
+    def _job_matches_worker_capabilities(
+        job: PrelabelJobRecord,
+        *,
+        model_versions: list[str] | None = None,
+        model_ids: list[str] | None = None,
+        model_backbones: list[str] | None = None,
+    ) -> bool:
+        normalized_versions = {str(item).strip() for item in (model_versions or []) if str(item).strip()}
+        normalized_ids = {str(item).strip() for item in (model_ids or []) if str(item).strip()}
+        normalized_backbones = {str(item).strip() for item in (model_backbones or []) if str(item).strip()}
+
+        if normalized_ids and (job.model_id or "").strip():
+            if str(job.model_id).strip() not in normalized_ids:
+                return False
+        elif normalized_versions and job.model_version not in normalized_versions:
+            return False
+
+        if normalized_backbones and (job.model_backbone or "").strip():
+            if str(job.model_backbone).strip() not in normalized_backbones:
+                return False
+        return True
 
     def upsert_worker_node(
         self,
@@ -1664,6 +2005,8 @@ class DatasetStorage:
         task_id: str,
         requested_by: str,
         model_version: str,
+        model_id: str | None = None,
+        model_backbone: str | None = None,
         input_fingerprint: str,
         priority: int = 100,
         cancel_existing: bool = False,
@@ -1707,6 +2050,8 @@ class DatasetStorage:
                     task_id,
                     requested_by,
                     model_version,
+                    model_id,
+                    model_backbone,
                     input_fingerprint,
                     status,
                     priority,
@@ -1714,13 +2059,15 @@ class DatasetStorage:
                     created_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, 'queued', ?, 0, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, 0, ?, ?)
                 """,
                 (
                     job_id,
                     task_id,
                     requested_by,
                     model_version,
+                    model_id,
+                    model_backbone,
                     input_fingerprint,
                     int(priority),
                     now,
@@ -1771,6 +2118,8 @@ class DatasetStorage:
         worker_id: str,
         timeout_seconds: int,
         model_versions: list[str] | None = None,
+        model_ids: list[str] | None = None,
+        model_backbones: list[str] | None = None,
     ) -> PrelabelJobRecord | None:
         now_dt = datetime.now(timezone.utc)
         now_iso = now_dt.isoformat(timespec="seconds")
@@ -1779,27 +2128,26 @@ class DatasetStorage:
             self._ensure_schema(connection)
             self._requeue_stale_prelabel_jobs(connection, now_iso=now_iso)
             for _ in range(8):
-                if model_versions:
-                    placeholders = ",".join("?" for _ in model_versions)
-                    row = connection.execute(
-                        f"""
-                        SELECT * FROM prelabel_jobs
-                        WHERE status = 'queued'
-                          AND model_version IN ({placeholders})
-                        ORDER BY priority DESC, created_at ASC, rowid ASC
-                        LIMIT 1
-                        """,
-                        tuple(model_versions),
-                    ).fetchone()
-                else:
-                    row = connection.execute(
-                        """
-                        SELECT * FROM prelabel_jobs
-                        WHERE status = 'queued'
-                        ORDER BY priority DESC, created_at ASC, rowid ASC
-                        LIMIT 1
-                        """
-                    ).fetchone()
+                candidate_rows = connection.execute(
+                    """
+                    SELECT *
+                    FROM prelabel_jobs
+                    WHERE status = 'queued'
+                    ORDER BY priority DESC, created_at ASC, rowid ASC
+                    LIMIT 32
+                    """
+                ).fetchall()
+                row = None
+                for candidate_row in candidate_rows:
+                    candidate = self._row_to_prelabel_job(candidate_row)
+                    if self._job_matches_worker_capabilities(
+                        candidate,
+                        model_versions=model_versions,
+                        model_ids=model_ids,
+                        model_backbones=model_backbones,
+                    ):
+                        row = candidate_row
+                        break
                 if row is None:
                     connection.commit()
                     return None
@@ -1963,6 +2311,8 @@ class DatasetStorage:
                     ai_suggestion,
                     ai_confidence,
                     model_version,
+                    model_id,
+                    model_backbone,
                     input_fingerprint,
                     status,
                     box_count,
@@ -1973,7 +2323,7 @@ class DatasetStorage:
                     updated_at,
                     superseded_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'available', ?, ?, NULL, ?, ?, ?, NULL)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'available', ?, ?, NULL, ?, ?, ?, NULL)
                 """,
                 (
                     prelabel_id,
@@ -1983,6 +2333,8 @@ class DatasetStorage:
                     ai_suggestion,
                     ai_confidence,
                     job.model_version,
+                    job.model_id,
+                    job.model_backbone,
                     job.input_fingerprint,
                     len(annotations),
                     worker_id,
@@ -2241,6 +2593,8 @@ class DatasetStorage:
                 task_id=job.task_id,
                 prelabel_status=mapped_status,
                 prelabel_model_version=job.model_version,
+                prelabel_model_id=job.model_id,
+                prelabel_model_backbone=job.model_backbone,
                 prelabel_updated_at=job.updated_at,
                 prelabel_box_count=0,
                 prelabel_job_id=job.job_id,
@@ -2252,12 +2606,573 @@ class DatasetStorage:
                 task_id=prelabel.task_id,
                 prelabel_status=prelabel.status,
                 prelabel_model_version=prelabel.model_version,
+                prelabel_model_id=prelabel.model_id,
+                prelabel_model_backbone=prelabel.model_backbone,
                 prelabel_updated_at=prelabel.updated_at,
                 prelabel_box_count=prelabel.box_count,
                 prelabel_id=prelabel.prelabel_id,
                 prelabel_job_id=prelabel.job_id,
             )
         return summaries
+
+    def create_dataset_snapshot(
+        self,
+        *,
+        snapshot_id: str,
+        snapshot_name: str,
+        document_relpath: str,
+        task_count: int,
+        annotation_count: int,
+        created_by: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> DatasetSnapshotRecord:
+        now = _utc_now_iso()
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            connection.execute(
+                """
+                INSERT INTO dataset_snapshots (
+                    snapshot_id,
+                    snapshot_name,
+                    document_relpath,
+                    task_count,
+                    annotation_count,
+                    created_by,
+                    metadata_json,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    snapshot_id,
+                    snapshot_name,
+                    document_relpath,
+                    int(task_count),
+                    int(annotation_count),
+                    created_by,
+                    json.dumps(metadata or {}, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM dataset_snapshots WHERE snapshot_id = ?",
+                (snapshot_id,),
+            ).fetchone()
+            connection.commit()
+        if row is None:
+            raise RuntimeError("failed to create dataset snapshot")
+        return self._row_to_dataset_snapshot(row)
+
+    def get_dataset_snapshot(self, snapshot_id: str) -> DatasetSnapshotRecord | None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            row = connection.execute(
+                "SELECT * FROM dataset_snapshots WHERE snapshot_id = ?",
+                (snapshot_id,),
+            ).fetchone()
+        return self._row_to_dataset_snapshot(row) if row is not None else None
+
+    def list_dataset_snapshots(self, *, limit: int = 100) -> list[DatasetSnapshotRecord]:
+        normalized_limit = max(1, min(int(limit), 500))
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM dataset_snapshots
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                (normalized_limit,),
+            ).fetchall()
+        return [self._row_to_dataset_snapshot(row) for row in rows]
+
+    def enqueue_training_job(
+        self,
+        *,
+        snapshot_id: str,
+        requested_by: str,
+        task_type: str,
+        model_version: str,
+        model_id: str,
+        model_backbone: str,
+        train_config: dict[str, Any] | None = None,
+        priority: int = 100,
+        promote_on_success: bool = False,
+        enqueue_prelabels_on_success: bool = False,
+        prelabel_task_ids: list[str] | None = None,
+        force_prelabel: bool = False,
+    ) -> TrainingJobRecord:
+        now = _utc_now_iso()
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            job_id = uuid.uuid4().hex
+            connection.execute(
+                """
+                INSERT INTO training_jobs (
+                    job_id,
+                    snapshot_id,
+                    requested_by,
+                    task_type,
+                    model_version,
+                    model_id,
+                    model_backbone,
+                    status,
+                    train_config_json,
+                    priority,
+                    promote_on_success,
+                    enqueue_prelabels_on_success,
+                    prelabel_task_ids_json,
+                    force_prelabel,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    job_id,
+                    snapshot_id,
+                    requested_by,
+                    task_type,
+                    model_version,
+                    model_id,
+                    model_backbone,
+                    json.dumps(train_config or {}, ensure_ascii=False),
+                    int(priority),
+                    1 if promote_on_success else 0,
+                    1 if enqueue_prelabels_on_success else 0,
+                    json.dumps(prelabel_task_ids or [], ensure_ascii=False),
+                    1 if force_prelabel else 0,
+                    now,
+                    now,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM training_jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+            connection.commit()
+        if row is None:
+            raise RuntimeError("failed to create training job")
+        return self._row_to_training_job(row)
+
+    def get_training_job(self, job_id: str) -> TrainingJobRecord | None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            row = connection.execute(
+                "SELECT * FROM training_jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+        return self._row_to_training_job(row) if row is not None else None
+
+    def list_training_jobs(self, *, limit: int = 100) -> list[TrainingJobRecord]:
+        normalized_limit = max(1, min(int(limit), 500))
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM training_jobs
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                (normalized_limit,),
+            ).fetchall()
+        return [self._row_to_training_job(row) for row in rows]
+
+    def _requeue_stale_training_jobs(self, connection: sqlite3.Connection, *, now_iso: str) -> None:
+        connection.execute(
+            """
+            UPDATE training_jobs
+            SET status = 'queued',
+                claim_worker_id = NULL,
+                claimed_at = NULL,
+                claim_expires_at = NULL,
+                updated_at = ?,
+                error_message = CASE
+                    WHEN error_message IS NULL OR error_message = '' THEN 'training job claim timed out and was requeued'
+                    ELSE error_message
+                END
+            WHERE status = 'claimed'
+              AND claim_expires_at IS NOT NULL
+              AND claim_expires_at <= ?
+            """,
+            (now_iso, now_iso),
+        )
+
+    def claim_next_training_job(
+        self,
+        *,
+        worker_id: str,
+        timeout_seconds: int,
+        task_types: list[str] | None = None,
+        model_backbones: list[str] | None = None,
+    ) -> TrainingJobRecord | None:
+        now_dt = datetime.now(timezone.utc)
+        now_iso = now_dt.isoformat(timespec="seconds")
+        expires_at = self._expires_after(now_dt, timeout_seconds)
+        normalized_task_types = {str(item).strip() for item in (task_types or []) if str(item).strip()}
+        normalized_backbones = {str(item).strip() for item in (model_backbones or []) if str(item).strip()}
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            self._requeue_stale_training_jobs(connection, now_iso=now_iso)
+            for _ in range(8):
+                rows = connection.execute(
+                    """
+                    SELECT *
+                    FROM training_jobs
+                    WHERE status = 'queued'
+                    ORDER BY priority DESC, created_at ASC, rowid ASC
+                    LIMIT 32
+                    """
+                ).fetchall()
+                row = None
+                for candidate_row in rows:
+                    candidate = self._row_to_training_job(candidate_row)
+                    if normalized_task_types and candidate.task_type not in normalized_task_types:
+                        continue
+                    if normalized_backbones and candidate.model_backbone not in normalized_backbones:
+                        continue
+                    row = candidate_row
+                    break
+                if row is None:
+                    connection.commit()
+                    return None
+                job_id = str(row["job_id"])
+                updated = connection.execute(
+                    """
+                    UPDATE training_jobs
+                    SET status = 'claimed',
+                        claim_worker_id = ?,
+                        claimed_at = ?,
+                        claim_expires_at = ?,
+                        last_heartbeat_at = ?,
+                        attempt_count = attempt_count + 1,
+                        error_message = NULL,
+                        updated_at = ?
+                    WHERE job_id = ?
+                      AND status = 'queued'
+                    """,
+                    (worker_id, now_iso, expires_at, now_iso, now_iso, job_id),
+                )
+                if int(updated.rowcount or 0) <= 0:
+                    continue
+                connection.execute(
+                    """
+                    UPDATE worker_nodes
+                    SET status = 'online',
+                        last_seen_at = ?,
+                        updated_at = ?
+                    WHERE worker_id = ?
+                    """,
+                    (now_iso, now_iso, worker_id),
+                )
+                claimed = connection.execute(
+                    "SELECT * FROM training_jobs WHERE job_id = ?",
+                    (job_id,),
+                ).fetchone()
+                connection.commit()
+                return self._row_to_training_job(claimed) if claimed is not None else None
+            connection.commit()
+        return None
+
+    def heartbeat_training_job(self, *, job_id: str, worker_id: str, timeout_seconds: int) -> bool:
+        now_dt = datetime.now(timezone.utc)
+        now_iso = now_dt.isoformat(timespec="seconds")
+        expires_at = self._expires_after(now_dt, timeout_seconds)
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            updated = connection.execute(
+                """
+                UPDATE training_jobs
+                SET last_heartbeat_at = ?,
+                    claim_expires_at = ?,
+                    updated_at = ?
+                WHERE job_id = ?
+                  AND status = 'claimed'
+                  AND claim_worker_id = ?
+                """,
+                (now_iso, expires_at, now_iso, job_id, worker_id),
+            )
+            connection.commit()
+        return int(updated.rowcount or 0) > 0
+
+    def fail_training_job(self, *, job_id: str, worker_id: str, error_message: str, retryable: bool = False) -> bool:
+        now = _utc_now_iso()
+        status = "queued" if retryable else "failed"
+        claim_worker_id = None if retryable else worker_id
+        claimed_at = None if retryable else now
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            updated = connection.execute(
+                """
+                UPDATE training_jobs
+                SET status = ?,
+                    claim_worker_id = ?,
+                    claimed_at = ?,
+                    claim_expires_at = NULL,
+                    last_heartbeat_at = ?,
+                    error_message = ?,
+                    updated_at = ?
+                WHERE job_id = ?
+                  AND status = 'claimed'
+                  AND claim_worker_id = ?
+                """,
+                (status, claim_worker_id, claimed_at, now, error_message, now, job_id, worker_id),
+            )
+            connection.commit()
+        return int(updated.rowcount or 0) > 0
+
+    def complete_training_job(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        artifact_path: str,
+        metrics: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> tuple[TrainingJobRecord, TrainingRunRecord, RegisteredModelRecord] | None:
+        now = _utc_now_iso()
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            job_row = connection.execute(
+                "SELECT * FROM training_jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+            if job_row is None:
+                return None
+            job = self._row_to_training_job(job_row)
+            if job.status != "claimed" or job.claim_worker_id != worker_id:
+                return None
+
+            run_id = uuid.uuid4().hex
+            connection.execute(
+                """
+                INSERT INTO training_runs (
+                    run_id,
+                    job_id,
+                    snapshot_id,
+                    task_type,
+                    status,
+                    worker_id,
+                    model_id,
+                    model_version,
+                    model_backbone,
+                    artifact_path,
+                    metrics_json,
+                    metadata_json,
+                    started_at,
+                    finished_at,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    job.job_id,
+                    job.snapshot_id,
+                    job.task_type,
+                    worker_id,
+                    job.model_id,
+                    job.model_version,
+                    job.model_backbone,
+                    artifact_path,
+                    json.dumps(metrics or {}, ensure_ascii=False),
+                    json.dumps(metadata or {}, ensure_ascii=False),
+                    job.claimed_at or now,
+                    now,
+                    now,
+                    now,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO model_registry (
+                    model_id,
+                    model_version,
+                    model_backbone,
+                    task_type,
+                    training_run_id,
+                    snapshot_id,
+                    artifact_path,
+                    metrics_json,
+                    metadata_json,
+                    created_by,
+                    is_promoted,
+                    promoted_at,
+                    promoted_by,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?)
+                ON CONFLICT(model_id) DO UPDATE SET
+                    model_version = excluded.model_version,
+                    model_backbone = excluded.model_backbone,
+                    task_type = excluded.task_type,
+                    training_run_id = excluded.training_run_id,
+                    snapshot_id = excluded.snapshot_id,
+                    artifact_path = excluded.artifact_path,
+                    metrics_json = excluded.metrics_json,
+                    metadata_json = excluded.metadata_json,
+                    created_by = excluded.created_by,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    job.model_id,
+                    job.model_version,
+                    job.model_backbone,
+                    job.task_type,
+                    run_id,
+                    job.snapshot_id,
+                    artifact_path,
+                    json.dumps(metrics or {}, ensure_ascii=False),
+                    json.dumps(metadata or {}, ensure_ascii=False),
+                    job.requested_by,
+                    now,
+                    now,
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE training_jobs
+                SET status = 'completed',
+                    claim_expires_at = NULL,
+                    last_heartbeat_at = ?,
+                    error_message = NULL,
+                    run_id = ?,
+                    updated_at = ?
+                WHERE job_id = ?
+                """,
+                (now, run_id, now, job_id),
+            )
+            job_row = connection.execute(
+                "SELECT * FROM training_jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+            run_row = connection.execute(
+                "SELECT * FROM training_runs WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            model_row = connection.execute(
+                "SELECT * FROM model_registry WHERE model_id = ?",
+                (job.model_id,),
+            ).fetchone()
+            connection.commit()
+        if job_row is None or run_row is None or model_row is None:
+            return None
+        return (
+            self._row_to_training_job(job_row),
+            self._row_to_training_run(run_row),
+            self._row_to_registered_model(model_row),
+        )
+
+    def list_training_runs(self, *, limit: int = 100) -> list[TrainingRunRecord]:
+        normalized_limit = max(1, min(int(limit), 500))
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM training_runs
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                (normalized_limit,),
+            ).fetchall()
+        return [self._row_to_training_run(row) for row in rows]
+
+    def list_registered_models(self, *, task_type: str | None = None, limit: int = 100) -> list[RegisteredModelRecord]:
+        normalized_limit = max(1, min(int(limit), 500))
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            if task_type:
+                rows = connection.execute(
+                    """
+                    SELECT *
+                    FROM model_registry
+                    WHERE task_type = ?
+                    ORDER BY is_promoted DESC, created_at DESC, rowid DESC
+                    LIMIT ?
+                    """,
+                    (task_type, normalized_limit),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT *
+                    FROM model_registry
+                    ORDER BY is_promoted DESC, created_at DESC, rowid DESC
+                    LIMIT ?
+                    """,
+                    (normalized_limit,),
+                ).fetchall()
+        return [self._row_to_registered_model(row) for row in rows]
+
+    def get_registered_model(self, model_id: str) -> RegisteredModelRecord | None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            row = connection.execute(
+                "SELECT * FROM model_registry WHERE model_id = ?",
+                (model_id,),
+            ).fetchone()
+        return self._row_to_registered_model(row) if row is not None else None
+
+    def get_promoted_model(self, *, task_type: str) -> RegisteredModelRecord | None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            row = connection.execute(
+                """
+                SELECT *
+                FROM model_registry
+                WHERE task_type = ?
+                  AND is_promoted = 1
+                ORDER BY promoted_at DESC, updated_at DESC, rowid DESC
+                LIMIT 1
+                """,
+                (task_type,),
+            ).fetchone()
+        return self._row_to_registered_model(row) if row is not None else None
+
+    def promote_registered_model(self, *, model_id: str, promoted_by: str) -> RegisteredModelRecord | None:
+        now = _utc_now_iso()
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            row = connection.execute(
+                "SELECT * FROM model_registry WHERE model_id = ?",
+                (model_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            model = self._row_to_registered_model(row)
+            connection.execute(
+                """
+                UPDATE model_registry
+                SET is_promoted = 0,
+                    updated_at = ?
+                WHERE task_type = ?
+                """,
+                (now, model.task_type),
+            )
+            connection.execute(
+                """
+                UPDATE model_registry
+                SET is_promoted = 1,
+                    promoted_at = ?,
+                    promoted_by = ?,
+                    updated_at = ?
+                WHERE model_id = ?
+                """,
+                (now, promoted_by, now, model_id),
+            )
+            updated_row = connection.execute(
+                "SELECT * FROM model_registry WHERE model_id = ?",
+                (model_id,),
+            ).fetchone()
+            connection.commit()
+        return self._row_to_registered_model(updated_row) if updated_row is not None else None
 
     def try_claim_task(self, task_id: str, client_id: str, expires_at: str, now_iso: str) -> bool:
         with self._connect() as connection:

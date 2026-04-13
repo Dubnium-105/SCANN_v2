@@ -24,6 +24,7 @@
               >
                 {{ formatPrelabelStatus(activeTask.prelabel_status) }}
                 <span v-if="activeTask?.prelabel_model_version" class="text-slate-400">· {{ activeTask.prelabel_model_version }}</span>
+                <span v-if="activeTask?.prelabel_model_backbone" class="text-slate-500">· {{ activeTask.prelabel_model_backbone }}</span>
               </p>
               <p
                 v-if="taskLockNotice"
@@ -715,6 +716,13 @@
                 >
                   {{ formatPrelabelStatus(activePrelabel.status) }} · {{ activePrelabel.box_count }} 框
                   <span v-if="activePrelabel.model_version" class="text-slate-400">· {{ activePrelabel.model_version }}</span>
+                  <span v-if="activePrelabel.model_backbone" class="text-slate-500">· {{ activePrelabel.model_backbone }}</span>
+                </p>
+                <p
+                  v-if="activePrelabel.model_id"
+                  class="text-[10px] text-slate-500 break-all"
+                >
+                  模型 ID：{{ activePrelabel.model_id }}
                 </p>
                 <p class="text-[10px] text-slate-400">
                   当前已导入 {{ appliedCurrentPrelabelCount }} 框，画布蓝色虚线为 AI 草稿叠层。
@@ -744,8 +752,12 @@
                 class="text-[10px] text-slate-500"
               >
                 当前任务没有可用的 AI 草稿。
-                <span v-if="activeTask?.prelabel_model_version">
-                  最近模型：{{ activeTask.prelabel_model_version }}
+                <span v-if="activeTask?.prelabel_model_version || activeTask?.prelabel_model_backbone">
+                  最近模型：{{ activeTask.prelabel_model_version || '--' }}
+                  <span v-if="activeTask?.prelabel_model_backbone"> / {{ activeTask.prelabel_model_backbone }}</span>
+                </span>
+                <span v-if="activeTask?.prelabel_model_id" class="block break-all">
+                  最近模型 ID：{{ activeTask.prelabel_model_id }}
                 </span>
               </p>
               <p
@@ -1824,12 +1836,16 @@ async function loadTaskPrelabel(taskId) {
       origin: 'prelabel_overlay',
       source_prelabel_id: detail.prelabel_id,
       source_model_version: detail.model_version,
+      source_model_id: detail.model_id,
+      source_model_backbone: detail.model_backbone,
     }))
     if (activeTask.value?.task_id === taskId) {
       activeTask.value = {
         ...activeTask.value,
         prelabel_status: detail.status,
         prelabel_model_version: detail.model_version,
+        prelabel_model_id: detail.model_id,
+        prelabel_model_backbone: detail.model_backbone,
         prelabel_box_count: detail.box_count,
         prelabel_updated_at: detail.updated_at,
       }
@@ -2162,6 +2178,8 @@ function buildAnnotationPayload(bboxAnnotations) {
     metadata.applied_prelabel = {
       prelabel_id: activePrelabel.value.prelabel_id,
       model_version: activePrelabel.value.model_version,
+      model_id: activePrelabel.value.model_id,
+      model_backbone: activePrelabel.value.model_backbone,
       imported_annotation_count: appliedCurrentPrelabelCount.value,
     }
   }
@@ -2364,6 +2382,8 @@ function createAnnotationFromPrelabel(annotation, offset) {
     origin: 'prelabel',
     source_prelabel_id: activePrelabel.value?.prelabel_id || null,
     source_model_version: activePrelabel.value?.model_version || null,
+    source_model_id: activePrelabel.value?.model_id || null,
+    source_model_backbone: activePrelabel.value?.model_backbone || null,
   }
 }
 
@@ -2396,6 +2416,8 @@ async function regenerateActivePrelabel() {
   try {
     const result = await enqueueTaskPrelabel(taskId, {
       modelVersion,
+      modelId: String(activePrelabel.value?.model_id || activeTask.value?.prelabel_model_id || '').trim(),
+      modelBackbone: String(activePrelabel.value?.model_backbone || activeTask.value?.prelabel_model_backbone || '').trim(),
       force: true,
     })
     await refreshTaskList()

@@ -22,6 +22,8 @@ function formatErrorDetail(detail) {
 export async function enqueueTaskPrelabel(taskId, options = {}, fetchImpl = authFetch) {
   const normalizedTaskId = String(taskId || '').trim()
   const modelVersion = String(options.modelVersion || '').trim()
+  const modelId = String(options.modelId || '').trim()
+  const modelBackbone = String(options.modelBackbone || '').trim()
   if (!normalizedTaskId) {
     throw new Error('任务不存在，无法重新生成 AI 草稿')
   }
@@ -36,6 +38,8 @@ export async function enqueueTaskPrelabel(taskId, options = {}, fetchImpl = auth
     },
     body: JSON.stringify({
       model_version: modelVersion,
+      model_id: modelId || null,
+      model_backbone: modelBackbone || null,
       task_ids: [normalizedTaskId],
       priority: Number.isFinite(Number(options.priority)) ? Number(options.priority) : 100,
       force: options.force !== false,
