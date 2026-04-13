@@ -1,8 +1,35 @@
 import { authFetch } from './authStore'
 
+function formatValidationDetail(detail) {
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        if (!item || typeof item !== 'object') {
+          return ''
+        }
+        const location = Array.isArray(item.loc) ? item.loc.join('.') : ''
+        const message = typeof item.msg === 'string' ? item.msg : ''
+        return location ? `${location}: ${message}` : message
+      })
+      .filter(Boolean)
+      .join('; ')
+  }
+  if (typeof detail === 'string') {
+    return detail
+  }
+  return ''
+}
+
 async function readErrorMessage(response, fallback) {
   try {
     const payload = await response.json()
+    const validationDetail = formatValidationDetail(payload?.detail)
+    if (validationDetail) {
+      if (response.status === 422) {
+        return `请求格式无效: ${validationDetail}`
+      }
+      return validationDetail
+    }
     if (typeof payload?.detail === 'string' && payload.detail.trim()) {
       return payload.detail.trim()
     }
