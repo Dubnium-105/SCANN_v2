@@ -140,7 +140,7 @@ class WorkerConsoleDialog(QDialog):
         self.tabs.addTab(self._build_training_tab(), "训练 Worker")
         layout.addWidget(self.tabs)
 
-    def _build_prelabel_tab(self) -> QWidget:
+    def _build_prelabel_tab_legacy(self) -> QWidget:
         tab = QWidget()
         outer = QVBoxLayout(tab)
 
@@ -207,7 +207,7 @@ class WorkerConsoleDialog(QDialog):
 
         return tab
 
-    def _build_training_tab(self) -> QWidget:
+    def _build_training_tab_legacy(self) -> QWidget:
         tab = QWidget()
         outer = QVBoxLayout(tab)
 
@@ -282,6 +282,338 @@ class WorkerConsoleDialog(QDialog):
             button.clicked.connect(lambda: self._browse_file(target))
         layout.addWidget(button)
         return row
+
+    def _build_prelabel_tab(self) -> QWidget:
+        tab = QWidget()
+        outer = QVBoxLayout(tab)
+
+        form_group = QGroupBox("\u8fd0\u884c\u914d\u7f6e")
+        form = QFormLayout(form_group)
+
+        self.edit_prelabel_server_url = QLineEdit()
+        self.edit_prelabel_token = QLineEdit()
+        self.edit_prelabel_token.setEchoMode(QLineEdit.Password)
+        self.edit_prelabel_worker_id = QLineEdit()
+        self.edit_prelabel_display_name = QLineEdit()
+        self.edit_prelabel_device_label = QLineEdit()
+        self.edit_prelabel_dataset_root = QLineEdit()
+        self.edit_prelabel_config_path = QLineEdit()
+        self.edit_prelabel_model_path = QLineEdit()
+        self.edit_prelabel_model_version = QLineEdit()
+        self.edit_prelabel_model_id = QLineEdit()
+        self.edit_prelabel_model_backbone = QLineEdit()
+        self.edit_prelabel_compute_device = QLineEdit()
+        self.edit_prelabel_idle_seconds = QLineEdit("5")
+        self.edit_prelabel_heartbeat_seconds = QLineEdit("30")
+        self.edit_prelabel_timeout_seconds = QLineEdit("60")
+
+        self._add_help_row(
+            form,
+            "\u670d\u52a1\u5668 URL",
+            self.edit_prelabel_server_url,
+            "\u586b\u5199\u6807\u6ce8\u5e73\u53f0\u540e\u7aef\u5730\u5740\uff0c\u4f8b\u5982 http://192.168.1.10:8000\u3002",
+            placeholder="http://127.0.0.1:8000",
+        )
+        self._add_help_row(
+            form,
+            "Worker Token",
+            self.edit_prelabel_token,
+            "\u4f7f\u7528\u540e\u7aef\u4e3a\u9884\u6807\u6ce8 worker \u7b7e\u53d1\u7684\u4e13\u7528 token\uff0c\u4e0d\u8981\u586b\u5199\u4eba\u5de5\u6807\u6ce8\u8d26\u53f7\u7684\u767b\u5f55 token\u3002",
+        )
+        self._add_help_row(
+            form,
+            "Worker ID",
+            self.edit_prelabel_worker_id,
+            "\u4fdd\u6301\u957f\u671f\u7a33\u5b9a\u7684\u552f\u4e00\u6807\u8bc6\uff0c\u7528\u4e8e\u961f\u5217\u9886\u53d6\u3001\u65e5\u5fd7\u8ffd\u8e2a\u548c\u65ad\u7ebf\u6062\u590d\u3002",
+            placeholder="gpu-prelabel-1",
+        )
+        self._add_help_row(
+            form,
+            "\u663e\u793a\u540d\u79f0",
+            self.edit_prelabel_display_name,
+            "\u7528\u4e8e Web \u7ba1\u7406\u7aef\u548c\u65e5\u5fd7\u4e2d\u5c55\u793a\u7684\u53ef\u8bfb\u540d\u79f0\uff0c\u53ef\u4ee5\u586b\u5199 GPU \u673a\u5668\u540d\u6216\u90e8\u7f72\u4f4d\u7f6e\u3002",
+            placeholder="Office RTX 4090",
+        )
+        self._add_help_row(
+            form,
+            "\u8bbe\u5907\u6807\u7b7e",
+            self.edit_prelabel_device_label,
+            "\u586b\u5199\u7ed9\u8fd9\u53f0 worker \u7684\u786c\u4ef6\u8bf4\u660e\uff0c\u4f8b\u5982 RTX-4090 / CUDA12\uff0c\u65b9\u4fbf\u8fd0\u7ef4\u6392\u67e5\u3002",
+            placeholder="RTX-4090",
+        )
+        self._add_help_row(
+            form,
+            "\u6570\u636e\u96c6\u6839\u76ee\u5f55",
+            self._path_row(self.edit_prelabel_dataset_root, directory=True),
+            "\u586b\u5199\u672c\u5730 worker \u80fd\u8bfb\u5230\u7684\u6570\u636e\u96c6\u6839\u76ee\u5f55\u3002\u5982\u679c\u4f7f\u7528\u5171\u4eab\u76d8\uff0c\u8fd9\u91cc\u8981\u586b\u6302\u8f7d\u540e\u7684\u672c\u5730\u8def\u5f84\u3002",
+            placeholder="G:/datasets/scann",
+        )
+        self._add_help_row(
+            form,
+            "\u672c\u5730\u914d\u7f6e\u6587\u4ef6",
+            self._path_row(self.edit_prelabel_config_path, open_file=True),
+            "\u53ef\u9009\u3002\u7528\u6765\u52a0\u8f7d\u9608\u503c\u3001patch \u5927\u5c0f\u3001\u6a21\u578b\u683c\u5f0f\u7b49\u63a8\u7406\u53c2\u6570\uff0c\u4e0d\u586b\u65f6\u4f7f\u7528\u7a0b\u5e8f\u9ed8\u8ba4\u503c\u3002",
+            placeholder="config.yaml",
+        )
+        self._add_help_row(
+            form,
+            "\u6a21\u578b\u8def\u5f84",
+            self._path_row(self.edit_prelabel_model_path, open_file=True),
+            "\u586b\u5199\u672c\u5730 GPU \u673a\u5668\u4e0a\u7684 checkpoint \u6216\u5bfc\u51fa\u6a21\u578b\u6587\u4ef6\u8def\u5f84\u3002worker \u5b9e\u9645\u4ece\u8fd9\u91cc\u52a0\u8f7d\u9884\u6807\u6ce8\u6a21\u578b\u3002",
+            placeholder="model-best.pth",
+        )
+        self._add_help_row(
+            form,
+            "\u6a21\u578b\u7248\u672c",
+            self.edit_prelabel_model_version,
+            "\u8868\u793a\u9884\u6807\u6ce8\u7528\u7684\u903b\u8f91\u7248\u672c\uff0c\u7528\u4e8e\u5de5\u5355\u5339\u914d\u3001\u56de\u6eaf\u548c\u91cd\u751f\u6210\u3002",
+            placeholder="detector-v3",
+        )
+        self._add_help_row(
+            form,
+            "\u6a21\u578b ID",
+            self.edit_prelabel_model_id,
+            "\u586b\u5199\u6a21\u578b\u6ce8\u518c\u8868\u6216\u8bad\u7ec3 run \u7684\u552f\u4e00 ID\uff0c\u7528\u4e8e\u7cbe\u786e\u533a\u5206\u540c\u7248\u672c\u4e0b\u7684\u4e0d\u540c checkpoint\u3002",
+            placeholder="detector-v3-run-001",
+        )
+        self._add_help_row(
+            form,
+            "\u6a21\u578b\u9aa8\u5e72",
+            self.edit_prelabel_model_backbone,
+            "\u586b\u5199\u6a21\u578b\u7684 backbone \u540d\u79f0\uff0c\u4f8b\u5982 ViT_B_16\u3001ResNet18\uff0c\u7528\u4e8e\u80fd\u529b\u5339\u914d\u548c\u4e0a\u7ebf\u8bb0\u5f55\u3002",
+            placeholder="ViT_B_16",
+        )
+        self._add_help_row(
+            form,
+            "\u63a8\u7406\u8bbe\u5907",
+            self.edit_prelabel_compute_device,
+            "\u586b\u5199 auto\u3001cuda\u3001cuda:0 \u6216 cpu\u3002\u591a GPU \u673a\u5668\u53ef\u4ee5\u6307\u5b9a\u5230\u5355\u5361\u3002",
+            placeholder="cuda:0",
+        )
+        self._add_help_row(
+            form,
+            "\u7a7a\u95f2\u8f6e\u8be2\u79d2\u6570",
+            self.edit_prelabel_idle_seconds,
+            "\u961f\u5217\u6682\u65f6\u6ca1\u6709\u4efb\u52a1\u65f6\uff0cworker \u6bcf\u9694\u591a\u4e45\u518d\u53bb claim \u4e00\u6b21\u3002",
+            placeholder="5",
+        )
+        self._add_help_row(
+            form,
+            "\u5fc3\u8df3\u79d2\u6570",
+            self.edit_prelabel_heartbeat_seconds,
+            "\u8fd0\u884c\u4efb\u52a1\u65f6\u5411\u670d\u52a1\u5668\u62a5\u6d3b\u7684\u95f4\u9694\u3002\u4e00\u822c\u5e94\u5c0f\u4e8e\u540e\u7aef\u7684 stale \u8d85\u65f6\u9608\u503c\u3002",
+            placeholder="30",
+        )
+        self._add_help_row(
+            form,
+            "\u8bf7\u6c42\u8d85\u65f6\u79d2\u6570",
+            self.edit_prelabel_timeout_seconds,
+            "\u5355\u6b21 HTTP \u8bf7\u6c42\u7684\u8d85\u65f6\u65f6\u95f4\u3002\u670d\u52a1\u5668\u6216\u5171\u4eab\u5b58\u50a8\u8f83\u6162\u65f6\u53ef\u4ee5\u9002\u5f53\u8c03\u5927\u3002",
+            placeholder="60",
+        )
+        outer.addWidget(form_group)
+
+        status_row = QHBoxLayout()
+        self.lbl_prelabel_status = QLabel("\u72b6\u6001\uff1a\u672a\u542f\u52a8")
+        self.lbl_prelabel_processed = QLabel("\u5df2\u5904\u7406\uff1a0")
+        status_row.addWidget(self.lbl_prelabel_status)
+        status_row.addStretch()
+        status_row.addWidget(self.lbl_prelabel_processed)
+        outer.addLayout(status_row)
+
+        self.log_prelabel = QPlainTextEdit()
+        self.log_prelabel.setReadOnly(True)
+        self.log_prelabel.setStyleSheet("font-family: Consolas, monospace; font-size: 11px;")
+        outer.addWidget(self.log_prelabel, 1)
+
+        button_row = QHBoxLayout()
+        self.btn_prelabel_start = QPushButton("\u542f\u52a8\u9884\u6807\u6ce8 Worker")
+        self.btn_prelabel_stop = QPushButton("\u505c\u6b62")
+        self.btn_prelabel_stop.setEnabled(False)
+        self.btn_prelabel_start.clicked.connect(self._start_prelabel_worker)
+        self.btn_prelabel_stop.clicked.connect(self._stop_prelabel_worker)
+        button_row.addWidget(self.btn_prelabel_start)
+        button_row.addWidget(self.btn_prelabel_stop)
+        button_row.addStretch()
+        outer.addLayout(button_row)
+
+        return tab
+
+    def _build_training_tab(self) -> QWidget:
+        tab = QWidget()
+        outer = QVBoxLayout(tab)
+
+        form_group = QGroupBox("\u8fd0\u884c\u914d\u7f6e")
+        form = QFormLayout(form_group)
+
+        self.edit_training_server_url = QLineEdit()
+        self.edit_training_token = QLineEdit()
+        self.edit_training_token.setEchoMode(QLineEdit.Password)
+        self.edit_training_worker_id = QLineEdit()
+        self.edit_training_display_name = QLineEdit()
+        self.edit_training_device_label = QLineEdit()
+        self.edit_training_dataset_root = QLineEdit()
+        self.edit_training_output_root = QLineEdit()
+        self.edit_training_task_types = QLineEdit("classification")
+        self.edit_training_model_backbones = QLineEdit("ViT_B_16,ResNet18")
+        self.edit_training_device = QLineEdit("auto")
+        self.edit_training_idle_seconds = QLineEdit("10")
+        self.edit_training_heartbeat_seconds = QLineEdit("60")
+        self.edit_training_timeout_seconds = QLineEdit("120")
+
+        self._add_help_row(
+            form,
+            "\u670d\u52a1\u5668 URL",
+            self.edit_training_server_url,
+            "\u586b\u5199\u8bad\u7ec3\u95ed\u73af\u540e\u7aef\u5730\u5740\uff0c\u901a\u5e38\u548c\u9884\u6807\u6ce8 worker \u4f7f\u7528\u540c\u4e00\u4e2a API \u670d\u52a1\u3002",
+            placeholder="http://127.0.0.1:8000",
+        )
+        self._add_help_row(
+            form,
+            "Worker Token",
+            self.edit_training_token,
+            "\u4f7f\u7528\u540e\u7aef\u4e3a\u8bad\u7ec3 worker \u7b7e\u53d1\u7684 token\uff0c\u4fbf\u4e8e\u5355\u72ec\u63a7\u5236\u8bad\u7ec3\u6743\u9650\u548c\u8ba1\u8d39\u98ce\u9669\u3002",
+        )
+        self._add_help_row(
+            form,
+            "Worker ID",
+            self.edit_training_worker_id,
+            "\u4fdd\u6301\u7a33\u5b9a\u7684\u8bad\u7ec3\u8282\u70b9 ID\uff0c\u7528\u4e8e\u8bad\u7ec3 job claim\u3001\u5fc3\u8df3\u548c\u8fd0\u884c\u8bb0\u5f55\u5173\u8054\u3002",
+            placeholder="gpu-trainer-1",
+        )
+        self._add_help_row(
+            form,
+            "\u663e\u793a\u540d\u79f0",
+            self.edit_training_display_name,
+            "\u7528\u4e8e\u7ba1\u7406\u7aef\u548c\u65e5\u5fd7\u4e2d\u663e\u793a\u7684\u53cb\u597d\u540d\u79f0\uff0c\u4f8b\u5982\u673a\u5668\u540d\u6216\u90e8\u7f72\u6240\u5728\u5730\u3002",
+            placeholder="Lab Trainer A6000",
+        )
+        self._add_help_row(
+            form,
+            "\u8bbe\u5907\u6807\u7b7e",
+            self.edit_training_device_label,
+            "\u5199\u660e\u8fd9\u53f0\u8bad\u7ec3\u8282\u70b9\u7684\u4e3b\u8981\u786c\u4ef6\uff0c\u4f8b\u5982 RTX-A6000 / 48GB\uff0c\u65b9\u4fbf\u8c03\u5ea6\u548c\u6392\u969c\u3002",
+            placeholder="RTX-A6000",
+        )
+        self._add_help_row(
+            form,
+            "\u6570\u636e\u96c6\u6839\u76ee\u5f55",
+            self._path_row(self.edit_training_dataset_root, directory=True),
+            "\u8bad\u7ec3 worker \u5728\u672c\u5730\u770b\u5230\u7684\u6570\u636e\u96c6\u6839\u76ee\u5f55\u3002\u5feb\u7167\u5bfc\u51fa\u7684\u6807\u6ce8\u6587\u6863\u4e5f\u4f1a\u76f8\u5bf9\u5230\u8fd9\u4e2a\u76ee\u5f55\u89e3\u6790\u3002",
+            placeholder="G:/datasets/scann",
+        )
+        self._add_help_row(
+            form,
+            "\u8f93\u51fa\u76ee\u5f55",
+            self._path_row(self.edit_training_output_root, directory=True),
+            "\u7528\u6765\u5b58\u653e checkpoint\u3001\u65e5\u5fd7\u3001\u4e2d\u95f4\u5feb\u7167\u548c\u5bfc\u51fa\u7ed3\u679c\u3002\u5efa\u8bae\u4f7f\u7528\u5269\u4f59\u7a7a\u95f4\u5145\u8db3\u7684\u76d8\u7b26\u3002",
+            placeholder="G:/.scann_worker_output",
+        )
+        self._add_help_row(
+            form,
+            "\u4efb\u52a1\u7c7b\u578b",
+            self.edit_training_task_types,
+            "\u7528\u82f1\u6587\u9017\u53f7\u5206\u9694\u586b\u5199 worker \u652f\u6301\u7684\u8bad\u7ec3\u4efb\u52a1\uff0c\u4f8b\u5982 classification,detection\u3002",
+            placeholder="classification,detection",
+        )
+        self._add_help_row(
+            form,
+            "\u652f\u6301\u9aa8\u5e72",
+            self.edit_training_model_backbones,
+            "\u7528\u82f1\u6587\u9017\u53f7\u586b\u5199\u53ef\u8bad\u7ec3\u7684 backbone \u5217\u8868\uff0c\u670d\u52a1\u5668\u4f1a\u636e\u6b64\u5339\u914d\u5408\u9002\u7684\u8bad\u7ec3 job\u3002",
+            placeholder="ViT_B_16,ResNet18",
+        )
+        self._add_help_row(
+            form,
+            "\u8bad\u7ec3\u8bbe\u5907",
+            self.edit_training_device,
+            "\u586b\u5199 auto\u3001cuda\u3001cuda:0 \u6216 cpu\u3002\u5982\u679c\u4f60\u60f3\u8ba9\u8bad\u7ec3\u548c\u9884\u6807\u6ce8\u5360\u7528\u4e0d\u540c GPU\uff0c\u53ef\u5728\u8fd9\u91cc\u5355\u72ec\u6307\u5b9a\u3002",
+            placeholder="cuda:0",
+        )
+        self._add_help_row(
+            form,
+            "\u7a7a\u95f2\u8f6e\u8be2\u79d2\u6570",
+            self.edit_training_idle_seconds,
+            "\u5f53\u6ca1\u6709\u8bad\u7ec3 job \u65f6\uff0cworker \u591a\u4e45\u5411\u670d\u52a1\u5668\u8bf7\u6c42\u4e00\u6b21\u65b0\u4efb\u52a1\u3002",
+            placeholder="10",
+        )
+        self._add_help_row(
+            form,
+            "\u5fc3\u8df3\u79d2\u6570",
+            self.edit_training_heartbeat_seconds,
+            "\u8bad\u7ec3\u8fc7\u7a0b\u4e2d\u4e0a\u62a5\u5b58\u6d3b\u72b6\u6001\u7684\u95f4\u9694\u3002\u957f\u8bad\u7ec3\u4efb\u52a1\u5efa\u8bae\u7565\u5c0f\u4e8e\u670d\u52a1\u5668\u56de\u6536\u8d85\u65f6\u3002",
+            placeholder="60",
+        )
+        self._add_help_row(
+            form,
+            "\u8bf7\u6c42\u8d85\u65f6\u79d2\u6570",
+            self.edit_training_timeout_seconds,
+            "\u8bad\u7ec3 worker \u4e0e\u540e\u7aef\u901a\u4fe1\u7684 HTTP \u8d85\u65f6\u3002\u5982\u679c\u5feb\u7167\u6216\u6a21\u578b\u4e0a\u4f20\u8f83\u5927\uff0c\u53ef\u4ee5\u76f8\u5e94\u589e\u5927\u3002",
+            placeholder="120",
+        )
+        outer.addWidget(form_group)
+
+        status_row = QHBoxLayout()
+        self.lbl_training_status = QLabel("\u72b6\u6001\uff1a\u672a\u542f\u52a8")
+        self.lbl_training_processed = QLabel("\u5df2\u5904\u7406\uff1a0")
+        status_row.addWidget(self.lbl_training_status)
+        status_row.addStretch()
+        status_row.addWidget(self.lbl_training_processed)
+        outer.addLayout(status_row)
+
+        self.log_training = QPlainTextEdit()
+        self.log_training.setReadOnly(True)
+        self.log_training.setStyleSheet("font-family: Consolas, monospace; font-size: 11px;")
+        outer.addWidget(self.log_training, 1)
+
+        button_row = QHBoxLayout()
+        self.btn_training_start = QPushButton("\u542f\u52a8\u8bad\u7ec3 Worker")
+        self.btn_training_stop = QPushButton("\u505c\u6b62")
+        self.btn_training_stop.setEnabled(False)
+        self.btn_training_start.clicked.connect(self._start_training_worker)
+        self.btn_training_stop.clicked.connect(self._stop_training_worker)
+        button_row.addWidget(self.btn_training_start)
+        button_row.addWidget(self.btn_training_stop)
+        button_row.addStretch()
+        outer.addLayout(button_row)
+
+        return tab
+
+    def _add_help_row(
+        self,
+        form: QFormLayout,
+        label: str,
+        control: QWidget,
+        help_text: str,
+        *,
+        placeholder: str | None = None,
+    ) -> None:
+        if placeholder:
+            for line_edit in [control, *control.findChildren(QLineEdit)]:
+                if isinstance(line_edit, QLineEdit) and not line_edit.placeholderText():
+                    line_edit.setPlaceholderText(placeholder)
+
+        self._apply_help_text(control, help_text)
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        layout.addWidget(control)
+
+        hint = QLabel(help_text)
+        hint.setObjectName("fieldHelpLabel")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #666; font-size: 11px;")
+        self._apply_help_text(hint, help_text)
+        layout.addWidget(hint)
+
+        form.addRow(label, container)
+
+    def _apply_help_text(self, control: QWidget, help_text: str) -> None:
+        control.setToolTip(help_text)
+        for child in control.findChildren(QWidget):
+            child.setToolTip(help_text)
 
     def _load_defaults(self) -> None:
         host_name = socket.gethostname()

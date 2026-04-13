@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from PyQt5.QtWidgets import QLabel
 
 from scann.gui.dialogs.worker_console_dialog import WorkerConsoleDialog
 
@@ -16,6 +17,47 @@ def test_worker_console_dialog_has_two_tabs(dialog) -> None:
     assert dialog.tabs.count() == 2
     assert dialog.tabs.tabText(0) == "预标注 Worker"
     assert dialog.tabs.tabText(1) == "训练 Worker"
+
+
+def test_worker_console_dialog_adds_help_for_all_editable_rows(dialog) -> None:
+    fields = [
+        dialog.edit_prelabel_server_url,
+        dialog.edit_prelabel_token,
+        dialog.edit_prelabel_worker_id,
+        dialog.edit_prelabel_display_name,
+        dialog.edit_prelabel_device_label,
+        dialog.edit_prelabel_dataset_root,
+        dialog.edit_prelabel_config_path,
+        dialog.edit_prelabel_model_path,
+        dialog.edit_prelabel_model_version,
+        dialog.edit_prelabel_model_id,
+        dialog.edit_prelabel_model_backbone,
+        dialog.edit_prelabel_compute_device,
+        dialog.edit_prelabel_idle_seconds,
+        dialog.edit_prelabel_heartbeat_seconds,
+        dialog.edit_prelabel_timeout_seconds,
+        dialog.edit_training_server_url,
+        dialog.edit_training_token,
+        dialog.edit_training_worker_id,
+        dialog.edit_training_display_name,
+        dialog.edit_training_device_label,
+        dialog.edit_training_dataset_root,
+        dialog.edit_training_output_root,
+        dialog.edit_training_task_types,
+        dialog.edit_training_model_backbones,
+        dialog.edit_training_device,
+        dialog.edit_training_idle_seconds,
+        dialog.edit_training_heartbeat_seconds,
+        dialog.edit_training_timeout_seconds,
+    ]
+
+    for field in fields:
+        assert field.toolTip()
+
+    help_labels = [label for label in dialog.findChildren(QLabel) if label.objectName() == "fieldHelpLabel"]
+    assert len(help_labels) == len(fields)
+    assert any("\u6807\u6ce8\u5e73\u53f0\u540e\u7aef\u5730\u5740" in label.text() for label in help_labels)
+    assert any("\u53ef\u8bad\u7ec3\u7684 backbone" in label.text() for label in help_labels)
 
 
 def test_build_prelabel_config_uses_ui_fields_and_config_defaults(dialog, config_file: Path) -> None:
