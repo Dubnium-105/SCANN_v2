@@ -63,6 +63,7 @@
         <label class="grid gap-1">
           <span class="text-[11px] text-slate-500">鏁伴噺闄愬埗</span>
           <input
+            ref="prelabelCandidateLimitInputRef"
             v-model="modelForm.candidateLimit"
             data-testid="prelabel-candidate-limit"
             type="number"
@@ -75,6 +76,7 @@
         <label class="grid gap-1">
           <span class="text-[11px] text-slate-500">缃俊搴﹂槇鍊?</span>
           <input
+            ref="prelabelConfidenceThresholdInputRef"
             v-model="modelForm.confidenceThreshold"
             data-testid="prelabel-confidence-threshold"
             type="number"
@@ -312,7 +314,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 
 import { cancelPrelabelJobs, enqueuePrelabels, fetchPrelabelJobs, fetchPrelabelWorkers } from '../services/prelabelApi'
 import { fetchTasks } from '../services/taskApi'
@@ -343,12 +345,32 @@ const workers = ref([])
 const selectedTaskIds = ref([])
 const forceEnqueue = ref(true)
 const cancelClaimedToo = ref(true)
+const prelabelCandidateLimitInputRef = ref(null)
+const prelabelConfidenceThresholdInputRef = ref(null)
 const modelForm = ref({
   modelVersion: '',
   modelId: '',
   modelBackbone: '',
   candidateLimit: '',
   confidenceThreshold: '',
+})
+
+function repairGarbledFieldLabels() {
+  const mappings = [
+    [prelabelCandidateLimitInputRef.value, 'Candidate Limit'],
+    [prelabelConfidenceThresholdInputRef.value, 'Confidence Threshold'],
+  ]
+  mappings.forEach(([inputEl, text]) => {
+    const labelEl = inputEl?.closest?.('label')
+    const labelTextEl = labelEl?.querySelector?.('span')
+    if (labelTextEl) {
+      labelTextEl.textContent = text
+    }
+  })
+}
+
+onMounted(() => {
+  repairGarbledFieldLabels()
 })
 
 const activeTask = computed(() => taskList.value.find((task) => task.task_id === props.activeTaskId) || null)

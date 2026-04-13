@@ -362,7 +362,7 @@ describe('CanvasPanel', () => {
     expect(rects.length).toBeGreaterThanOrEqual(1)
   })
 
-  it('loads AI prelabel summary and can apply/remove AI draft boxes', async () => {
+  it.skip('loads AI prelabel summary and can apply/remove AI draft boxes', async () => {
     fetchCalls = mockImageFetch({}, {
       prelabels: {
         'PGC 17069': createPrelabel('PGC 17069'),
@@ -391,6 +391,47 @@ describe('CanvasPanel', () => {
 
     expect(wrapper.findAll('[data-testid="annotation-item"]')).toHaveLength(0)
     expect(wrapper.get('[data-testid="prelabel-message"]').text()).toContain('已移除 1 个 AI 导入框')
+    expect(fetchCalls.some((item) => String(item.url).startsWith('/api/prelabels/PGC%2017069'))).toBe(true)
+  })
+
+  it('reviews AI prelabel boxes before importing them into manual annotations', async () => {
+    fetchCalls = mockImageFetch({}, {
+      prelabels: {
+        'PGC 17069': createPrelabel('PGC 17069'),
+      },
+    })
+
+    const wrapper = mount(CanvasPanel, {
+      global: {
+        stubs: globalStubs,
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="annotation-item"]')).toHaveLength(0)
+
+    await wrapper.get('[data-testid="apply-prelabel"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="prelabel-review-panel"]').exists()).toBe(true)
+    expect(wrapper.findAll('[data-testid="prelabel-review-item"]')).toHaveLength(1)
+
+    await wrapper.get('[data-testid="prelabel-review-item"]').trigger('click')
+    await wrapper.get('[data-testid="prelabel-review-label-select"]').setValue('real:asteroid')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="confirm-prelabel-review"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="annotation-item"]')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="annotation-label-select"]').element.value).toBe('real:asteroid')
+    expect(wrapper.get('[data-testid="prelabel-message"]').text()).toContain('AI')
+
+    await wrapper.get('[data-testid="remove-applied-prelabel"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="annotation-item"]')).toHaveLength(0)
     expect(fetchCalls.some((item) => String(item.url).startsWith('/api/prelabels/PGC%2017069'))).toBe(true)
   })
 
@@ -430,6 +471,8 @@ describe('CanvasPanel', () => {
       model_version: 'detector-v1',
       model_id: 'model-20260413-001',
       model_backbone: 'ViT_B_16',
+      candidate_limit: null,
+      confidence_threshold: null,
       task_ids: ['PGC 17069'],
       priority: 100,
       force: true,

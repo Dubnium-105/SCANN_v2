@@ -314,8 +314,8 @@ class DetectionPrelabelProcessor:
                 y=float(top),
                 width=float(box_width),
                 height=float(box_height),
-                label=None,
-                detail_type=None,
+                label="real",
+                detail_type=(str(getattr(candidate, "detail_type", "")).strip() or None),
                 confidence=float(getattr(candidate, "ai_score", 0.0)),
             )
 
@@ -334,8 +334,8 @@ class DetectionPrelabelProcessor:
             y=float(top),
             width=float(max(1, box_width)),
             height=float(max(1, box_height)),
-            label=None,
-            detail_type=None,
+            label="real",
+            detail_type=(str(getattr(candidate, "detail_type", "")).strip() or None),
             confidence=float(getattr(candidate, "ai_score", 0.0)),
         )
 

@@ -734,7 +734,7 @@
                     :disabled="!activeTask || prelabelAnnotations.length === 0"
                     @click="applyActivePrelabel"
                   >
-                    应用 AI 草稿
+                    审核 AI 草稿
                   </button>
                   <button
                     data-testid="remove-applied-prelabel"
@@ -744,6 +744,94 @@
                   >
                     移除 AI 导入
                   </button>
+                </div>
+                <div
+                  v-if="prelabelReviewOpen"
+                  data-testid="prelabel-review-panel"
+                  class="mt-2 space-y-2 rounded border border-amber-900/50 bg-amber-950/20 p-2"
+                >
+                  <p class="text-[10px] text-amber-200">
+                    审批中的 AI 草稿：{{ prelabelReviewAnnotations.length }} 框。请先修改类型或删除，再确认导入。
+                  </p>
+                  <div
+                    data-testid="prelabel-review-list"
+                    class="max-h-28 space-y-1 overflow-auto rounded border border-amber-900/40 bg-slate-950/40 p-1"
+                  >
+                    <div
+                      v-for="item in prelabelReviewAnnotations"
+                      :key="item.id"
+                      class="flex items-center gap-2 rounded border px-2 py-1 text-[10px]"
+                      :class="selectedPrelabelReviewId === item.id ? 'border-amber-400 bg-amber-950/30 text-amber-100' : 'border-slate-800 text-slate-300'"
+                    >
+                      <button
+                        data-testid="prelabel-review-item"
+                        class="min-w-0 flex-1 text-left"
+                        @click="selectPrelabelReviewAnnotation(item.id)"
+                      >
+                        <span class="font-semibold">{{ item.display_id }}</span>
+                        <span class="ml-2">{{ item.label === 'Unlabeled' ? 'Unlabeled' : (item.detail_type ? `${item.label}:${item.detail_type}` : item.label) }}</span>
+                        <span v-if="Number.isFinite(Number(item.confidence))" class="ml-2 text-slate-500">
+                          {{ Number(item.confidence).toFixed(2) }}
+                        </span>
+                      </button>
+                      <button
+                        data-testid="prelabel-review-remove"
+                        class="rounded border border-rose-800 px-2 py-0.5 text-rose-300"
+                        @click="removePrelabelReviewAnnotation(item.id)"
+                      >
+                        删除
+                      </button>
+                    </div>
+                    <p v-if="prelabelReviewAnnotations.length === 0" class="px-1 py-1 text-[10px] text-slate-500">
+                      当前没有待审批的 AI 草稿框。
+                    </p>
+                  </div>
+                  <label class="text-[11px] text-slate-300 block">
+                    AI 草稿类型审批
+                    <select
+                      data-testid="prelabel-review-label-select"
+                      class="mt-1 w-full text-xs bg-slate-800 text-slate-200 border border-slate-700 rounded px-2 py-1"
+                      :disabled="!selectedPrelabelReviewId"
+                      :value="selectedPrelabelReviewLabel"
+                      @change="onSelectedPrelabelReviewLabelChange"
+                    >
+                      <option value="Unlabeled">Unlabeled (未标记)</option>
+                      <optgroup label="Real (真实目标)">
+                        <option value="real">Real (真实目标)</option>
+                        <option value="real:asteroid">Asteroid (小行星)</option>
+                        <option value="real:supernova">Supernova (超新星)</option>
+                        <option value="real:variable_star">Variable Star (变星)</option>
+                      </optgroup>
+                      <optgroup label="Bogus (伪目标)">
+                        <option value="bogus">Bogus (伪目标)</option>
+                        <option value="bogus:satellite_trail">Satellite Trail (卫星轨迹)</option>
+                        <option value="bogus:noise">Noise (噪声)</option>
+                        <option value="bogus:diffraction_spike">Diffraction Spike (衍射芒)</option>
+                        <option value="bogus:cmos_condensation">CMOS Condensation (CMOS结露)</option>
+                        <option value="bogus:corresponding">Corresponding (对应体)</option>
+                        <option value="bogus:disappeared_asteroid">Disappeared Asteroid (消失小行星)</option>
+                        <option value="bogus:disappeared_star">Disappeared Star (消失恒星)</option>
+                        <option value="bogus:disappeared_galaxy">Disappeared Galaxy (消失星系)</option>
+                      </optgroup>
+                    </select>
+                  </label>
+                  <div class="grid grid-cols-2 gap-2">
+                    <button
+                      data-testid="confirm-prelabel-review"
+                      class="text-xs px-2 py-1 rounded border border-emerald-700 text-emerald-200 disabled:opacity-50"
+                      :disabled="prelabelReviewAnnotations.length === 0"
+                      @click="confirmApprovedPrelabel"
+                    >
+                      确认导入审批结果
+                    </button>
+                    <button
+                      data-testid="cancel-prelabel-review"
+                      class="text-xs px-2 py-1 rounded border border-slate-700 text-slate-300"
+                      @click="cancelPrelabelReview"
+                    >
+                      取消审批
+                    </button>
+                  </div>
                 </div>
               </template>
               <p
@@ -851,11 +939,13 @@
               >
                 <option value="Unlabeled">Unlabeled (未标记)</option>
                 <optgroup label="Real (真实目标)">
+                  <option value="real">Real (真实目标)</option>
                   <option value="real:asteroid">Asteroid (小行星)</option>
                   <option value="real:supernova">Supernova (超新星)</option>
                   <option value="real:variable_star">Variable Star (变星)</option>
                 </optgroup>
                 <optgroup label="Bogus (伪目标)">
+                  <option value="bogus">Bogus (伪目标)</option>
                   <option value="bogus:satellite_trail">Satellite Trail (卫星轨迹)</option>
                   <option value="bogus:noise">Noise (噪声)</option>
                   <option value="bogus:diffraction_spike">Diffraction Spike (衍射芒)</option>
@@ -998,6 +1088,10 @@ const prelabelLoadState = ref('idle')
 const prelabelMessage = ref('')
 const prelabelMessageTone = ref('info')
 const prelabelError = ref('')
+const prelabelReviewOpen = ref(false)
+const prelabelReviewAnnotations = ref([])
+const selectedPrelabelReviewId = ref('')
+const selectedPrelabelReviewLabel = ref('Unlabeled')
 const isRegeneratingPrelabel = ref(false)
 let hostResizeObserver = null
 let taskHeartbeatTimerId = null
@@ -1672,6 +1766,10 @@ function resetPrelabelState() {
   prelabelError.value = ''
   prelabelVisible.value = true
   isRegeneratingPrelabel.value = false
+  prelabelReviewOpen.value = false
+  prelabelReviewAnnotations.value = []
+  selectedPrelabelReviewId.value = ''
+  selectedPrelabelReviewLabel.value = 'Unlabeled'
 }
 
 function clearUndoState() {
@@ -1818,6 +1916,10 @@ async function loadTaskPrelabel(taskId) {
     if (!detail) {
       prelabelAnnotations.value = []
       activePrelabel.value = null
+      prelabelReviewOpen.value = false
+      prelabelReviewAnnotations.value = []
+      selectedPrelabelReviewId.value = ''
+      selectedPrelabelReviewLabel.value = 'Unlabeled'
       prelabelLoadState.value = 'loaded'
       return
     }
@@ -1830,7 +1932,7 @@ async function loadTaskPrelabel(taskId) {
       y: Number(ann.y) || 0,
       width: Number(ann.width) || 0,
       height: Number(ann.height) || 0,
-      label: ann.label || 'Unlabeled',
+      label: ann.label || detail.ai_suggestion || 'Unlabeled',
       detail_type: ann.detail_type,
       confidence: Number.isFinite(Number(ann.confidence)) ? Number(ann.confidence) : undefined,
       origin: 'prelabel_overlay',
@@ -1852,10 +1954,18 @@ async function loadTaskPrelabel(taskId) {
         prelabel_updated_at: detail.updated_at,
       }
     }
+    prelabelReviewOpen.value = false
+    prelabelReviewAnnotations.value = []
+    selectedPrelabelReviewId.value = ''
+    selectedPrelabelReviewLabel.value = 'Unlabeled'
     prelabelLoadState.value = 'loaded'
   } catch (err) {
     prelabelAnnotations.value = []
     activePrelabel.value = null
+    prelabelReviewOpen.value = false
+    prelabelReviewAnnotations.value = []
+    selectedPrelabelReviewId.value = ''
+    selectedPrelabelReviewLabel.value = 'Unlabeled'
     prelabelLoadState.value = 'error'
     prelabelError.value = err instanceof Error ? err.message : 'Failed to load AI prelabel'
   }
@@ -2389,6 +2499,103 @@ function createAnnotationFromPrelabel(annotation, offset) {
   }
 }
 
+function getPrelabelReviewLabelKey(annotation) {
+  if (!annotation || annotation.label === 'Unlabeled' || !annotation.label) {
+    return 'Unlabeled'
+  }
+  if (annotation.detail_type) {
+    return `${annotation.label}:${annotation.detail_type}`
+  }
+  return annotation.label
+}
+
+function createReviewAnnotationFromPrelabel(annotation, index) {
+  return {
+    id: `prelabel-review-${activePrelabel.value?.prelabel_id || 'draft'}-${index}`,
+    display_id: `P${String(index + 1).padStart(4, '0')}`,
+    type: 'bbox',
+    x: Number(annotation.x) || 0,
+    y: Number(annotation.y) || 0,
+    width: Number(annotation.width) || 0,
+    height: Number(annotation.height) || 0,
+    label: annotation.label || activePrelabel.value?.ai_suggestion || 'Unlabeled',
+    detail_type: annotation.detail_type,
+    confidence: Number.isFinite(Number(annotation.confidence)) ? Number(annotation.confidence) : undefined,
+  }
+}
+
+function selectPrelabelReviewAnnotation(annotationId) {
+  selectedPrelabelReviewId.value = annotationId
+  const selected = prelabelReviewAnnotations.value.find((item) => item.id === annotationId)
+  selectedPrelabelReviewLabel.value = getPrelabelReviewLabelKey(selected)
+}
+
+function beginPrelabelReview() {
+  if (!activePrelabel.value || prelabelAnnotations.value.length === 0) {
+    prelabelMessage.value = '当前任务没有可审核的 AI 草稿'
+    prelabelMessageTone.value = 'info'
+    return
+  }
+  prelabelReviewAnnotations.value = prelabelAnnotations.value.map((item, index) => createReviewAnnotationFromPrelabel(item, index))
+  prelabelReviewOpen.value = true
+  if (prelabelReviewAnnotations.value.length > 0) {
+    selectPrelabelReviewAnnotation(prelabelReviewAnnotations.value[0].id)
+  } else {
+    selectedPrelabelReviewId.value = ''
+    selectedPrelabelReviewLabel.value = 'Unlabeled'
+  }
+  prelabelMessage.value = 'AI 草稿已进入审核，可修改类型或删除后再导入'
+  prelabelMessageTone.value = 'info'
+}
+
+function cancelPrelabelReview() {
+  prelabelReviewOpen.value = false
+  prelabelReviewAnnotations.value = []
+  selectedPrelabelReviewId.value = ''
+  selectedPrelabelReviewLabel.value = 'Unlabeled'
+}
+
+function removePrelabelReviewAnnotation(annotationId) {
+  const nextAnnotations = prelabelReviewAnnotations.value.filter((item) => item.id !== annotationId)
+  prelabelReviewAnnotations.value = nextAnnotations
+  if (selectedPrelabelReviewId.value === annotationId) {
+    if (nextAnnotations.length > 0) {
+      selectPrelabelReviewAnnotation(nextAnnotations[0].id)
+    } else {
+      selectedPrelabelReviewId.value = ''
+      selectedPrelabelReviewLabel.value = 'Unlabeled'
+    }
+  }
+}
+
+function onSelectedPrelabelReviewLabelChange(event) {
+  const value = String(event?.target?.value ?? 'Unlabeled')
+  selectedPrelabelReviewLabel.value = value
+  if (!selectedPrelabelReviewId.value) {
+    return
+  }
+
+  let newLabel = 'Unlabeled'
+  let newDetailType = undefined
+  if (value !== 'Unlabeled') {
+    const parts = value.split(':')
+    newLabel = parts[0]
+    if (parts.length > 1) {
+      newDetailType = parts[1]
+    }
+  }
+
+  prelabelReviewAnnotations.value = prelabelReviewAnnotations.value.map((item) =>
+    item.id === selectedPrelabelReviewId.value
+      ? {
+          ...item,
+          label: newLabel,
+          detail_type: newDetailType,
+        }
+      : item,
+  )
+}
+
 function addAnnotation(annotation) {
   annotations.value.push(annotation)
   annotationDisplayCounter.value += 1
@@ -2441,8 +2648,12 @@ async function regenerateActivePrelabel() {
 }
 
 function applyActivePrelabel() {
-  if (!activePrelabel.value || prelabelAnnotations.value.length === 0) {
-    prelabelMessage.value = '当前任务没有可应用的 AI 草稿'
+  beginPrelabelReview()
+}
+
+function confirmApprovedPrelabel() {
+  if (!activePrelabel.value || prelabelReviewAnnotations.value.length === 0) {
+    prelabelMessage.value = '当前没有可导入的已审批 AI 草稿'
     prelabelMessageTone.value = 'info'
     return
   }
@@ -2452,13 +2663,13 @@ function applyActivePrelabel() {
       .map((item) => getBboxGeometrySignature(item))
       .filter(Boolean),
   )
-  const created = prelabelAnnotations.value
+  const created = prelabelReviewAnnotations.value
     .filter((item) => item.type === 'bbox')
     .filter((item) => !existingSignatures.has(getBboxGeometrySignature(item)))
     .map((item, index) => createAnnotationFromPrelabel(item, index))
 
   if (created.length === 0) {
-    prelabelMessage.value = 'AI 草稿中的框已存在于当前标注中'
+    prelabelMessage.value = '审批后的 AI 草稿框已存在于当前标注中'
     prelabelMessageTone.value = 'info'
     return
   }
@@ -2466,7 +2677,8 @@ function applyActivePrelabel() {
   annotations.value = [...annotations.value, ...created]
   annotationDisplayCounter.value += created.length
   selectAnnotation(created[created.length - 1].id)
-  prelabelMessage.value = `已导入 ${created.length} 个 AI 草稿框`
+  cancelPrelabelReview()
+  prelabelMessage.value = `已导入 ${created.length} 个已审批 AI 草稿框`
   prelabelMessageTone.value = 'info'
 }
 

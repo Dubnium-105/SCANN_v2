@@ -216,6 +216,7 @@ def test_detection_processor_candidate_mapping(tmp_path, monkeypatch) -> None:
     assert result.annotations[0].y == 46
     assert result.annotations[0].width == 11
     assert result.annotations[0].height == 7
+    assert result.annotations[0].label == "real"
     assert result.metadata["candidate_limit"] == 5
     assert result.metadata["confidence_threshold"] == 0.5
 
