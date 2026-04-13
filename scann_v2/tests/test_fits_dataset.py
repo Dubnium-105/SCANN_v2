@@ -484,3 +484,43 @@ class TestFitsDenseDetectionDataset:
         assert targets["heatmap"].shape == (1, 2, 2)
         assert targets["bbox"].shape == (4, 2, 2)
         assert np.sum(targets["bbox_mask"]) == 1.0
+
+    def test_dense_dataset_can_use_explicit_paths_without_global_pair_matches(self, tmp_path):
+        new_dir = tmp_path / "new"
+        old_dir = tmp_path / "old"
+        new_dir.mkdir()
+        old_dir.mkdir()
+
+        new_file = new_dir / "aligned_task_001.fts"
+        old_file = old_dir / "cropped_task_001.fts"
+        new_file.write_bytes(b"new")
+        old_file.write_bytes(b"old")
+
+        annotations = {
+            "images": [
+                {
+                    "id": "task-001",
+                    "paths": {
+                        "new": "new/aligned_task_001.fts",
+                        "old": "old/cropped_task_001.fts",
+                    },
+                    "annotations": [
+                        {"x": 8, "y": 8, "width": 8, "height": 8, "label": "real"},
+                    ],
+                }
+            ]
+        }
+        ann_file = tmp_path / "annotations.json"
+        ann_file.write_text(json.dumps(annotations), encoding="utf-8")
+
+        mock_new = np.random.rand(32, 32).astype(np.float32)
+        mock_old = np.random.rand(32, 32).astype(np.float32)
+
+        with patch("scann.data.file_manager.match_new_old_pairs", return_value=([], [], [])):
+            with patch("scann.core.fits_io.read_fits") as mock_read_fits:
+                mock_read_fits.side_effect = [Mock(data=mock_new), Mock(data=mock_old)]
+                dataset = FitsDenseDetectionDataset(dataset_root=str(tmp_path), patch_size=16)
+                _input_image, targets = dataset[0]
+
+        assert np.sum(targets["bbox_mask"]) == 1.0
+        assert float(np.max(targets["heatmap"])) == 1.0

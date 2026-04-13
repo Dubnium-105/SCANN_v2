@@ -293,8 +293,6 @@ class TrainingWorker(QThread):
             raise ValueError("v2 数据集目录下缺少标注文件（annotations.json 或 annotations.db）")
 
         pairs, _only_new, _only_old = match_new_old_pairs(str(new_dir), str(old_dir))
-        if not pairs:
-            raise ValueError("v2 数据集未找到可配对的 new/old 图像")
 
         annotations_doc = self._load_v2_annotations_document(dataset_root)
 

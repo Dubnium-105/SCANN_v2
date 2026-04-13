@@ -695,8 +695,6 @@ class FitsDenseDetectionDataset:
             raise ValueError("annotations.json 中 images 字段格式无效")
 
         pair_lookup = self._build_pair_lookup()
-        if not pair_lookup:
-            raise ValueError("v2 dense 数据集未找到可配对的 new/old 图像")
 
         samples: List[Dict[str, Any]] = []
         for image_info in images:
