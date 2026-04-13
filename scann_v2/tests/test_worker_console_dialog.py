@@ -56,7 +56,7 @@ def test_worker_console_dialog_adds_help_for_all_editable_rows(dialog) -> None:
 
     help_labels = [label for label in dialog.findChildren(QLabel) if label.objectName() == "fieldHelpLabel"]
     assert len(help_labels) == len(fields)
-    assert any("\u6807\u6ce8\u5e73\u53f0\u540e\u7aef\u5730\u5740" in label.text() for label in help_labels)
+    assert any("/api/*" in label.text() for label in help_labels)
     assert any("\u53ef\u8bad\u7ec3\u7684 backbone" in label.text() for label in help_labels)
 
 

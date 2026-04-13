@@ -37,7 +37,14 @@ SCANN_DATASET_DIR=/srv/scann/dataset
 SCANN_NATIVE_JWT_SECRET=replace-this-with-a-long-random-secret
 SCANN_NATIVE_JWT_EXPIRE_MINUTES=120
 SCANN_NATIVE_TASK_LOCK_TIMEOUT_SECONDS=1200
+SCANN_PRELABEL_WORKER_TOKEN=replace-this-with-a-long-random-prelabel-worker-token
+SCANN_TRAINING_WORKER_TOKEN=replace-this-with-a-long-random-training-worker-token
 ```
+
+Worker 连接说明：
+- 如果公网只暴露了 `frontend` 容器，那么本地 GPU worker 的“服务器 URL”就应该填写前端公网地址，而不是内网 backend 地址。
+- 这是可行的，因为 `frontend` 会把 `/api/*` 反向代理到 `backend`。
+- 训练 worker 当前模式是“图片从本地数据集目录读取，标注快照从服务器任务接口下载”，适合本地数据集和服务器数据集目录结构一致的部署。
 
 如果需要启用 PostgreSQL 标注同步，建议同时配置：
 

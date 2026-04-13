@@ -311,7 +311,7 @@ class WorkerConsoleDialog(QDialog):
             form,
             "\u670d\u52a1\u5668 URL",
             self.edit_prelabel_server_url,
-            "\u586b\u5199\u6807\u6ce8\u5e73\u53f0\u540e\u7aef\u5730\u5740\uff0c\u4f8b\u5982 http://192.168.1.10:8000\u3002",
+            "\u586b\u5199 worker \u53ef\u4ee5\u8bbf\u95ee\u5230\u7684 API \u5165\u53e3\u5730\u5740\uff0c\u4f8b\u5982 http://192.168.1.10:8000\u3002\u5982\u679c\u53ea\u6709\u524d\u7aef\u5bb9\u5668\u5bf9\u516c\u7f51\u66b4\u9732\uff0c\u8fd9\u91cc\u5c31\u586b\u524d\u7aef\u516c\u7f51\u5730\u5740\uff0cNGINX \u4f1a\u4ee3\u7406 /api/* \u5230\u540e\u7aef\u3002",
             placeholder="http://127.0.0.1:8000",
         )
         self._add_help_row(
@@ -465,7 +465,7 @@ class WorkerConsoleDialog(QDialog):
             form,
             "\u670d\u52a1\u5668 URL",
             self.edit_training_server_url,
-            "\u586b\u5199\u8bad\u7ec3\u95ed\u73af\u540e\u7aef\u5730\u5740\uff0c\u901a\u5e38\u548c\u9884\u6807\u6ce8 worker \u4f7f\u7528\u540c\u4e00\u4e2a API \u670d\u52a1\u3002",
+            "\u586b\u5199 worker \u53ef\u4ee5\u8bbf\u95ee\u5230\u7684 API \u5165\u53e3\u5730\u5740\uff0c\u901a\u5e38\u548c\u9884\u6807\u6ce8 worker \u4f7f\u7528\u540c\u4e00\u4e2a API \u670d\u52a1\u3002\u5982\u679c\u53ea\u66b4\u9732\u4e86\u524d\u7aef\u5bb9\u5668\uff0c\u8bf7\u76f4\u63a5\u586b\u524d\u7aef\u516c\u7f51 URL\u3002",
             placeholder="http://127.0.0.1:8000",
         )
         self._add_help_row(

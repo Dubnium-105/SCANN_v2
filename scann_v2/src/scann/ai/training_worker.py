@@ -500,6 +500,7 @@ class TrainingWorker(QThread):
 
                 dense_dataset = FitsDenseDetectionDataset(
                     dataset_root=str(dataset_dir),
+                    annotation_file=str(self._params.get("annotations_document_path") or "") or None,
                     patch_size=patch_size,
                 )
                 if len(dense_dataset) < 2:
