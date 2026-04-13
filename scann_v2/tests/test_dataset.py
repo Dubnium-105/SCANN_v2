@@ -46,6 +46,30 @@ def _auth_headers(client: TestClient) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _expected_task_payload(
+    *,
+    task_id: str,
+    new_path: str,
+    old_path: str | None = None,
+    new_marked_path: str | None = None,
+    field_key: str | None = None,
+    field_name: str | None = None,
+    capture_key: str | None = None,
+    preprocess_status: str | None = "ready",
+) -> dict[str, str]:
+    payload = {
+        "task_id": task_id,
+        "new_path": new_path,
+        "old_path": old_path,
+        "new_marked_path": new_marked_path,
+        "field_key": field_key,
+        "field_name": field_name,
+        "capture_key": capture_key,
+        "preprocess_status": preprocess_status,
+    }
+    return {key: value for key, value in payload.items() if value is not None}
+
+
 def test_api_tasks_aggregates_triplet_paths(tmp_path, monkeypatch) -> None:
     dataset_root = tmp_path / "dataset"
 
@@ -68,18 +92,24 @@ def test_api_tasks_aggregates_triplet_paths(tmp_path, monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json() == [
-        {
-            "task_id": "PGC 17069",
-            "new_path": "new/PGC 17069.fts",
-            "old_path": "old/PGC 17069.fts",
-            "new_marked_path": "new_marked/PGC 17069.fts",
-        },
-        {
-            "task_id": "PGC 35671",
-            "new_path": "new/PGC 35671.fts",
-            "old_path": "old/PGC 35671.fts",
-            "new_marked_path": "new_marked/PGC 35671.fts",
-        },
+        _expected_task_payload(
+            task_id="PGC 17069",
+            new_path="new/PGC 17069.fts",
+            old_path="old/PGC 17069.fts",
+            new_marked_path="new_marked/PGC 17069.fts",
+            field_key="pgc 17069",
+            field_name="PGC 17069",
+            capture_key="pgc 17069",
+        ),
+        _expected_task_payload(
+            task_id="PGC 35671",
+            new_path="new/PGC 35671.fts",
+            old_path="old/PGC 35671.fts",
+            new_marked_path="new_marked/PGC 35671.fts",
+            field_key="pgc 35671",
+            field_name="PGC 35671",
+            capture_key="pgc 35671",
+        ),
     ]
 
 
@@ -168,12 +198,15 @@ def test_api_dataset_preprocess_exposes_uploaded_annotation_views(tmp_path, monk
 
     assert tasks.status_code == 200
     assert tasks.json() == [
-        {
-            "task_id": "field_001",
-            "new_path": "new/field_001.fits",
-            "old_path": "old/field_001.fits",
-            "new_marked_path": "new_marked/field_001.fits",
-        }
+        _expected_task_payload(
+            task_id="field_001",
+            new_path="new/field_001.fits",
+            old_path="old/field_001.fits",
+            new_marked_path="new_marked/field_001.fits",
+            field_key="field_001",
+            field_name="field_001",
+            capture_key="field_001",
+        )
     ]
 
 
@@ -192,10 +225,13 @@ def test_api_tasks_normalize_preprocessed_aligned_crop_task_ids(tmp_path, monkey
 
     assert response.status_code == 200
     assert response.json() == [
-        {
-            "task_id": "20260203T134946__NGC 918",
-            "new_path": "new/20260203T134946__NGC 918__aligned_crop.fts",
-            "old_path": "old/20260203T134946__NGC 918__aligned_crop.fts",
-            "new_marked_path": "new_marked/20260203T134946__NGC 918__aligned_crop.fts",
-        }
+        _expected_task_payload(
+            task_id="20260203T134946__NGC 918",
+            new_path="new/20260203T134946__NGC 918__aligned_crop.fts",
+            old_path="old/20260203T134946__NGC 918__aligned_crop.fts",
+            new_marked_path="new_marked/20260203T134946__NGC 918__aligned_crop.fts",
+            field_key="ngc 918",
+            field_name="NGC 918",
+            capture_key="ngc 918",
+        )
     ]
