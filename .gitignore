@@ -182,6 +182,9 @@ dmypy.json
 # ============================================
 model_cache/
 torch_cache/
+**/scann_v2_config.json
+models/snapshot/**/*.json
+**/models/snapshot/**/*.json
 scann_v2/release/
 docker/dist/
 docker/runtime/
