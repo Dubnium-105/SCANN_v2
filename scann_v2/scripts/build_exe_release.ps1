@@ -54,8 +54,14 @@ if ($env:VIRTUAL_ENV) {
 }
 
 $pythonCandidates += @(
+    (Join-Path $workspaceRoot "311venv\Scripts\python.exe"),
+    (Join-Path $workspaceRoot ".venv311\Scripts\python.exe"),
+    (Join-Path $workspaceRoot ".venv311_torchao\Scripts\python.exe"),
     (Join-Path $workspaceRoot ".venv\Scripts\python.exe"),
     (Join-Path $workspaceRoot "venv\Scripts\python.exe"),
+    (Join-Path $projectRoot "311venv\Scripts\python.exe"),
+    (Join-Path $projectRoot ".venv311\Scripts\python.exe"),
+    (Join-Path $projectRoot ".venv311_torchao\Scripts\python.exe"),
     (Join-Path $projectRoot ".venv\Scripts\python.exe"),
     (Join-Path $projectRoot "venv\Scripts\python.exe"),
     "python"
@@ -87,10 +93,13 @@ Write-Host "Building executable with PyInstaller (onedir)..."
 & $pythonCmd -m PyInstaller `
     --noconfirm `
     --clean `
+    --noupx `
     --windowed `
     --name SCANN_v2 `
     --paths src `
+    --runtime-hook "scripts/pyi_rth_torch_gpu_dll.py" `
     --add-data "scann_v2_config.json;." `
+    --collect-binaries torch `
     --collect-all torch `
     --collect-all torchvision `
     --collect-all astroquery `
