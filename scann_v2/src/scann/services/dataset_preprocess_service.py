@@ -17,7 +17,7 @@ import numpy as np
 from scann.core.brightness_match import brightness_match_anchors
 from scann.core.dataset_storage import DatasetStorage, RawAssetRecord, TaskArtifactRecord, TaskRecord
 from scann.core.fits_io import read_fits, write_fits
-from scann.core.image_aligner import align
+from scann.core.image_aligner import align, align_with_rot180_selection
 from scann.data.file_manager import FitsImagePair, match_new_old_pairs
 from scann.services.pair_service import PairService
 
@@ -984,30 +984,17 @@ class DatasetPreprocessService:
 
         crop_bounds = self.parse_crop_bounds_from_marker(new_marker_path)
         try:
-            marked_fits = self._read_fits(task.new_marked_raw_path)
-            marked_data = np.nan_to_num(
-                marked_fits.data.astype(np.float32),
-                nan=0.0,
-                posinf=0.0,
-                neginf=0.0,
+            target_shape = None
+            if new_aligned_path.exists():
+                target_shape = self._read_fits(new_aligned_path).data.shape[:2]
+            cropped, marked_header = self._build_marked_aligned_crop(
+                reference_new_path=task.new_raw_path,
+                marked_source_path=task.new_marked_raw_path,
+                crop_bounds=crop_bounds,
+                target_shape=target_shape,
+                log_context=task.task_id,
             )
-            if crop_bounds is not None:
-                x0, x1, y0, y1 = crop_bounds
-                if 0 <= x0 < x1 <= marked_data.shape[1] and 0 <= y0 < y1 <= marked_data.shape[0]:
-                    cropped = marked_data[y0:y1, x0:x1]
-                else:
-                    cropped = marked_data
-            else:
-                cropped = marked_data
-
-            if new_aligned_path.exists() and (cropped.shape != self._read_fits(new_aligned_path).data.shape):
-                aligned_shape = self._read_fits(new_aligned_path).data.shape
-                ah, aw = aligned_shape[:2]
-                h, w = cropped.shape[:2]
-                y0 = max(0, (h - ah) // 2)
-                x0 = max(0, (w - aw) // 2)
-                cropped = cropped[y0:y0 + ah, x0:x0 + aw]
-            self._write_fits(marked_aligned_path, cropped, marked_fits.header)
+            self._write_fits(marked_aligned_path, cropped, marked_header)
             return True
         except Exception as exc:
             logger.warning("带标记新图裁剪生成失败: %s (%s)", task.task_id, exc)
@@ -1164,35 +1151,108 @@ class DatasetPreprocessService:
 
         crop_bounds = self.parse_crop_bounds_from_marker(new_marker_path)
         try:
-            marked_fits = self._read_fits(marked_source)
-            marked_data = np.nan_to_num(
-                marked_fits.data.astype(np.float32),
-                nan=0.0,
-                posinf=0.0,
-                neginf=0.0,
+            target_shape = None
+            if new_aligned_path.exists():
+                target_shape = self._read_fits(new_aligned_path).data.shape[:2]
+            cropped, marked_header = self._build_marked_aligned_crop(
+                reference_new_path=Path(pair.new_path),
+                marked_source_path=marked_source,
+                crop_bounds=crop_bounds,
+                target_shape=target_shape,
+                log_context=pair.name,
             )
-            if crop_bounds is not None:
-                x0, x1, y0, y1 = crop_bounds
-                if 0 <= x0 < x1 <= marked_data.shape[1] and 0 <= y0 < y1 <= marked_data.shape[0]:
-                    cropped = marked_data[y0:y1, x0:x1]
-                else:
-                    cropped = marked_data
-            else:
-                cropped = marked_data
-
-            if new_aligned_path.exists() and (cropped.shape != self._read_fits(new_aligned_path).data.shape):
-                aligned_shape = self._read_fits(new_aligned_path).data.shape
-                ah, aw = aligned_shape[:2]
-                h, w = cropped.shape[:2]
-                y0 = max(0, (h - ah) // 2)
-                x0 = max(0, (w - aw) // 2)
-                cropped = cropped[y0:y0 + ah, x0:x0 + aw]
-
-            self._write_fits(marked_aligned, cropped, marked_fits.header)
+            self._write_fits(marked_aligned, cropped, marked_header)
             return True
         except Exception as exc:
             logger.warning("带标记新图裁剪生成失败: %s (%s)", pair.name, exc)
             return False
+
+    @staticmethod
+    def _sanitize_image_data(data: np.ndarray) -> np.ndarray:
+        return np.nan_to_num(
+            np.asarray(data, dtype=np.float32),
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+
+    def _align_marked_to_new(
+        self,
+        reference_new_data: np.ndarray,
+        marked_data: np.ndarray,
+        *,
+        log_context: str,
+    ) -> np.ndarray:
+        aligned_marked = marked_data
+        if reference_new_data.shape[:2] != marked_data.shape[:2]:
+            logger.warning(
+                "带标记新图与新图尺寸不一致，无法执行额外对齐: %s; new=%s marked=%s",
+                log_context,
+                reference_new_data.shape,
+                marked_data.shape,
+            )
+            return aligned_marked
+
+        max_shift = max(100, int(min(reference_new_data.shape[:2]) * 0.45))
+        result, attempt_name, original_score, rotated_score = align_with_rot180_selection(
+            reference_new_data,
+            marked_data,
+            method="auto",
+            max_shift=max_shift,
+            align_fn=self._align,
+        )
+        if attempt_name == "rot180" and rotated_score > original_score + 1e-3:
+            logger.info(
+                "检测到带标记新图更接近旋转180度版本，优先旋转后对齐: %s (original=%.4f, rot180=%.4f)",
+                log_context,
+                original_score,
+                rotated_score,
+            )
+        if getattr(result, "success", False) and getattr(result, "aligned_old", None) is not None:
+            if attempt_name == "rot180":
+                logger.info("带标记新图旋转180度后对齐成功: %s", log_context)
+            return self._sanitize_image_data(result.aligned_old)
+
+        logger.warning(
+            "带标记新图对齐新图失败，旋转180度兜底后仍未成功: %s (%s)",
+            log_context,
+            getattr(result, "error_message", ""),
+        )
+        return aligned_marked
+
+    def _build_marked_aligned_crop(
+        self,
+        *,
+        reference_new_path: Path,
+        marked_source_path: Path,
+        crop_bounds: tuple[int, int, int, int] | None,
+        target_shape: tuple[int, int] | None,
+        log_context: str,
+    ) -> tuple[np.ndarray, object]:
+        reference_new_fits = self._read_fits(reference_new_path)
+        marked_fits = self._read_fits(marked_source_path)
+        reference_new_data = self._sanitize_image_data(reference_new_fits.data)
+        marked_data = self._sanitize_image_data(marked_fits.data)
+        aligned_marked = self._align_marked_to_new(
+            reference_new_data,
+            marked_data,
+            log_context=log_context,
+        )
+
+        cropped = aligned_marked
+        if crop_bounds is not None:
+            x0, x1, y0, y1 = crop_bounds
+            if 0 <= x0 < x1 <= aligned_marked.shape[1] and 0 <= y0 < y1 <= aligned_marked.shape[0]:
+                cropped = aligned_marked[y0:y1, x0:x1]
+
+        if target_shape is not None and cropped.shape[:2] != target_shape:
+            ah, aw = target_shape
+            h, w = cropped.shape[:2]
+            y0 = max(0, (h - ah) // 2)
+            x0 = max(0, (w - aw) // 2)
+            cropped = cropped[y0:y0 + ah, x0:x0 + aw]
+
+        return cropped, marked_fits.header
 
     def _pair_aligned_files(
         self,

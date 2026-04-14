@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import QApplication
 
 from scann.core.candidate_detector import DetectionParams
 from scann.core.fits_io import read_fits, write_fits
-from scann.core.image_aligner import align
+from scann.core.image_aligner import align, align_with_rot180_selection
 from scann.core.image_processor import denoise, pseudo_flat_field
 from scann.core.models import TargetVerdict
 from scann.data.file_manager import scan_fits_folder
@@ -71,6 +71,55 @@ class DetectionController:
 
     def resolve_current_new_image_path(self) -> str | None:
         return self._resolve_current_new_image_path()
+
+    def _align_marked_to_new(
+        self,
+        new_data: np.ndarray,
+        marked_data: np.ndarray,
+        *,
+        pair_name: str,
+    ) -> np.ndarray:
+        aligned_marked = marked_data
+        if new_data.shape[:2] != marked_data.shape[:2]:
+            self._window._logger.warning(
+                "带标记新图与新图尺寸不一致，无法执行额外对齐: %s; new=%s marked=%s",
+                pair_name,
+                new_data.shape,
+                marked_data.shape,
+            )
+            return aligned_marked
+
+        max_shift = max(100, int(min(new_data.shape[:2]) * 0.45))
+        marked_result, attempt_name, original_score, rotated_score = align_with_rot180_selection(
+            new_data,
+            marked_data,
+            method="auto",
+            max_shift=max_shift,
+            align_fn=align,
+        )
+        if attempt_name == "rot180" and rotated_score > original_score + 1e-3:
+            self._window._logger.info(
+                "检测到带标记新图更接近旋转180度版本，优先旋转后对齐: %s (original=%.4f, rot180=%.4f)",
+                pair_name,
+                original_score,
+                rotated_score,
+            )
+        if marked_result.success and marked_result.aligned_old is not None:
+            if attempt_name == "rot180":
+                self._window._logger.info("带标记新图旋转180度后对齐成功: %s", pair_name)
+            return np.nan_to_num(
+                marked_result.aligned_old.astype(np.float32),
+                nan=0.0,
+                posinf=0.0,
+                neginf=0.0,
+            )
+
+        self._window._logger.warning(
+            "带标记新图对齐新图失败，旋转180度兜底后仍未成功: %s (%s)",
+            pair_name,
+            marked_result.error_message,
+        )
+        return aligned_marked
 
     def batch_align(self, force: bool = False) -> None:
         """执行批量对齐。
@@ -247,6 +296,54 @@ class DetectionController:
                         )
                         new_marker_path.write_text(marker_text, encoding="utf-8")
                         old_marker_path.write_text(marker_text, encoding="utf-8")
+                        pair_service = getattr(self._window, "pair_service", None)
+                        marked_source_path = (
+                            pair_service.resolve_marked_image_path(pair.new_path)
+                            if pair_service is not None
+                            else None
+                        )
+                        marked_aligned_path = (
+                            pair_service.derive_marked_image_path(new_aligned_path)
+                            if pair_service is not None
+                            else None
+                        )
+                        if marked_source_path is not None and marked_aligned_path is not None:
+                            try:
+                                marked_fits = read_fits(marked_source_path)
+                                marked_data = np.nan_to_num(
+                                    marked_fits.data.astype(np.float32),
+                                    nan=0.0,
+                                    posinf=0.0,
+                                    neginf=0.0,
+                                )
+                                marked_data = self._align_marked_to_new(
+                                    new_data,
+                                    marked_data,
+                                    pair_name=pair.name,
+                                )
+                                if marked_data.shape[0] >= y1 and marked_data.shape[1] >= x1:
+                                    cropped_marked = marked_data[y0:y1, x0:x1]
+                                    write_fits(marked_aligned_path, cropped_marked, marked_fits.header)
+                                else:
+                                    self._window._logger.warning(
+                                        "[%s/%s] 带标记新图尺寸不足，无法复用新图裁剪: %s; marked=%s crop=(%s,%s,%s,%s)",
+                                        idx,
+                                        total,
+                                        pair.name,
+                                        marked_data.shape,
+                                        x0,
+                                        x1,
+                                        y0,
+                                        y1,
+                                    )
+                            except Exception as marked_exc:
+                                self._window._logger.warning(
+                                    "[%s/%s] 带标记新图裁剪保存失败: %s (%s)",
+                                    idx,
+                                    total,
+                                    pair.name,
+                                    marked_exc,
+                                )
 
                         success_count += 1
                         self._window._logger.info(

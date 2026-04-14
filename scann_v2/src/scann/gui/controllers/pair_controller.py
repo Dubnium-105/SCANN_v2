@@ -5,10 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import numpy as np
 from PyQt5.QtCore import QThread, pyqtSignal
 from PyQt5.QtWidgets import QApplication, QFileDialog
 
 from scann.core.dataset_storage import DatasetStorage
+from scann.core.image_aligner import align, align_with_rot180_selection
 from scann.data.file_manager import FitsImagePair
 from scann.services.dataset_preprocess_service import DatasetPreprocessService
 from scann.services.pair_service import PairService
@@ -395,6 +397,64 @@ class PairController:
     def open_recent_folder(self, folder: str) -> None:
         self.open_dataset_path(folder)
 
+    @staticmethod
+    def _sanitize_image_data(data) -> np.ndarray:
+        return np.nan_to_num(
+            np.asarray(data, dtype=np.float32),
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+
+    def _align_marked_to_new(
+        self,
+        pair: FitsImagePair,
+        marked_data,
+    ) -> np.ndarray:
+        aligned_marked = self._sanitize_image_data(marked_data)
+        try:
+            raw_new_image = self._pair_service.read_image(pair.new_path)
+        except Exception as exc:
+            self._window._logger.warning("读取新图原图失败，无法对齐带标记新图: %s (%s)", pair.name, exc)
+            return aligned_marked
+
+        raw_new_data = self._sanitize_image_data(raw_new_image.data)
+        if raw_new_data.shape[:2] != aligned_marked.shape[:2]:
+            self._window._logger.warning(
+                "带标记新图与新图原图尺寸不一致，无法执行额外对齐: %s; new=%s marked=%s",
+                pair.name,
+                raw_new_data.shape,
+                aligned_marked.shape,
+            )
+            return aligned_marked
+
+        max_shift = max(100, int(min(raw_new_data.shape[:2]) * 0.45))
+        result, attempt_name, original_score, rotated_score = align_with_rot180_selection(
+            raw_new_data,
+            aligned_marked,
+            method="auto",
+            max_shift=max_shift,
+            align_fn=align,
+        )
+        if attempt_name == "rot180" and rotated_score > original_score + 1e-3:
+            self._window._logger.info(
+                "检测到带标记新图更接近旋转180度版本，优先旋转后对齐: %s (original=%.4f, rot180=%.4f)",
+                pair.name,
+                original_score,
+                rotated_score,
+            )
+        if result.success and result.aligned_old is not None:
+            if attempt_name == "rot180":
+                self._window._logger.info("带标记新图旋转180度后对齐成功: %s", pair.name)
+            return self._sanitize_image_data(result.aligned_old)
+
+        self._window._logger.warning(
+            "带标记新图对齐新图失败，旋转180度兜底后仍未成功: %s (%s)",
+            pair.name,
+            result.error_message,
+        )
+        return aligned_marked
+
     def prev_pair(self) -> None:
         current = self._window.file_list.currentRow()
         if current > 0:
@@ -432,10 +492,30 @@ class PairController:
             self._window._new_fits_header = image_pair.new_image.header
             self._window._old_fits_header = image_pair.old_image.header
             self._window._current_pair_using_aligned = bool(image_pair.aligned)
-            marked_path = self._pair_service.resolve_marked_image_path(pair.new_path)
+            aligned_marked_path = self._pair_service.resolve_marked_image_path(image_pair.new_image.path)
+            raw_marked_path = self._pair_service.resolve_marked_image_path(pair.new_path)
+            marked_path = aligned_marked_path or raw_marked_path
             if marked_path is not None:
                 marked_image = self._pair_service.read_image(marked_path)
-                self._window._new_marked_image_data = marked_image.data
+                marked_data = self._sanitize_image_data(marked_image.data)
+                if (
+                    image_pair.aligned
+                    and aligned_marked_path is None
+                    and raw_marked_path is not None
+                ):
+                    marked_data = self._align_marked_to_new(pair, marked_data)
+                    crop_bounds = self._pair_service.resolve_alignment_crop_bounds(pair)
+                    if crop_bounds is not None:
+                        x0, x1, y0, y1 = crop_bounds
+                        marked_shape = marked_data.shape[:2]
+                        if marked_shape[0] >= y1 and marked_shape[1] >= x1:
+                            marked_data = marked_data[y0:y1, x0:x1]
+                    else:
+                        self._window._logger.warning(
+                            "带标记新图缺少对齐裁剪元数据，回退到原始图: %s",
+                            pair.name,
+                        )
+                self._window._new_marked_image_data = marked_data
             if image_pair.aligned and self._window._old_image_data is not None:
                 bounds = self._pair_service.calc_nonzero_valid_bounds(self._window._old_image_data)
                 if bounds is not None and self._window._new_image_data is not None:

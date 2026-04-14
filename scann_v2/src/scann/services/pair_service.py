@@ -56,16 +56,48 @@ class PairService:
         """读取单张 FITS 图像。"""
         return self._read_fits(path)
 
-    def resolve_marked_image_path(self, new_image_path: str | Path) -> Path | None:
-        """根据新图路径推断同名带标记新图。"""
+    def derive_marked_image_path(self, new_image_path: str | Path) -> Path | None:
+        """根据新图路径构造对应的带标记新图路径。"""
         new_path = Path(new_image_path)
         if new_path.parent.name != "new":
             return None
+        return new_path.parent.parent / "new_marked" / new_path.name
 
-        marked_path = new_path.parent.parent / "new_marked" / new_path.name
+    def resolve_marked_image_path(self, new_image_path: str | Path) -> Path | None:
+        """根据新图路径推断同名带标记新图。"""
+        marked_path = self.derive_marked_image_path(new_image_path)
+        if marked_path is None:
+            return None
         if marked_path.is_file():
             return marked_path
         return None
+
+    @staticmethod
+    def parse_crop_bounds_from_marker(
+        marker_path: str | Path,
+    ) -> tuple[int, int, int, int] | None:
+        """从 `.marker` 文件中解析对齐裁剪区域。"""
+        marker = Path(marker_path)
+        if not marker.is_file():
+            return None
+        try:
+            for line in marker.read_text(encoding="utf-8").splitlines():
+                if not line.startswith("crop="):
+                    continue
+                x0, x1, y0, y1 = [int(v.strip()) for v in line.split("=", 1)[1].split(",")]
+                if x1 <= x0 or y1 <= y0:
+                    return None
+                return x0, x1, y0, y1
+        except Exception:
+            return None
+        return None
+
+    def resolve_alignment_crop_bounds(self, pair: FitsImagePair) -> tuple[int, int, int, int] | None:
+        """读取配对对齐结果对应的裁剪区域。"""
+        _new_aligned_path, _old_aligned_path, new_marker_path, _old_marker_path = (
+            self.aligned_artifact_paths(pair)
+        )
+        return self.parse_crop_bounds_from_marker(new_marker_path)
 
     def aligned_artifact_paths(self, pair: FitsImagePair) -> tuple[Path, Path, Path, Path]:
         """返回配对图像的对齐裁剪产物路径。"""

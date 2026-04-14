@@ -423,3 +423,154 @@ class TestImageAlignAlgorithms:
         assert result.aligned_old is None
         assert result.dx == pytest.approx(-120.0)
         assert result.dy == pytest.approx(85.0)
+
+    def test_siril_accepts_when_quality_does_not_improve(self, monkeypatch, tmp_path):
+        new_image = np.ones((32, 32), dtype=np.float32)
+        old_image = np.ones((32, 32), dtype=np.float32)
+        aligned_image = np.ones((32, 32), dtype=np.float32)
+        aligned_output = tmp_path / "r_pair_00002.fit"
+        aligned_output.write_bytes(b"fake")
+
+        monkeypatch.setattr("scann.core.image_aligner._find_siril_executable", lambda: "siril-cli")
+
+        class _FakeTempDir:
+            def __enter__(self):
+                return str(tmp_path)
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        monkeypatch.setattr(
+            "scann.core.image_aligner.tempfile.TemporaryDirectory",
+            lambda **_kwargs: _FakeTempDir(),
+        )
+
+        class _FakePrimaryHDU:
+            def __init__(self, data):
+                self.data = data
+
+            def writeto(self, path, overwrite=False):
+                Path(path).write_bytes(b"input")
+
+        class _FakeOpen:
+            def __enter__(self):
+                return [type("HDU", (), {"data": aligned_image})()]
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        fake_fits = type(
+            "FakeFitsModule",
+            (),
+            {
+                "PrimaryHDU": _FakePrimaryHDU,
+                "open": staticmethod(lambda *_args, **_kwargs: _FakeOpen()),
+            },
+        )()
+
+        monkeypatch.setitem(__import__("sys").modules, "astropy", type("Astropy", (), {})())
+        monkeypatch.setitem(
+            __import__("sys").modules,
+            "astropy.io",
+            type("AstropyIO", (), {"fits": fake_fits})(),
+        )
+        monkeypatch.setitem(__import__("sys").modules, "astropy.io.fits", fake_fits)
+
+        def _fake_run(*_args, **_kwargs):
+            aligned_output.write_bytes(b"fake")
+            return type("Proc", (), {"returncode": 0, "stdout": b"", "stderr": b""})()
+
+        monkeypatch.setattr("scann.core.image_aligner.subprocess.run", _fake_run)
+        monkeypatch.setattr(
+            "scann.core.image_aligner._estimate_translation",
+            lambda *_args, **_kwargs: (0.5, -0.5),
+        )
+        monkeypatch.setattr(
+            "scann.core.image_aligner._alignment_quality",
+            lambda *_args, **_kwargs: (0.12, 0.11),
+        )
+        monkeypatch.setattr(
+            "scann.core.image_aligner._is_quality_improved",
+            lambda *_args, **_kwargs: False,
+        )
+
+        result = _align_siril(new_image, old_image, max_shift=32)
+
+        assert result.success
+        assert result.aligned_old is not None
+        np.testing.assert_array_equal(result.aligned_old, aligned_image)
+
+    def test_siril_scripts_keep_findstar_relax_off(self, monkeypatch, tmp_path):
+        new_image = np.ones((32, 32), dtype=np.float32)
+        old_image = np.ones((32, 32), dtype=np.float32)
+        aligned_image = np.ones((32, 32), dtype=np.float32)
+        aligned_output = tmp_path / "r_pair_00002.fit"
+        aligned_output.write_bytes(b"fake")
+        captured_scripts: list[str] = []
+
+        monkeypatch.setattr("scann.core.image_aligner._find_siril_executable", lambda: "siril-cli")
+
+        class _FakeTempDir:
+            def __enter__(self):
+                return str(tmp_path)
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        monkeypatch.setattr(
+            "scann.core.image_aligner.tempfile.TemporaryDirectory",
+            lambda **_kwargs: _FakeTempDir(),
+        )
+
+        class _FakePrimaryHDU:
+            def __init__(self, data):
+                self.data = data
+
+            def writeto(self, path, overwrite=False):
+                Path(path).write_bytes(b"input")
+
+        class _FakeOpen:
+            def __enter__(self):
+                return [type("HDU", (), {"data": aligned_image})()]
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        fake_fits = type(
+            "FakeFitsModule",
+            (),
+            {
+                "PrimaryHDU": _FakePrimaryHDU,
+                "open": staticmethod(lambda *_args, **_kwargs: _FakeOpen()),
+            },
+        )()
+
+        monkeypatch.setitem(__import__("sys").modules, "astropy", type("Astropy", (), {})())
+        monkeypatch.setitem(
+            __import__("sys").modules,
+            "astropy.io",
+            type("AstropyIO", (), {"fits": fake_fits})(),
+        )
+        monkeypatch.setitem(__import__("sys").modules, "astropy.io.fits", fake_fits)
+
+        def _fake_run(args, **_kwargs):
+            aligned_output.write_bytes(b"fake")
+            captured_scripts.append(Path(args[4]).read_text(encoding="utf-8"))
+            return type("Proc", (), {"returncode": 0, "stdout": b"", "stderr": b""})()
+
+        monkeypatch.setattr("scann.core.image_aligner.subprocess.run", _fake_run)
+        monkeypatch.setattr(
+            "scann.core.image_aligner._estimate_translation",
+            lambda *_args, **_kwargs: (0.0, 0.0),
+        )
+        monkeypatch.setattr(
+            "scann.core.image_aligner._alignment_quality",
+            lambda *_args, **_kwargs: (0.12, 0.25),
+        )
+
+        result = _align_siril(new_image, old_image, max_shift=32)
+
+        assert result.success
+        assert captured_scripts
+        assert all("-relax=on" not in script for script in captured_scripts)
+        assert all("setfindstar reset" in script for script in captured_scripts)

@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from scann.core.models import Candidate, FitsHeader, FitsImage, TargetVerdict
+from scann.core.models import AlignResult, Candidate, FitsHeader, FitsImage, TargetVerdict
 from scann.gui.controllers import DetectionController
 
 
@@ -207,7 +207,6 @@ def test_batch_align_processes_pairs(
     tmp_path,
 ) -> None:
     from scann.data.file_manager import FitsImagePair
-    from scann.core.models import AlignResult
 
     window = _make_window()
     controller = DetectionController(window)
@@ -243,3 +242,75 @@ def test_batch_align_processes_pairs(
 
     mock_align.assert_called_once()
     assert mock_write.call_count == 2
+
+
+@patch("scann.gui.controllers.detection_controller.align")
+@patch("scann.gui.controllers.detection_controller.read_fits")
+@patch("scann.gui.controllers.detection_controller.write_fits")
+def test_batch_align_saves_marked_crop_with_same_crop_window(
+    mock_write,
+    mock_read,
+    mock_align,
+    tmp_path,
+) -> None:
+    from scann.data.file_manager import FitsImagePair
+
+    window = _make_window()
+    window._calc_overlap_crop_bounds.return_value = (1, 3, 1, 4)
+    window.pair_service = Mock()
+    controller = DetectionController(window)
+    pair = FitsImagePair(
+        name="img_001",
+        new_path=tmp_path / "new" / "img_001.fits",
+        old_path=tmp_path / "old" / "img_001.fits",
+    )
+    raw_marked_path = tmp_path / "new_marked" / "img_001.fits"
+    aligned_marked_path = tmp_path / "new_marked" / "img_001__aligned_crop.fts"
+    pair.new_path.parent.mkdir(parents=True, exist_ok=True)
+    pair.old_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_marked_path.parent.mkdir(parents=True, exist_ok=True)
+    window._image_pairs = [pair]
+    window._aligned_artifact_paths.return_value = (
+        tmp_path / "new" / "img_001__aligned_crop.fts",
+        tmp_path / "old" / "img_001__aligned_crop.fts",
+        tmp_path / "new" / "img_001__aligned.marker",
+        tmp_path / "old" / "img_001__aligned.marker",
+    )
+
+    new_data = np.arange(25, dtype=np.float32).reshape(5, 5)
+    old_data = np.flip(new_data, axis=1).copy()
+    aligned_marked = new_data + 100.0
+    marked_data = np.rot90(aligned_marked, 2)
+    mock_read.side_effect = [
+        FitsImage(data=new_data, header=FitsHeader(raw={}), path=pair.new_path),
+        FitsImage(data=old_data, header=FitsHeader(raw={}), path=pair.old_path),
+        FitsImage(data=marked_data, header=FitsHeader(raw={}), path=raw_marked_path),
+    ]
+    mock_align.side_effect = [
+        AlignResult(
+            aligned_old=old_data,
+            dx=1.0,
+            dy=2.0,
+            success=True,
+        ),
+        AlignResult(
+            aligned_old=aligned_marked,
+            dx=0.0,
+            dy=0.0,
+            success=True,
+        ),
+    ]
+    window.pair_service.resolve_marked_image_path.return_value = raw_marked_path
+    window.pair_service.derive_marked_image_path.return_value = aligned_marked_path
+
+    controller.batch_align()
+
+    assert mock_align.call_count == 2
+    np.testing.assert_array_equal(mock_align.call_args_list[1].args[1], aligned_marked)
+    expected_marked = aligned_marked[1:4, 1:3]
+    assert mock_write.call_count == 3
+    assert any(
+        call.args[0] == aligned_marked_path
+        and np.array_equal(call.args[1], expected_marked)
+        for call in mock_write.call_args_list
+    )

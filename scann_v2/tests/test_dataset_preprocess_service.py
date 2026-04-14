@@ -146,3 +146,67 @@ def test_prepare_dataset_reuses_single_old_asset_for_multiple_new_tasks(tmp_path
         "20260115T203000__field_001",
         "20260115T204500__field_001",
     ]
+
+
+def test_prepare_dataset_aligns_marked_new_to_new_before_cropping(tmp_path: Path) -> None:
+    try:
+        from astropy.io import fits as astro_fits
+    except ImportError:
+        pytest.skip("astropy not installed")
+
+    dataset_root = tmp_path / "dataset"
+    new_data = np.arange(8 * 8, dtype=np.float32).reshape(8, 8)
+    marked_aligned = new_data + 500.0
+    marked_rotated = np.rot90(marked_aligned, 2)
+
+    _write_fits(
+        dataset_root / "dataset_raw" / "new" / "field_001.fits",
+        new_data,
+        date_obs="2026-01-15T20:30:00",
+    )
+    _write_fits(
+        dataset_root / "dataset_raw" / "old" / "field_001.fits",
+        new_data.copy(),
+        date_obs="2026-01-15T20:29:00",
+    )
+    _write_fits(
+        dataset_root / "dataset_raw" / "new_marked" / "field_001.fits",
+        marked_rotated,
+        date_obs="2026-01-15T20:30:00",
+    )
+
+    align_inputs: list[np.ndarray] = []
+
+    def _align_with_marked_step(reference, moving, method="auto", max_shift=None):
+        align_inputs.append(np.asarray(moving, dtype=np.float32))
+        if np.array_equal(moving, marked_aligned):
+            return AlignResult(
+                aligned_old=marked_aligned,
+                dx=0.0,
+                dy=0.0,
+                success=True,
+            )
+        return AlignResult(
+            aligned_old=np.asarray(moving, dtype=np.float32),
+            dx=0.0,
+            dy=0.0,
+            success=not np.array_equal(moving, marked_rotated),
+            error_message="alignment failed" if np.array_equal(moving, marked_rotated) else "",
+        )
+
+    service = DatasetPreprocessService(align_fn=_align_with_marked_step)
+    report = service.prepare_dataset(dataset_root)
+    tasks = service.collect_preprocessed_tasks(dataset_root)
+
+    assert report.generated_marked_crops == 1
+    assert len(tasks) == 1
+    assert tasks[0].new_marked_path is not None
+
+    with astro_fits.open(tasks[0].new_path, memmap=False) as hdul:
+        generated_new = np.asarray(hdul[0].data, dtype=np.float32)
+    with astro_fits.open(tasks[0].new_marked_path, memmap=False) as hdul:
+        generated = np.asarray(hdul[0].data, dtype=np.float32)
+
+    assert len(align_inputs) == 2
+    np.testing.assert_array_equal(align_inputs[1], marked_aligned)
+    np.testing.assert_array_equal(generated, generated_new + 500.0)

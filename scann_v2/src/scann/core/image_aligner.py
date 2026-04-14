@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Callable, List, Optional
 import logging
 import shutil
 import subprocess
@@ -189,6 +189,84 @@ def _alignment_quality(
     mov_crop = mov_n[y0:y1, x0:x1]
     aligned_crop = aligned_n[y0:y1, x0:x1]
     return _zncc(ref_crop, mov_crop), _zncc(ref_crop, aligned_crop)
+
+
+def _alignment_similarity(
+    reference_image: np.ndarray,
+    candidate_image: np.ndarray,
+) -> float:
+    """Measure full-frame similarity for orientation selection."""
+    ref_n = _enhance_stars(_normalize_for_alignment(_to_gray_f32(reference_image)))
+    candidate_n = _enhance_stars(_normalize_for_alignment(_to_gray_f32(candidate_image)))
+    return _zncc(ref_n, candidate_n)
+
+
+def choose_best_rot180_orientation(
+    reference_image: np.ndarray,
+    moving_image: np.ndarray,
+    *,
+    min_margin: float = 1e-3,
+) -> tuple[np.ndarray, str, float, float]:
+    """Choose between original and 180-degree rotated moving image."""
+    original_score = _alignment_similarity(reference_image, moving_image)
+    rotated_image = np.rot90(moving_image, 2)
+    rotated_score = _alignment_similarity(reference_image, rotated_image)
+    if rotated_score > original_score + min_margin:
+        return rotated_image, "rot180", original_score, rotated_score
+    return moving_image, "original", original_score, rotated_score
+
+
+def align_with_rot180_selection(
+    reference_image: np.ndarray,
+    moving_image: np.ndarray,
+    *,
+    method: str = "auto",
+    max_shift: int = 100,
+    align_fn: Callable[..., AlignResult] = align,
+) -> tuple[AlignResult, str, float, float]:
+    """Align after selecting the more plausible 180-degree orientation."""
+    preferred_image, preferred_name, original_score, rotated_score = choose_best_rot180_orientation(
+        reference_image,
+        moving_image,
+    )
+    fallback_image = np.rot90(moving_image, 2) if preferred_name == "original" else moving_image
+    fallback_name = "rot180" if preferred_name == "original" else "original"
+
+    last_failure: AlignResult | None = None
+    for attempt_name, attempt_image in (
+        (preferred_name, preferred_image),
+        (fallback_name, fallback_image),
+    ):
+        try:
+            result = align_fn(
+                reference_image,
+                attempt_image,
+                method=method,
+                max_shift=max_shift,
+            )
+        except Exception as exc:
+            last_failure = AlignResult(
+                aligned_old=None,
+                success=False,
+                error_message=str(exc),
+            )
+            continue
+
+        if getattr(result, "success", False) and getattr(result, "aligned_old", None) is not None:
+            return result, attempt_name, original_score, rotated_score
+        last_failure = result
+
+    return (
+        last_failure
+        or AlignResult(
+            aligned_old=None,
+            success=False,
+            error_message="rot180 orientation alignment failed",
+        ),
+        preferred_name,
+        original_score,
+        rotated_score,
+    )
 
 
 def _is_quality_improved(
@@ -465,8 +543,8 @@ def _align_siril(
 
         attempts = [
             ("1", "affine", "2.5", "0.25", "off"),
-            ("1", "similarity", "1.6", "0.15", "on"),
-            ("1", "shift", "1.2", "0.10", "on"),
+            ("1", "similarity", "1.6", "0.15", "off"),
+            ("1", "shift", "1.2", "0.10", "off"),
         ]
 
         aligned_old_path: Path | None = None
@@ -638,25 +716,11 @@ def _align_siril(
 
         before, after = _alignment_quality(new_image, old_image, aligned, dx, dy)
         if not _is_quality_improved(before, after, dx=dx, dy=dy):
-            # Siril 在天文场景下可能存在大位移/低纹理区域，ZNCC 指标并不总是可靠。
-            # 这里放宽为“非灾难性下降可接受”，避免误判大量失败样本。
-            quality_drop = before - after
-            if not np.isfinite(after) or after < -0.20 or quality_drop > 0.20:
-                return AlignResult(
-                    aligned_old=None,
-                    dx=dx,
-                    dy=dy,
-                    success=False,
-                    error_message=(
-                        f"Siril 质量不足: before={before:.4f}, after={after:.4f}, "
-                        f"drop={quality_drop:.4f}, dx={dx:.3f}, dy={dy:.3f}"
-                    ),
-                )
             logger.warning(
-                "Siril 质量检查放宽通过: before=%.4f, after=%.4f, drop=%.4f, dx=%.3f, dy=%.3f",
+                "Siril 注册结果未通过本地质量门，但优先信任 Siril 输出: "
+                "before=%.4f, after=%.4f, dx=%.3f, dy=%.3f",
                 before,
                 after,
-                quality_drop,
                 dx,
                 dy,
             )

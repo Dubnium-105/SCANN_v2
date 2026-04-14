@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 import numpy as np
 import pytest
 
-from scann.core.models import FitsHeader, FitsImage, ImagePair
+from scann.core.models import AlignResult, FitsHeader, FitsImage, ImagePair
 from scann.data.file_manager import FitsImagePair
 from scann.gui.controllers import PairController
 from scann.services.dataset_preprocess_service import DatasetPreprocessService
@@ -195,6 +195,68 @@ class TestPairController:
         window.set_candidates.assert_called_once_with(window._candidates_cache[0])
         assert window._new_image_data.shape == (20, 22)
         assert window._old_image_data.shape == (20, 22)
+
+    @patch("scann.gui.controllers.pair_controller.align")
+    def test_load_pair_reuses_alignment_crop_for_raw_marked_image(self, mock_align):
+        service = Mock(spec=PairService)
+        controller, window, _service, _preprocess = _make_controller(service)
+        pair = FitsImagePair(
+            name="img_001",
+            new_path=Path("/data/new/img_001.fits"),
+            old_path=Path("/data/old/img_001.fits"),
+        )
+        aligned_new_path = Path("/data/new/img_001__aligned_crop.fts")
+        aligned_old_path = Path("/data/old/img_001__aligned_crop.fts")
+        raw_marked_path = Path("/data/new_marked/img_001.fits")
+        window._image_pairs = [pair]
+
+        service.load_pair.return_value = ImagePair(
+            name="img_001",
+            new_image=FitsImage(
+                data=np.ones((6, 6), dtype=np.float32),
+                header=FitsHeader(raw={}),
+                path=aligned_new_path,
+            ),
+            old_image=FitsImage(
+                data=np.ones((6, 6), dtype=np.float32) * 2,
+                header=FitsHeader(raw={}),
+                path=aligned_old_path,
+            ),
+            aligned=True,
+        )
+
+        def _resolve_marked(path: str | Path):
+            if Path(path) == aligned_new_path:
+                return None
+            if Path(path) == pair.new_path:
+                return raw_marked_path
+            return None
+
+        raw_new = np.arange(20 * 20, dtype=np.float32).reshape(20, 20)
+        raw_marked = np.rot90(raw_new + 100.0, 2)
+        aligned_marked = raw_new + 100.0
+        service.resolve_marked_image_path.side_effect = _resolve_marked
+        service.read_image.side_effect = [
+            FitsImage(data=raw_marked, header=FitsHeader(raw={}), path=raw_marked_path),
+            FitsImage(data=raw_new, header=FitsHeader(raw={}), path=pair.new_path),
+        ]
+        service.resolve_alignment_crop_bounds.return_value = (3, 9, 4, 10)
+        service.calc_nonzero_valid_bounds.return_value = None
+        mock_align.return_value = AlignResult(
+            aligned_old=aligned_marked,
+            dx=0.0,
+            dy=0.0,
+            success=True,
+        )
+
+        controller.load_pair(0)
+
+        mock_align.assert_called_once()
+        np.testing.assert_array_equal(mock_align.call_args.args[1], aligned_marked)
+        np.testing.assert_array_equal(
+            window._new_marked_image_data,
+            aligned_marked[4:10, 3:9],
+        )
 
     def test_recent_folder_actions_update_config_and_menu(self):
         controller, window, _service, _preprocess = _make_controller()
