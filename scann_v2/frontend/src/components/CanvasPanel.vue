@@ -3318,12 +3318,70 @@ function findAnnotationAtPoint(point) {
   return null
 }
 
+function findBestPrelabelOverlayAtPoint(point) {
+  if (!point || !prelabelReviewOpen.value) {
+    return null
+  }
+
+  const reviewOverlayIds = new Set(
+    prelabelReviewAnnotations.value
+      .map((item) => String(item?.source_overlay_id || ''))
+      .filter(Boolean),
+  )
+  if (reviewOverlayIds.size === 0) {
+    return null
+  }
+
+  const matched = prelabelAnnotations.value
+    .map((annotation, index) => ({ annotation, index }))
+    .filter(({ annotation }) => (
+      annotation?.type === 'bbox'
+      && reviewOverlayIds.has(String(annotation?.id || ''))
+      && annotationContainsPoint(annotation, point)
+    ))
+
+  if (matched.length === 0) {
+    return null
+  }
+
+  matched.sort((left, right) => {
+    const areaDiff = getBboxArea(left.annotation) - getBboxArea(right.annotation)
+    if (Math.abs(areaDiff) > Number.EPSILON) {
+      return areaDiff
+    }
+
+    const centerDistanceDiff = getBboxCenterDistance(point, left.annotation) - getBboxCenterDistance(point, right.annotation)
+    if (Math.abs(centerDistanceDiff) > Number.EPSILON) {
+      return centerDistanceDiff
+    }
+
+    return right.index - left.index
+  })
+
+  return matched[0].annotation
+}
+
 function trySelectAnnotationAtPoint(point) {
   const matched = findAnnotationAtPoint(point)
   if (!matched) {
     return false
   }
   selectAnnotation(matched.id)
+  return true
+}
+
+function trySelectPrelabelReviewAtPoint(point) {
+  const overlay = findBestPrelabelOverlayAtPoint(point)
+  if (!overlay) {
+    return false
+  }
+
+  const matchedReviewAnnotation = prelabelReviewAnnotations.value.find((item) => item.source_overlay_id === overlay.id)
+  if (!matchedReviewAnnotation) {
+    return false
+  }
+
+  selectPrelabelReviewAnnotation(matchedReviewAnnotation.id)
   return true
 }
 
@@ -3537,6 +3595,7 @@ function onStageMouseUp(event) {
 
   const pointer = getPointer(event)
   const wasStageDragged = stageDragMoved.value
+  const isSelectionClick = isCanvasClickGesture(event)
   const isDrawClick = isCanvasClickGesture(event, CANVAS_DRAW_CLICK_TOLERANCE)
   stageDragMoved.value = false
   clearStagePointerDown()
@@ -3550,6 +3609,10 @@ function onStageMouseUp(event) {
       draftRect.value = null
       drawStart.value = null
     }
+    return
+  }
+
+  if (prelabelReviewOpen.value && isSelectionClick && trySelectPrelabelReviewAtPoint(pointer)) {
     return
   }
 

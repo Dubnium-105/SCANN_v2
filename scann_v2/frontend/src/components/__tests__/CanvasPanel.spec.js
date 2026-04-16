@@ -445,6 +445,61 @@ describe('CanvasPanel', () => {
     expect(fetchCalls.some((item) => String(item.url).startsWith('/api/prelabels/PGC%2017069'))).toBe(true)
   })
 
+  it('selects AI prelabel review item by clicking overlay on canvas', async () => {
+    fetchCalls = mockImageFetch({}, {
+      prelabels: {
+        'PGC 17069': createPrelabel('PGC 17069', {
+          box_count: 2,
+          annotations: [
+            {
+              x: 16,
+              y: 24,
+              width: 20,
+              height: 28,
+              label: null,
+              detail_type: 'asteroid',
+              confidence: 0.91,
+            },
+            {
+              x: 70,
+              y: 80,
+              width: 18,
+              height: 22,
+              label: null,
+              detail_type: 'supernova',
+              confidence: 0.88,
+            },
+          ],
+        }),
+      },
+    })
+
+    const wrapper = mount(CanvasPanel, {
+      global: {
+        stubs: globalStubs,
+      },
+    })
+
+    await flushPromises()
+    await wrapper.get('[data-testid="apply-prelabel"]').trigger('click')
+    await flushPromises()
+
+    const stage = wrapper.get('[data-testid="stage"]')
+    const reviewItems = () => wrapper.findAll('[data-testid="prelabel-review-item"]')
+    const isReviewItemSelected = (item) => item.element.parentElement.className.includes('border-amber-400')
+    expect(reviewItems()).toHaveLength(2)
+
+    expect(isReviewItemSelected(reviewItems()[0])).toBe(true)
+    expect(isReviewItemSelected(reviewItems()[1])).toBe(false)
+
+    await stage.trigger('mousedown', { clientX: 53, clientY: 53 })
+    await stage.trigger('mouseup', { clientX: 53, clientY: 53 })
+    await flushPromises()
+
+    expect(isReviewItemSelected(reviewItems()[1])).toBe(true)
+    expect(isReviewItemSelected(reviewItems()[0])).toBe(false)
+  })
+
   it('uses target_type from prelabel response when detail_type is missing', async () => {
     fetchCalls = mockImageFetch({}, {
       prelabels: {
