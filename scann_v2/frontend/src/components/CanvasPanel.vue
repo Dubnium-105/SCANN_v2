@@ -300,9 +300,9 @@
                   data-testid="bbox-stroke-width-slider"
                   type="range"
                   class="w-full"
-                  min="1"
+                  min="0.1"
                   max="8"
-                  step="0.5"
+                  step="0.1"
                   :value="bboxStrokeWidth"
                   @input="onBboxStrokeWidthInput"
                 >
@@ -326,9 +326,9 @@
                   data-testid="polygon-stroke-width-slider"
                   type="range"
                   class="w-full"
-                  min="1"
+                  min="0.1"
                   max="8"
-                  step="0.5"
+                  step="0.1"
                   :value="polygonStrokeWidth"
                   @input="onPolygonStrokeWidthInput"
                 >
@@ -455,7 +455,7 @@
                   width: manualCropRect.width,
                   height: manualCropRect.height,
                   stroke: '#22d3ee',
-                  strokeWidth: Math.max(1.5, bboxStrokeWidth),
+                  strokeWidth: bboxStrokeWidth,
                   dash: [8, 4],
                   listening: false,
                 }"
@@ -490,7 +490,7 @@
                 width: overlay.width,
                 height: overlay.height,
                 stroke: '#fb7185',
-                strokeWidth: Math.max(1.5, bboxStrokeWidth),
+                strokeWidth: bboxStrokeWidth,
                 dash: [8, 4],
               }"
             />
@@ -503,7 +503,7 @@
                 width: overlay.width,
                 height: overlay.height,
                 stroke: '#f59e0b',
-                strokeWidth: Math.max(1.5, bboxStrokeWidth),
+                strokeWidth: bboxStrokeWidth,
                 dash: [5, 3],
               }"
             />
@@ -516,7 +516,7 @@
                 width: overlay.width,
                 height: overlay.height,
                 stroke: '#fde047',
-                strokeWidth: Math.max(1.5, bboxStrokeWidth),
+                strokeWidth: bboxStrokeWidth,
               }"
             />
             <v-rect
@@ -528,7 +528,7 @@
                 width: overlay.width,
                 height: overlay.height,
                 stroke: '#2dd4bf',
-                strokeWidth: Math.max(1.5, bboxStrokeWidth),
+                strokeWidth: bboxStrokeWidth,
                 dash: [2, 2],
               }"
             />
@@ -1066,9 +1066,9 @@ const stretchMax = ref(1)
 const autoStretchEnabled = ref(true)
 const taskAutoStretchById = ref({})
 const invertDisplay = ref(false)
-const bboxStrokeWidth = ref(2)
+const bboxStrokeWidth = ref(1)
 const pointRadius = ref(4)
-const polygonStrokeWidth = ref(2)
+const polygonStrokeWidth = ref(1)
 const prelabelVisible = ref(true)
 const prelabelLoadState = ref('idle')
 const prelabelMessage = ref('')
@@ -2215,7 +2215,7 @@ function onBboxStrokeWidthInput(event) {
   if (!Number.isFinite(value)) {
     return
   }
-  bboxStrokeWidth.value = Math.max(1, Math.min(8, value))
+  bboxStrokeWidth.value = Math.max(0.1, Math.min(8, value))
 }
 
 function onPointRadiusInput(event) {
@@ -2231,7 +2231,7 @@ function onPolygonStrokeWidthInput(event) {
   if (!Number.isFinite(value)) {
     return
   }
-  polygonStrokeWidth.value = Math.max(1, Math.min(8, value))
+  polygonStrokeWidth.value = Math.max(0.1, Math.min(8, value))
 }
 
 function redrawFitsCanvas() {
@@ -2799,7 +2799,7 @@ function getPrelabelOverlayRectConfig(annotation) {
     width: annotation.width,
     height: annotation.height,
     stroke: isSelected ? '#fbbf24' : '#60a5fa',
-    strokeWidth: isSelected ? Math.max(3, bboxStrokeWidth.value + 1.5) : Math.max(1.5, bboxStrokeWidth.value),
+    strokeWidth: isSelected ? Math.max(3, bboxStrokeWidth.value + 1.5) : bboxStrokeWidth.value,
     fill: isSelected ? 'rgba(251, 191, 36, 0.16)' : 'rgba(96, 165, 250, 0.10)',
     dash: isSelected ? [10, 4] : [6, 4],
     shadowColor: isSelected ? '#fbbf24' : undefined,
