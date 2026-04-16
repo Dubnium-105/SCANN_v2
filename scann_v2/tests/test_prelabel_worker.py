@@ -280,10 +280,71 @@ def test_detection_processor_applies_threshold_and_limit(tmp_path) -> None:
     assert len(result.annotations) == 2
     assert [round(item.confidence, 2) for item in result.annotations] == [0.92, 0.61]
     assert all(item.label is None for item in result.annotations)
-    assert [item.detail_type for item in result.annotations] == ["asteroid", "asteroid"]
-    assert result.ai_suggestion == "asteroid"
+    assert [item.detail_type for item in result.annotations] == ["unlabeled", "unlabeled"]
+    assert result.ai_suggestion == "unlabeled"
     assert result.metadata["raw_candidate_count"] == 3
     assert result.metadata["candidate_count"] == 2
-    assert result.metadata["default_detail_type"] == "asteroid"
+    assert result.metadata["default_detail_type"] == "unlabeled"
     assert processor.inference_engine.threshold == 0.25
     assert processor.pipeline.detection_params.topk == 20
+
+
+def test_detection_processor_prefers_inferred_target_type_over_default(tmp_path) -> None:
+    config = _worker_config(tmp_path)
+    processor = DetectionPrelabelProcessor.__new__(DetectionPrelabelProcessor)
+    processor.config = config
+
+    class _FakeEngine:
+        def __init__(self) -> None:
+            self.threshold = 0.25
+
+    processor.inference_engine = _FakeEngine()
+
+    class _FakePipeline:
+        def __init__(self) -> None:
+            self.detection_params = type("Params", (), {"topk": 20})()
+
+        def process_pair(self, **_kwargs):
+            inferred_candidate = type(
+                "Candidate",
+                (),
+                {
+                    "x": 20,
+                    "y": 30,
+                    "ai_score": 0.92,
+                    "target_type": "supernova",
+                },
+            )()
+            fallback_candidate = type(
+                "Candidate",
+                (),
+                {
+                    "x": 40,
+                    "y": 60,
+                    "ai_score": 0.61,
+                },
+            )()
+
+            return type("Result", (), {"candidates": [inferred_candidate, fallback_candidate], "error": ""})()
+
+    processor.pipeline = _FakePipeline()
+
+    class _FakeAssets:
+        def load_fits(self, _view_name: str):
+            return FitsImage(data=np.zeros((120, 120), dtype=np.float32), header=FitsHeader(raw={}))
+
+    result = processor.process(
+        WorkerClaimResponse(
+            job_id="job-6",
+            task_id="task-6",
+            model_version="detector-v1",
+            candidate_limit=2,
+            confidence_threshold=0.6,
+            input_fingerprint="def",
+            paths={"new": "new/task-6.fts"},
+        ),
+        _FakeAssets(),
+    )
+
+    assert [item.detail_type for item in result.annotations] == ["supernova", "unlabeled"]
+    assert result.ai_suggestion == "supernova"

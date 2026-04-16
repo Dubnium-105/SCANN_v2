@@ -47,7 +47,7 @@ class WorkerDetectionConfig:
     model_id: str | None = None
     model_format: str = "auto"
     model_backbone: str = "auto"
-    default_detail_type: str = "asteroid"
+    default_detail_type: str = "unlabeled"
     compute_device: str = "auto"
     batch_size: int = 64
     patch_size: int = 80
@@ -291,22 +291,22 @@ class DetectionPrelabelProcessor:
         safe_height = max(1, min(int(box_height), max(1, height - safe_top)))
         return safe_left, safe_top, safe_width, safe_height
 
-    def _candidate_detail_type(self, candidate) -> str | None:
-        candidate_detail_type = (
-            str(
-                getattr(candidate, "detail_type", "")
-                or getattr(candidate, "target_type", "")
-                or getattr(candidate, "targetType", "")
-            )
-            .strip()
-            .lower()
-        )
-        if candidate_detail_type and candidate_detail_type not in {"unlabeled", "real", "bogus"}:
-            return candidate_detail_type
+    def _candidate_detail_type(self, candidate) -> str:
+        for field_name in (
+            "detail_type",
+            "target_type",
+            "targetType",
+            "class_name",
+            "className",
+            "predicted_label",
+            "label",
+        ):
+            candidate_detail_type = str(getattr(candidate, field_name, "") or "").strip().lower()
+            if candidate_detail_type:
+                return candidate_detail_type
+
         default_detail_type = str(self.config.detection.default_detail_type or "").strip().lower()
-        if default_detail_type and default_detail_type not in {"unlabeled", "real", "bogus"}:
-            return default_detail_type
-        return None
+        return default_detail_type or "unlabeled"
 
     def _candidate_to_prelabel_box(self, candidate, image_shape: tuple[int, ...]) -> PrelabelBox:
         detail_type = self._candidate_detail_type(candidate)
@@ -418,7 +418,10 @@ class DetectionPrelabelProcessor:
             for item in annotations
             if str(item.detail_type or "").strip()
         ]
-        ai_suggestion = detail_types[0] if detail_types else None
+        ai_suggestion = next(
+            (item for item in detail_types if item not in {"unlabeled", "real", "bogus"}),
+            detail_types[0] if detail_types else None,
+        )
         ai_confidence = max((item.confidence or 0.0 for item in annotations), default=None)
         return PrelabelProcessingResult(
             source_view="new",
@@ -598,7 +601,7 @@ def load_prelabel_worker_config_from_env() -> PrelabelWorkerConfig:
         default_detail_type=(
             _env_str("SCANN_PRELABEL_WORKER_DEFAULT_DETAIL_TYPE")
             or _env_str("SCANN_PRELABEL_WORKER_TARGET_TYPE")
-            or str(getattr(app_config, "prelabel_default_detail_type", "asteroid") or "asteroid")
+            or str(getattr(app_config, "prelabel_default_detail_type", "unlabeled") or "unlabeled")
         ),
         compute_device=_env_str("SCANN_PRELABEL_WORKER_COMPUTE_DEVICE") or str(getattr(app_config, "compute_device", "auto")),
         batch_size=int(_env_str("SCANN_PRELABEL_WORKER_BATCH_SIZE", str(getattr(app_config, "batch_size", 64))) or 64),
