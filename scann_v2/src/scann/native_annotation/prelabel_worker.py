@@ -47,6 +47,7 @@ class WorkerDetectionConfig:
     model_id: str | None = None
     model_format: str = "auto"
     model_backbone: str = "auto"
+    default_detail_type: str = "asteroid"
     compute_device: str = "auto"
     batch_size: int = 64
     patch_size: int = 80
@@ -290,8 +291,25 @@ class DetectionPrelabelProcessor:
         safe_height = max(1, min(int(box_height), max(1, height - safe_top)))
         return safe_left, safe_top, safe_width, safe_height
 
+    def _candidate_detail_type(self, candidate) -> str | None:
+        candidate_detail_type = (
+            str(
+                getattr(candidate, "detail_type", "")
+                or getattr(candidate, "target_type", "")
+                or getattr(candidate, "targetType", "")
+            )
+            .strip()
+            .lower()
+        )
+        if candidate_detail_type and candidate_detail_type not in {"unlabeled", "real", "bogus"}:
+            return candidate_detail_type
+        default_detail_type = str(self.config.detection.default_detail_type or "").strip().lower()
+        if default_detail_type and default_detail_type not in {"unlabeled", "real", "bogus"}:
+            return default_detail_type
+        return None
+
     def _candidate_to_prelabel_box(self, candidate, image_shape: tuple[int, ...]) -> PrelabelBox:
-        detail_type = str(getattr(candidate, "detail_type", "")).strip() or None
+        detail_type = self._candidate_detail_type(candidate)
         bbox_width = getattr(candidate, "bbox_width", None)
         bbox_height = getattr(candidate, "bbox_height", None)
         if bbox_width is not None and bbox_height is not None:
@@ -412,6 +430,7 @@ class DetectionPrelabelProcessor:
                 "model_version": self.config.detection.model_version,
                 "model_id": self.config.detection.model_id,
                 "model_backbone": self.config.detection.model_backbone,
+                "default_detail_type": self.config.detection.default_detail_type,
                 "detection_mode": self.config.detection.detection_mode,
                 "patch_size": self.config.detection.patch_size,
                 "candidate_limit": requested_limit,
@@ -576,6 +595,11 @@ def load_prelabel_worker_config_from_env() -> PrelabelWorkerConfig:
         model_id=model_id,
         model_format=_env_str("SCANN_PRELABEL_WORKER_MODEL_FORMAT") or str(getattr(app_config, "model_format", "auto")),
         model_backbone=_env_str("SCANN_PRELABEL_WORKER_MODEL_BACKBONE") or str(getattr(app_config, "model_backbone", "auto")),
+        default_detail_type=(
+            _env_str("SCANN_PRELABEL_WORKER_DEFAULT_DETAIL_TYPE")
+            or _env_str("SCANN_PRELABEL_WORKER_TARGET_TYPE")
+            or str(getattr(app_config, "prelabel_default_detail_type", "asteroid") or "asteroid")
+        ),
         compute_device=_env_str("SCANN_PRELABEL_WORKER_COMPUTE_DEVICE") or str(getattr(app_config, "compute_device", "auto")),
         batch_size=int(_env_str("SCANN_PRELABEL_WORKER_BATCH_SIZE", str(getattr(app_config, "batch_size", 64))) or 64),
         patch_size=int(_env_str("SCANN_PRELABEL_WORKER_PATCH_SIZE", str(getattr(app_config, "slice_size", 80))) or 80),

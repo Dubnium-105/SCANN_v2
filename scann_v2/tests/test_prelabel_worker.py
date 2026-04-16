@@ -280,7 +280,10 @@ def test_detection_processor_applies_threshold_and_limit(tmp_path) -> None:
     assert len(result.annotations) == 2
     assert [round(item.confidence, 2) for item in result.annotations] == [0.92, 0.61]
     assert all(item.label is None for item in result.annotations)
+    assert [item.detail_type for item in result.annotations] == ["asteroid", "asteroid"]
+    assert result.ai_suggestion == "asteroid"
     assert result.metadata["raw_candidate_count"] == 3
     assert result.metadata["candidate_count"] == 2
+    assert result.metadata["default_detail_type"] == "asteroid"
     assert processor.inference_engine.threshold == 0.25
     assert processor.pipeline.detection_params.topk == 20

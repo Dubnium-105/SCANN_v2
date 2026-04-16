@@ -710,6 +710,9 @@ class WorkerConsoleDialog(QDialog):
             model_id=self.edit_prelabel_model_id.text().strip() or Path(model_path).stem,
             model_format=str(getattr(app_config, "model_format", "auto") or "auto"),
             model_backbone=self.edit_prelabel_model_backbone.text().strip() or str(getattr(app_config, "model_backbone", "auto") or "auto"),
+            default_detail_type=str(
+                getattr(app_config, "prelabel_default_detail_type", "asteroid") or "asteroid"
+            ),
             compute_device=self.edit_prelabel_compute_device.text().strip() or str(getattr(app_config, "compute_device", "auto") or "auto"),
             batch_size=int(getattr(app_config, "batch_size", 64)),
             patch_size=int(getattr(app_config, "slice_size", 80)),

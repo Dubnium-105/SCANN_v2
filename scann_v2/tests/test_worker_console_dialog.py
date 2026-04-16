@@ -89,6 +89,7 @@ def test_build_prelabel_config_uses_ui_fields_and_config_defaults(dialog, config
     assert config.detection.model_version == "detector-v3"
     assert config.detection.model_id == "detector-v3-run-001"
     assert config.detection.model_backbone == "ViT_B_16"
+    assert config.detection.default_detail_type == "asteroid"
     assert config.detection.compute_device == "cuda"
     assert config.detection.detection_params.thresh == 80
     assert config.detection.patch_size == 80
