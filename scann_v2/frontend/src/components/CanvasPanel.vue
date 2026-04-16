@@ -745,7 +745,10 @@
                   </p>
                   <div
                     data-testid="prelabel-review-list"
+                    ref="prelabelReviewListViewportRef"
                     class="max-h-28 space-y-1 overflow-auto rounded border border-amber-900/40 bg-slate-950/40 p-1"
+                    tabindex="0"
+                    @keydown="onPrelabelReviewListKeyDown"
                   >
                     <div
                       v-for="item in prelabelReviewAnnotations"
@@ -755,6 +758,7 @@
                     >
                       <button
                         data-testid="prelabel-review-item"
+                        :data-ann-id="item.id"
                         class="min-w-0 flex-1 text-left"
                         @click="selectPrelabelReviewAnnotation(item.id)"
                       >
@@ -1078,6 +1082,7 @@ const prelabelReviewOpen = ref(false)
 const prelabelReviewAnnotations = ref([])
 const selectedPrelabelReviewId = ref('')
 const selectedPrelabelReviewLabel = ref('Unlabeled')
+const prelabelReviewListViewportRef = ref(null)
 const isRegeneratingPrelabel = ref(false)
 let hostResizeObserver = null
 let taskHeartbeatTimerId = null
@@ -2601,11 +2606,65 @@ function centerStageOnPrelabelReviewAnnotation(annotationId) {
   )
 }
 
+function scrollSelectedPrelabelReviewIntoView(annotationId) {
+  if (!annotationId || !prelabelReviewListViewportRef.value) {
+    return
+  }
+  nextTick(() => {
+    const viewport = prelabelReviewListViewportRef.value
+    if (!viewport) {
+      return
+    }
+    const selectedButton = viewport.querySelector(
+      `[data-testid="prelabel-review-item"][data-ann-id="${annotationId}"]`,
+    )
+    if (!selectedButton || typeof selectedButton.scrollIntoView !== 'function') {
+      return
+    }
+    selectedButton.scrollIntoView({ block: 'nearest' })
+  })
+}
+
 function selectPrelabelReviewAnnotation(annotationId) {
   selectedPrelabelReviewId.value = annotationId
   const selected = prelabelReviewAnnotations.value.find((item) => item.id === annotationId)
   selectedPrelabelReviewLabel.value = getPrelabelReviewLabelKey(selected)
   centerStageOnPrelabelReviewAnnotation(annotationId)
+  scrollSelectedPrelabelReviewIntoView(annotationId)
+}
+
+function movePrelabelReviewSelectionBy(step) {
+  const list = prelabelReviewAnnotations.value
+  if (!Array.isArray(list) || list.length === 0) {
+    return
+  }
+
+  const currentIndex = list.findIndex((item) => item.id === selectedPrelabelReviewId.value)
+  const safeCurrentIndex = currentIndex >= 0 ? currentIndex : 0
+  const nextIndex = Math.max(0, Math.min(list.length - 1, safeCurrentIndex + step))
+  if (nextIndex === safeCurrentIndex && currentIndex >= 0) {
+    return
+  }
+  selectPrelabelReviewAnnotation(list[nextIndex].id)
+}
+
+function onPrelabelReviewListKeyDown(event) {
+  if (!prelabelReviewOpen.value) {
+    return
+  }
+
+  if (event?.key === 'ArrowUp') {
+    event.preventDefault()
+    event.stopPropagation()
+    movePrelabelReviewSelectionBy(-1)
+    return
+  }
+
+  if (event?.key === 'ArrowDown') {
+    event.preventDefault()
+    event.stopPropagation()
+    movePrelabelReviewSelectionBy(1)
+  }
 }
 
 function beginPrelabelReview() {
