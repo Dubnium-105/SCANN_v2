@@ -1981,7 +1981,7 @@ async function loadTaskPrelabel(taskId) {
       label: undefined,
       detail_type: getAnnotationDetailType({
         label: ann.label || detail.ai_suggestion,
-        detail_type: ann.detail_type,
+        detail_type: ann.detail_type || ann.target_type || ann.targetType,
       }) || undefined,
       confidence: Number.isFinite(Number(ann.confidence)) ? Number(ann.confidence) : undefined,
       origin: 'prelabel_overlay',

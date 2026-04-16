@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 from scann.core.dataset_storage import (
     DatasetStorage,
@@ -28,7 +28,10 @@ class PrelabelBox(BaseModel):
     width: float = Field(..., ge=0)
     height: float = Field(..., ge=0)
     label: Optional[str] = None
-    detail_type: Optional[str] = None
+    detail_type: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("detail_type", "target_type", "targetType"),
+    )
     confidence: Optional[float] = Field(default=1.0, ge=0)
 
 
