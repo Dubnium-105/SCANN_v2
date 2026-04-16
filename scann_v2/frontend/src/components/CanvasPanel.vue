@@ -2578,10 +2578,34 @@ function createReviewAnnotationFromPrelabel(annotation, index) {
   }
 }
 
+function centerStageOnPrelabelReviewAnnotation(annotationId) {
+  if (!annotationId) {
+    return
+  }
+  const selected = prelabelReviewAnnotations.value.find((item) => item.id === annotationId)
+  if (!selected) {
+    return
+  }
+
+  const scale = Number(stageScale.value) || 1
+  const targetX = Number(selected.x) + Math.max(0, Number(selected.width) || 0) / 2
+  const targetY = Number(selected.y) + Math.max(0, Number(selected.height) || 0) / 2
+
+  const host = canvasHostRef.value
+  const viewportWidth = host?.clientWidth || stageWidth.value
+  const viewportHeight = host?.clientHeight || stageHeight.value
+
+  updateStagePosition(
+    viewportWidth / 2 - targetX * scale,
+    viewportHeight / 2 - targetY * scale,
+  )
+}
+
 function selectPrelabelReviewAnnotation(annotationId) {
   selectedPrelabelReviewId.value = annotationId
   const selected = prelabelReviewAnnotations.value.find((item) => item.id === annotationId)
   selectedPrelabelReviewLabel.value = getPrelabelReviewLabelKey(selected)
+  centerStageOnPrelabelReviewAnnotation(annotationId)
 }
 
 function beginPrelabelReview() {
