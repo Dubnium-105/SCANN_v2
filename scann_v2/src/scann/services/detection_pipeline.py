@@ -454,12 +454,24 @@ class DetectionPipeline:
             patches.append(patch_3ch)
 
         try:
-            scores = self.inference_engine.classify_patches(patches)
+            details = self.inference_engine.classify_patches_detailed(patches)
         except Exception:
             return candidates
 
-        for candidate, score in zip(candidates, scores):
-            candidate.ai_score = float(score)
+        for candidate, detail in zip(candidates, details):
+            if isinstance(detail, dict):
+                candidate.ai_score = float(detail.get("score", 0.0) or 0.0)
+                detail_type = str(detail.get("detail_type") or "").strip().lower()
+                if detail_type:
+                    setattr(candidate, "detail_type", detail_type)
+                label = str(detail.get("label") or "").strip().lower()
+                if label:
+                    setattr(candidate, "label", label)
+                predicted_class = str(detail.get("predicted_class") or "").strip().lower()
+                if predicted_class:
+                    setattr(candidate, "predicted_label", predicted_class)
+            else:
+                candidate.ai_score = float(detail)
 
         return candidates
 

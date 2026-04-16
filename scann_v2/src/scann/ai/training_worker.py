@@ -36,14 +36,33 @@ import torch  # 现在导入torch
 
 from scann.ai.device_utils import resolve_device
 from scann.ai.model import ModelFormat, SCANNClassifier
-from scann.ai.trainer import TrainConfig, compute_metrics, find_threshold_for_recall
-from scann.core.annotation_models import DETAIL_TYPE_TO_LABEL, DetailType
+from scann.ai.trainer import TrainConfig
+from scann.core.annotation_models import DetailType
 from scann.core.fits_annotation_storage import load_v2_annotation_document
 from scann.core.fits_io import read_fits
 from scann.data.file_manager import FitsImagePair, match_new_old_pairs
 from scann.services.detection_image_adapter import robust_to_uint8
 
 logger = logging.getLogger(__name__)
+
+
+DETAIL_TYPE_CLASS_ORDER: tuple[str, ...] = (
+    DetailType.ASTEROID.value,
+    DetailType.SUPERNOVA.value,
+    DetailType.VARIABLE_STAR.value,
+    DetailType.SATELLITE_TRAIL.value,
+    DetailType.NOISE.value,
+    DetailType.DIFFRACTION_SPIKE.value,
+    DetailType.CMOS_CONDENSATION.value,
+    DetailType.CORRESPONDING.value,
+    DetailType.DISAPPEARED_ASTEROID.value,
+    DetailType.DISAPPEARED_STAR.value,
+    DetailType.DISAPPEARED_GALAXY.value,
+)
+DETAIL_TYPE_TO_CLASS_INDEX: dict[str, int] = {
+    detail_type: index
+    for index, detail_type in enumerate(DETAIL_TYPE_CLASS_ORDER)
+}
 
 # 确认缓存目录
 torch.hub.set_dir(str(model_cache_dir))
@@ -88,8 +107,8 @@ class TrainingWorker(QThread):
 
     def _resolve_task_type(self) -> str:
         task_type = str(self._params.get("task_type", "classification")).strip().lower()
-        if task_type in {"classification", "detection"}:
-            return task_type
+        if task_type != "classification":
+            logger.warning("训练任务已统一为11类细分类，忽略 task_type=%s，强制使用 classification", task_type)
         return "classification"
 
     def _collect_v1_samples_from_dirs(
@@ -171,23 +190,15 @@ class TrainingWorker(QThread):
             old_path=old_path,
         )
 
-    def _resolve_annotation_label(self, ann: dict[str, Any], image_info: dict[str, Any]) -> str | None:
+    def _resolve_annotation_detail_type(self, ann: dict[str, Any], image_info: dict[str, Any]) -> str | None:
         detail_type = str(ann.get("detail_type") or image_info.get("detail_type") or "").strip()
         if detail_type:
             try:
-                return DETAIL_TYPE_TO_LABEL[DetailType(detail_type)].value
+                return DetailType(detail_type).value
             except Exception:
                 normalized = detail_type.lower()
-                if normalized in {"real", "bogus"}:
+                if normalized in DETAIL_TYPE_TO_CLASS_INDEX:
                     return normalized
-
-        label = str(ann.get("label") or "").strip().lower()
-        if label in {"real", "bogus"}:
-            return label
-
-        image_label = str(image_info.get("label") or "").strip().lower()
-        if image_label in {"real", "bogus"}:
-            return image_label
         return None
 
     def _ensure_2d_image(self, data: np.ndarray, path: Path) -> np.ndarray:
@@ -340,8 +351,8 @@ class TrainingWorker(QThread):
                 old_u8_view = old_u8
 
             for ann in annotations:
-                label = self._resolve_annotation_label(ann, image_info)
-                if label is None:
+                detail_type = self._resolve_annotation_detail_type(ann, image_info)
+                if detail_type is None:
                     continue
                 center_x = float(ann.get("x", 0)) + float(ann.get("width", 0)) / 2.0
                 center_y = float(ann.get("y", 0)) + float(ann.get("height", 0)) / 2.0
@@ -355,7 +366,10 @@ class TrainingWorker(QThread):
                     int(round(max(float(ann.get("width", 0) or 0), float(ann.get("height", 0) or 0), 0.0))),
                 )
                 triplet = self._build_triplet_patch(new_u8_view, old_u8_view, center_x, center_y, patch_size)
-                all_samples.append((triplet, 1 if label == "real" else 0))
+                class_index = DETAIL_TYPE_TO_CLASS_INDEX.get(detail_type)
+                if class_index is None:
+                    continue
+                all_samples.append((triplet, class_index))
 
         if not all_samples:
             raise ValueError("v2 数据集里未找到可训练的已标注样本")
@@ -374,19 +388,14 @@ class TrainingWorker(QThread):
         return load_v2_annotation_document(dataset_root)
 
     def _build_sample_pool(self) -> tuple[list[tuple[Any, int]], str]:
-        pos_dir = self._params.get("pos_dir")
-        neg_dir = self._params.get("neg_dir")
-        if pos_dir and neg_dir:
-            return self._collect_v1_samples_from_dirs(pos_dir, neg_dir), "file"
-
         dataset_dir = Path(str(self._params.get("dataset_dir", "")).strip())
         if not str(dataset_dir):
             raise ValueError("未设置数据集目录")
 
         dataset_format = self._resolve_dataset_format()
-        if dataset_format == "v2":
-            return self._collect_v2_samples_from_root(dataset_dir), "array"
-        return self._collect_v1_samples_from_root(dataset_dir), "file"
+        if dataset_format != "v2":
+            raise ValueError("当前训练链路已统一为11类细分类，仅支持 v2 FITS 标注数据集")
+        return self._collect_v2_samples_from_root(dataset_dir), "array"
 
     @staticmethod
     def _compute_dense_detection_loss(
@@ -456,7 +465,6 @@ class TrainingWorker(QThread):
             import torch
             import torch.nn as nn
             import torch.optim as optim
-            from sklearn.metrics import average_precision_score
             from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
             from torchvision import models
 
@@ -688,11 +696,14 @@ class TrainingWorker(QThread):
                 augment=False,
             )
 
-            # 类别平衡采样
+            # 类别平衡采样（11类）
             train_labels = [all_samples[i][1] for i in train_idx]
-            count_neg = train_labels.count(0)
-            count_pos = train_labels.count(1)
-            weight_class = [1.0 / max(count_neg, 1), 1.0 / max(count_pos, 1)]
+            class_count = len(DETAIL_TYPE_CLASS_ORDER)
+            class_hist = [0] * class_count
+            for label in train_labels:
+                if 0 <= int(label) < class_count:
+                    class_hist[int(label)] += 1
+            weight_class = [1.0 / max(class_hist[index], 1) for index in range(class_count)]
             samples_weight = [weight_class[y] for y in train_labels]
             samples_weight = torch.tensor(samples_weight, dtype=torch.double)
 
@@ -710,22 +721,22 @@ class TrainingWorker(QThread):
             # === 2. 模型 ===
             if backbone_name == "ResNet34":
                 model = models.resnet34(weights=models.ResNet34_Weights.DEFAULT)
-                model.fc = nn.Linear(model.fc.in_features, 2)
+                model.fc = nn.Linear(model.fc.in_features, class_count)
             elif backbone_name == "ResNet50":
                 model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
-                model.fc = nn.Linear(model.fc.in_features, 2)
+                model.fc = nn.Linear(model.fc.in_features, class_count)
             elif backbone_name == "ViT_B_16":
                 model = models.vit_b_16(weights=models.ViT_B_16_Weights.DEFAULT)
-                model.heads.head = nn.Linear(model.heads.head.in_features, 2)
+                model.heads.head = nn.Linear(model.heads.head.in_features, class_count)
             else:
                 model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
-                model.fc = nn.Linear(model.fc.in_features, 2)
+                model.fc = nn.Linear(model.fc.in_features, class_count)
             model = model.to(device)
 
             # === 3. 损失和优化器 ===
             from scann.ai.trainer import FocalLoss
 
-            criterion = FocalLoss(gamma=2.0, alpha=[1.0, 1.5]).to(device)
+            criterion = FocalLoss(gamma=2.0, alpha=weight_class).to(device)
 
             optimizer_name = self._params.get("optimizer", "Adam")
             if optimizer_name == "AdamW":
@@ -738,6 +749,7 @@ class TrainingWorker(QThread):
             # === 4. 训练循环 ===
             best_f2 = -1.0
             best_threshold = 0.5
+            best_accuracy = 0.0
             best_epoch = 0
 
             for epoch in range(epochs):
@@ -768,7 +780,7 @@ class TrainingWorker(QThread):
 
                 # 验证
                 model.eval()
-                all_probs, all_labels = [], []
+                all_probs, all_labels, all_preds = [], [], []
 
                 with torch.no_grad():
                     for x, y in val_loader:
@@ -776,33 +788,34 @@ class TrainingWorker(QThread):
                             break
                         x, y = x.to(device), y.to(device)
                         logits = model(x)
-                        probs = torch.softmax(logits, dim=1)[:, 1]
+                        probs = torch.softmax(logits, dim=1)
                         all_probs.append(probs.cpu().numpy())
+                        all_preds.append(torch.argmax(probs, dim=1).cpu().numpy())
                         all_labels.append(y.cpu().numpy())
 
                 if not all_probs:
                     break
 
-                probs = np.concatenate(all_probs)
+                probs = np.concatenate(all_probs, axis=0)
                 labels = np.concatenate(all_labels)
+                preds = np.concatenate(all_preds)
 
-                # 计算 PR-AUC
+                # 多分类验证指标
                 try:
-                    pr_auc = float(average_precision_score(labels, probs))
-                except Exception:
-                    pr_auc = 0.0
+                    from sklearn.metrics import f1_score
 
-                # 寻找阈值 (目标 recall=0.98)
-                threshold = find_threshold_for_recall(probs, labels, target_recall=0.98)
-                metrics = compute_metrics(probs, labels, threshold, beta=2.0)
+                    macro_f1 = float(f1_score(labels, preds, average="macro", zero_division=0.0))
+                except Exception:
+                    macro_f1 = 0.0
+                accuracy = float((preds == labels).mean()) if labels.size > 0 else 0.0
 
                 # 发射进度
-                self.progress.emit(epoch + 1, epochs, train_loss, pr_auc)
+                self.progress.emit(epoch + 1, epochs, train_loss, macro_f1)
 
                 # 保存最佳模型
-                if metrics["f2"] > best_f2 + 0.001:
-                    best_f2 = metrics["f2"]
-                    best_threshold = threshold
+                if macro_f1 > best_f2 + 0.001:
+                    best_f2 = macro_f1
+                    best_accuracy = accuracy
                     best_epoch = epoch
 
                     # 确定保存格式
@@ -812,7 +825,7 @@ class TrainingWorker(QThread):
                         model_format = ModelFormat.V2_CLASSIFIER
 
                     # 使用 SCANNClassifier 包装保存
-                    wrapper = SCANNClassifier(pretrained=False, backbone_name=backbone_name)
+                    wrapper = SCANNClassifier(pretrained=False, backbone_name=backbone_name, num_classes=class_count)
                     wrapper.backbone = model
                     wrapper.backbone_name = backbone_name
                     SCANNClassifier.save_checkpoint(
@@ -822,14 +835,26 @@ class TrainingWorker(QThread):
                         model_format=model_format,
                         backbone=backbone_name,
                         task_type="classification",
+                        class_names=list(DETAIL_TYPE_CLASS_ORDER),
+                        num_classes=class_count,
+                        classification_mode="detail_type_11",
                     )
-                    logger.info(f"保存最佳模型 (epoch={epoch+1}, F2={best_f2:.4f})")
+                    logger.info(
+                        "保存最佳11类模型 (epoch=%s, macro_f1=%.4f, acc=%.4f)",
+                        epoch + 1,
+                        best_f2,
+                        best_accuracy,
+                    )
 
             # 训练完成
             final_metrics = {
                 "best_f2": best_f2,
+                "best_macro_f1": best_f2,
+                "best_accuracy": best_accuracy,
                 "best_threshold": best_threshold,
                 "best_epoch": best_epoch,
+                "num_classes": len(DETAIL_TYPE_CLASS_ORDER),
+                "class_names": list(DETAIL_TYPE_CLASS_ORDER),
             }
             self.finished.emit(save_path, final_metrics)
 

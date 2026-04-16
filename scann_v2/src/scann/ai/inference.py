@@ -19,10 +19,26 @@ import torch.nn.functional as F
 from torchvision import transforms
 
 from scann.ai.device_utils import get_mixed_precision_context, resolve_device
+from scann.core.annotation_models import DETAIL_TYPE_TO_LABEL, DetailType
 from scann.core.models import Candidate, Detection, MarkerType
 
 
 logger = logging.getLogger(__name__)
+
+
+DETAIL_TYPE_CLASS_ORDER: tuple[str, ...] = (
+    DetailType.ASTEROID.value,
+    DetailType.SUPERNOVA.value,
+    DetailType.VARIABLE_STAR.value,
+    DetailType.SATELLITE_TRAIL.value,
+    DetailType.NOISE.value,
+    DetailType.DIFFRACTION_SPIKE.value,
+    DetailType.CMOS_CONDENSATION.value,
+    DetailType.CORRESPONDING.value,
+    DetailType.DISAPPEARED_ASTEROID.value,
+    DetailType.DISAPPEARED_STAR.value,
+    DetailType.DISAPPEARED_GALAXY.value,
+)
 
 
 @dataclass
@@ -49,6 +65,7 @@ class InferenceEngine:
         self.model = None
         self._threshold = 0.5
         self._channel_order = (0, 1, 2)  # 默认通道顺序
+        self._class_names: list[str] | None = None
 
         if model_path:
             self._load_model(model_path)
@@ -85,6 +102,12 @@ class InferenceEngine:
         self._channel_order = (0, 1, 2)
 
         if isinstance(ckpt, dict):
+            raw_class_names = ckpt.get("class_names")
+            if isinstance(raw_class_names, (list, tuple)):
+                normalized_class_names = [str(item).strip().lower() for item in raw_class_names if str(item).strip()]
+                if normalized_class_names:
+                    self._class_names = normalized_class_names
+
             # 确定实际的模型格式
             if "model_format" in ckpt:
                 # V2 checkpoint 中有明确的格式元数据
@@ -228,13 +251,54 @@ class InferenceEngine:
         Returns:
             正类概率列表
         """
+        details = self.classify_patches_detailed(
+            patches,
+            normalize_mean=normalize_mean,
+            normalize_std=normalize_std,
+        )
+        return [float(item.get("score", 0.0) or 0.0) for item in details]
+
+    def _resolve_class_names(self, class_count: int) -> list[str]:
+        if self._class_names and len(self._class_names) == class_count:
+            return list(self._class_names)
+        if class_count == len(DETAIL_TYPE_CLASS_ORDER):
+            return list(DETAIL_TYPE_CLASS_ORDER)
+        if class_count == 2:
+            return ["bogus", "real"]
+        return [f"class_{index}" for index in range(class_count)]
+
+    @staticmethod
+    def _normalize_label_from_class_name(class_name: str) -> str | None:
+        normalized = str(class_name or "").strip().lower()
+        if normalized in {"real", "bogus"}:
+            return normalized
+        try:
+            detail_type = DetailType(normalized)
+            return DETAIL_TYPE_TO_LABEL[detail_type].value
+        except Exception:
+            return None
+
+    @staticmethod
+    def _normalize_detail_type_from_class_name(class_name: str) -> str | None:
+        normalized = str(class_name or "").strip().lower()
+        try:
+            return DetailType(normalized).value
+        except Exception:
+            return None
+
+    @torch.no_grad()
+    def classify_patches_detailed(
+        self,
+        patches: List[np.ndarray],
+        normalize_mean: Optional[tuple] = None,
+        normalize_std: Optional[tuple] = None,
+    ) -> List[dict[str, object]]:
         if not self.is_ready:
             raise RuntimeError("模型未加载")
         if not patches:
             return []
         assert self.model is not None
 
-        # 根据模型格式自动选择归一化常数
         if normalize_mean is None or normalize_std is None:
             if self.is_v1:
                 normalize_mean = self.V1_NORMALIZE_MEAN
@@ -246,7 +310,7 @@ class InferenceEngine:
         norm = transforms.Normalize(list(normalize_mean), list(normalize_std))
         resize = transforms.Resize((224, 224), antialias=True)
 
-        all_probs = []
+        all_details: list[dict[str, object]] = []
         batch_size = self.config.batch_size
 
         for i in range(0, len(patches), batch_size):
@@ -255,8 +319,7 @@ class InferenceEngine:
             for p in batch_raw:
                 t = torch.from_numpy(p).float()
                 if self.is_v1:
-                    # v1 原生路径：与 SCANN.py 一致，先插值再归一化
-                    t = t.unsqueeze(0)  # [1, 3, H, W]
+                    t = t.unsqueeze(0)
                     t = F.interpolate(
                         t,
                         size=(224, 224),
@@ -270,17 +333,48 @@ class InferenceEngine:
                 tensors.append(t)
 
             stack = torch.stack(tensors).to(self.device)
-
             if self.config.use_amp:
                 with get_mixed_precision_context(self.device, enabled=True):
                     logits = self.model(stack)
             else:
                 logits = self.model(stack)
 
-            probs = torch.softmax(logits, dim=1)[:, 1].cpu().numpy()
-            all_probs.extend(probs.tolist())
+            probs = torch.softmax(logits, dim=1)
+            class_count = int(probs.shape[1]) if probs.ndim == 2 else 2
+            class_names = self._resolve_class_names(class_count)
+            probs_np = probs.detach().cpu().numpy()
 
-        return all_probs
+            for row in probs_np:
+                if row.size == 0:
+                    all_details.append({"score": 0.0, "label": None, "detail_type": None})
+                    continue
+
+                top_index = int(np.argmax(row))
+                top_confidence = float(row[top_index])
+                predicted_class = class_names[top_index] if top_index < len(class_names) else f"class_{top_index}"
+
+                if class_count == 2:
+                    score = float(row[1])
+                else:
+                    score = float(
+                        sum(
+                            float(prob)
+                            for index, prob in enumerate(row)
+                            if self._normalize_label_from_class_name(class_names[index]) == "real"
+                        )
+                    )
+
+                all_details.append(
+                    {
+                        "score": score,
+                        "predicted_class": predicted_class,
+                        "predicted_confidence": top_confidence,
+                        "label": self._normalize_label_from_class_name(predicted_class),
+                        "detail_type": self._normalize_detail_type_from_class_name(predicted_class),
+                    }
+                )
+
+        return all_details
 
     @staticmethod
     def _robust_to_uint8(image: np.ndarray) -> np.ndarray:

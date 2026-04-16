@@ -389,10 +389,16 @@ class TrainingLifecycleService:
         requested_by: str,
     ) -> TrainingJobResponse:
         snapshot = self._resolve_snapshot_for_job(payload, requested_by=requested_by)
+        normalized_task_type = "classification"
+        if payload.task_type != "classification":
+            logger.warning(
+                "训练链路已统一为11类细分类，忽略 task_type=%s，强制使用 classification",
+                payload.task_type,
+            )
         record = self._storage.enqueue_training_job(
             snapshot_id=snapshot.snapshot_id,
             requested_by=requested_by,
-            task_type=payload.task_type,
+            task_type=normalized_task_type,
             model_version=payload.model_version,
             model_id=self._normalize_model_id(payload.model_id, model_version=payload.model_version),
             model_backbone=payload.model_backbone,

@@ -299,10 +299,9 @@ class DetectionPrelabelProcessor:
             "class_name",
             "className",
             "predicted_label",
-            "label",
         ):
             candidate_detail_type = str(getattr(candidate, field_name, "") or "").strip().lower()
-            if candidate_detail_type:
+            if candidate_detail_type and candidate_detail_type not in {"real", "bogus", "unlabeled"}:
                 return candidate_detail_type
 
         default_detail_type = str(self.config.detection.default_detail_type or "").strip().lower()
@@ -432,6 +431,26 @@ class DetectionPrelabelProcessor:
         if requested_limit is not None:
             candidates = candidates[: max(1, requested_limit)]
 
+        typed_fields = (
+            "detail_type",
+            "target_type",
+            "targetType",
+            "class_name",
+            "className",
+            "predicted_label",
+        )
+        typed_candidate_count = sum(
+            1
+            for candidate in candidates
+            if any(str(getattr(candidate, field_name, "") or "").strip() for field_name in typed_fields)
+        )
+        logger.info(
+            "Prelabel job %s inference typed candidates: %d/%d",
+            job.job_id,
+            typed_candidate_count,
+            len(candidates),
+        )
+
         annotations = [
             self._candidate_to_prelabel_box(candidate, new_data.shape)
             for candidate in candidates
@@ -462,6 +481,7 @@ class DetectionPrelabelProcessor:
                 "candidate_limit": requested_limit,
                 "confidence_threshold": requested_threshold,
                 "skip_align": True,
+                "typed_candidate_count": typed_candidate_count,
                 "candidate_count": len(annotations),
                 "raw_candidate_count": len(getattr(result, "candidates", []) or []),
                 "pipeline_error": getattr(result, "error", ""),

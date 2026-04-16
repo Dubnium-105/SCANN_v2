@@ -2,6 +2,7 @@ import json
 from typing import Optional
 from types import SimpleNamespace
 import torch
+import pytest
 
 import numpy as np
 from PIL import Image
@@ -28,11 +29,8 @@ class TestTrainingWorkerDatasetParsing:
         _write_triplet_png(negative_dir / "neg.png")
 
         worker = TrainingWorker({"dataset_dir": str(tmp_path), "dataset_format": "v1"})
-        samples, sample_kind = worker._build_sample_pool()
-
-        assert sample_kind == "file"
-        assert len(samples) == 2
-        assert {label for _, label in samples} == {0, 1}
+        with pytest.raises(ValueError):
+            worker._build_sample_pool()
 
     def test_collect_v2_samples_from_root_uses_annotations(self, tmp_path):
         new_dir = tmp_path / "new"
@@ -82,7 +80,7 @@ class TestTrainingWorkerDatasetParsing:
             samples = worker._collect_v2_samples_from_root(tmp_path)
 
         assert len(samples) == 2
-        assert {label for _, label in samples} == {0, 1}
+        assert {label for _, label in samples} == {0, 4}
         for triplet, _label in samples:
             assert triplet.shape == (3, 80, 80)
             assert triplet.dtype == np.float32
@@ -144,8 +142,9 @@ class TestTrainingWorkerDatasetParsing:
             samples = worker._collect_v2_samples_from_root(tmp_path)
 
         labels = [label for _, label in samples]
-        assert labels.count(0) == 2
-        assert labels.count(1) == 1
+        assert labels.count(8) == 1
+        assert labels.count(9) == 1
+        assert labels.count(0) == 1
 
     def test_collect_v2_samples_respects_manual_crop_metadata(self, tmp_path):
         new_dir = tmp_path / "new"
@@ -203,7 +202,7 @@ class TestTrainingWorkerDatasetParsing:
             samples = worker._collect_v2_samples_from_root(tmp_path)
 
         assert len(samples) == 1
-        assert samples[0][1] == 1
+        assert samples[0][1] == 0
 
     def test_collect_v2_samples_uses_snapshot_paths_even_without_directory_pair_matches(self, tmp_path):
         new_dir = tmp_path / "new"
@@ -252,7 +251,7 @@ class TestTrainingWorkerDatasetParsing:
                 samples = worker._collect_v2_samples_from_root(tmp_path)
 
         assert len(samples) == 1
-        assert samples[0][1] == 1
+        assert samples[0][1] == 0
 
 
 class TestTrainingWorkerDetectionTask:
@@ -261,7 +260,7 @@ class TestTrainingWorkerDetectionTask:
         assert worker_default._resolve_task_type() == "classification"
 
         worker_detection = TrainingWorker({"task_type": "detection"})
-        assert worker_detection._resolve_task_type() == "detection"
+        assert worker_detection._resolve_task_type() == "classification"
 
     def test_compute_dense_detection_loss_returns_positive(self):
         pred_dense = torch.zeros((1, 5, 2, 2), dtype=torch.float32)

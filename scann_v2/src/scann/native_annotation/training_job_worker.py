@@ -239,7 +239,7 @@ class TrainingJobWorkerRunner:
         params = dict(job.train_config or {})
         params["dataset_dir"] = str(self.config.execution.dataset_root)
         params["dataset_format"] = "v2"
-        params["task_type"] = job.task_type
+        params["task_type"] = "classification"
         params["backbone"] = job.model_backbone
         params["device"] = params.get("device") or self.config.execution.device
         params["annotations_document_path"] = str(snapshot_path)

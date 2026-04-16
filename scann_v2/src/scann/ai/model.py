@@ -181,30 +181,45 @@ class SCANNClassifier(nn.Module):
 
         return "ResNet18"
 
-    def __init__(self, pretrained: bool = True, backbone_name: str = "ResNet18"):
+    def __init__(self, pretrained: bool = True, backbone_name: str = "ResNet18", num_classes: int = 2):
         super().__init__()
         self.backbone_name = self._normalize_backbone_name(backbone_name)
+        self.num_classes = max(2, int(num_classes))
 
         if self.backbone_name == "ResNet34":
             weights = models.ResNet34_Weights.DEFAULT if pretrained else None
             self.backbone = models.resnet34(weights=weights)
             num_features = self.backbone.fc.in_features
-            self.backbone.fc = nn.Linear(num_features, 2)
+            self.backbone.fc = nn.Linear(num_features, self.num_classes)
         elif self.backbone_name == "ResNet50":
             weights = models.ResNet50_Weights.DEFAULT if pretrained else None
             self.backbone = models.resnet50(weights=weights)
             num_features = self.backbone.fc.in_features
-            self.backbone.fc = nn.Linear(num_features, 2)
+            self.backbone.fc = nn.Linear(num_features, self.num_classes)
         elif self.backbone_name == "ViT_B_16":
             weights = models.ViT_B_16_Weights.DEFAULT if pretrained else None
             self.backbone = models.vit_b_16(weights=weights)
             num_features = self.backbone.heads.head.in_features
-            self.backbone.heads.head = nn.Linear(num_features, 2)
+            self.backbone.heads.head = nn.Linear(num_features, self.num_classes)
         else:
             weights = models.ResNet18_Weights.DEFAULT if pretrained else None
             self.backbone = models.resnet18(weights=weights)
             num_features = self.backbone.fc.in_features
-            self.backbone.fc = nn.Linear(num_features, 2)
+            self.backbone.fc = nn.Linear(num_features, self.num_classes)
+
+    @staticmethod
+    def _infer_num_classes_from_state_dict(state_dict: Dict[str, torch.Tensor]) -> int:
+        candidate_keys = (
+            "backbone.fc.weight",
+            "fc.weight",
+            "backbone.heads.head.weight",
+            "heads.head.weight",
+        )
+        for key in candidate_keys:
+            tensor = state_dict.get(key)
+            if isinstance(tensor, torch.Tensor) and tensor.ndim == 2 and tensor.shape[0] >= 2:
+                return int(tensor.shape[0])
+        return 2
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.backbone(x)
@@ -271,9 +286,11 @@ class SCANNClassifier(nn.Module):
             name = k[7:] if k.startswith("module.") else k
             clean_state[name] = v
 
+        num_classes = SCANNClassifier._infer_num_classes_from_state_dict(clean_state)
+
         # v1: 原生加载（不做 key 转换）
         if model_format == ModelFormat.V1_CLASSIFIER:
-            model = SCANNClassifier(pretrained=False, backbone_name=resolved_backbone)
+            model = SCANNClassifier(pretrained=False, backbone_name=resolved_backbone, num_classes=num_classes)
             try:
                 model.backbone.load_state_dict(clean_state, strict=True)
                 logger.info("使用 v1 原生权重加载（未进行 v1->v2 key 转换）")
@@ -293,7 +310,7 @@ class SCANNClassifier(nn.Module):
             return model
 
         # v2: 正常加载（支持 backbone. 前缀）
-        model = SCANNClassifier(pretrained=False, backbone_name=resolved_backbone)
+        model = SCANNClassifier(pretrained=False, backbone_name=resolved_backbone, num_classes=num_classes)
         model.load_state_dict(clean_state, strict=False)
         model.to(device)
         model.eval()
