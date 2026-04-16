@@ -473,6 +473,8 @@ describe('CanvasPanel', () => {
     await wrapper.get('[data-testid="apply-prelabel"]').trigger('click')
     await flushPromises()
 
+    expect(wrapper.get('[data-testid="prelabel-review-item"]').text()).toContain('asteroid')
+
     await wrapper.get('[data-testid="confirm-prelabel-review"]').trigger('click')
     await flushPromises()
 

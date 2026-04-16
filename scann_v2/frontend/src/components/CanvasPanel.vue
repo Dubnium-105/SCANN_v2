@@ -1243,6 +1243,10 @@ function getAnnotationDetailType(annotation) {
   if (detailType) {
     return detailType
   }
+  const targetType = normalizeAnnotationDetailTypeValue(annotation?.target_type || annotation?.targetType)
+  if (targetType) {
+    return targetType
+  }
   const label = normalizeAnnotationDetailTypeValue(annotation?.label)
   return label || ''
 }
