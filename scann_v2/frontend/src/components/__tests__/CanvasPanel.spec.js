@@ -271,10 +271,12 @@ describe('CanvasPanel', () => {
 
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab' }))
     await flushPromises()
+
     expect(currentVisible()).toEqual(['new_marked'])
 
     window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ' }))
     await flushPromises()
+
     expect(currentVisible()).toEqual(['old'])
   })
 
@@ -447,6 +449,7 @@ describe('CanvasPanel', () => {
     fetchCalls = mockImageFetch({}, {
       prelabels: {
         'PGC 17069': createPrelabel('PGC 17069', {
+          ai_suggestion: null,
           annotations: [
             {
               x: 16,
@@ -485,6 +488,7 @@ describe('CanvasPanel', () => {
     fetchCalls = mockImageFetch({}, {
       prelabels: {
         'PGC 17069': createPrelabel('PGC 17069', {
+          ai_suggestion: null,
           annotations: [
             {
               x: 16,

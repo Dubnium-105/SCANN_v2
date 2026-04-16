@@ -219,7 +219,7 @@ def test_detection_processor_candidate_mapping(tmp_path, monkeypatch) -> None:
     assert result.annotations[0].y == 46
     assert result.annotations[0].width == 11
     assert result.annotations[0].height == 7
-    assert result.annotations[0].label is None
+    assert result.annotations[0].label == "real"
     assert result.annotations[0].detail_type == "asteroid"
     assert processor.pipeline.last_kwargs["skip_align"] is True
     assert result.metadata["candidate_limit"] == 5
@@ -279,7 +279,7 @@ def test_detection_processor_applies_threshold_and_limit(tmp_path) -> None:
 
     assert len(result.annotations) == 2
     assert [round(item.confidence, 2) for item in result.annotations] == [0.92, 0.61]
-    assert all(item.label is None for item in result.annotations)
+    assert all(item.label == "real" for item in result.annotations)
     assert [item.detail_type for item in result.annotations] == ["unlabeled", "unlabeled"]
     assert result.ai_suggestion == "unlabeled"
     assert result.metadata["raw_candidate_count"] == 3

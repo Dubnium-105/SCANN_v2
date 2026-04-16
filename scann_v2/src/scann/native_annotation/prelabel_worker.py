@@ -308,8 +308,31 @@ class DetectionPrelabelProcessor:
         default_detail_type = str(self.config.detection.default_detail_type or "").strip().lower()
         return default_detail_type or "unlabeled"
 
+    @staticmethod
+    def _normalize_candidate_label(value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"real", "bogus"}:
+            return normalized
+        return ""
+
+    def _candidate_label(self, candidate) -> str | None:
+        for field_name in (
+            "label",
+            "target_label",
+            "targetLabel",
+            "predicted_label",
+            "predictedLabel",
+        ):
+            normalized = self._normalize_candidate_label(getattr(candidate, field_name, ""))
+            if normalized:
+                return normalized
+
+        score = float(getattr(candidate, "ai_score", 0.0) or 0.0)
+        return "real" if score >= 0.5 else "bogus"
+
     def _candidate_to_prelabel_box(self, candidate, image_shape: tuple[int, ...]) -> PrelabelBox:
         detail_type = self._candidate_detail_type(candidate)
+        label = self._candidate_label(candidate)
         bbox_width = getattr(candidate, "bbox_width", None)
         bbox_height = getattr(candidate, "bbox_height", None)
         if bbox_width is not None and bbox_height is not None:
@@ -333,7 +356,7 @@ class DetectionPrelabelProcessor:
                 y=float(top),
                 width=float(box_width),
                 height=float(box_height),
-                label=None,
+                label=label,
                 detail_type=detail_type,
                 confidence=float(getattr(candidate, "ai_score", 0.0)),
             )
@@ -353,7 +376,7 @@ class DetectionPrelabelProcessor:
             y=float(top),
             width=float(max(1, box_width)),
             height=float(max(1, box_height)),
-            label=None,
+            label=label,
             detail_type=detail_type,
             confidence=float(getattr(candidate, "ai_score", 0.0)),
         )
