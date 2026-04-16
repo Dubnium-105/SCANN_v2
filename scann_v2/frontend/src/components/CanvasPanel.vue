@@ -1251,6 +1251,12 @@ function getAnnotationDetailType(annotation) {
   return label || ''
 }
 
+function getPrelabelAnnotationDetailType(annotation, prelabelDetail) {
+  return getAnnotationDetailType(annotation)
+    || normalizeAnnotationDetailTypeValue(prelabelDetail?.ai_suggestion)
+    || ''
+}
+
 function getAnnotationDisplayName(annotation) {
   const detailType = getAnnotationDetailType(annotation)
   if (detailType) {
@@ -1983,10 +1989,7 @@ async function loadTaskPrelabel(taskId) {
       width: Number(ann.width) || 0,
       height: Number(ann.height) || 0,
       label: undefined,
-      detail_type: getAnnotationDetailType({
-        label: ann.label || detail.ai_suggestion,
-        detail_type: ann.detail_type || ann.target_type || ann.targetType,
-      }) || undefined,
+      detail_type: getPrelabelAnnotationDetailType(ann, detail) || undefined,
       confidence: Number.isFinite(Number(ann.confidence)) ? Number(ann.confidence) : undefined,
       origin: 'prelabel_overlay',
       source_prelabel_id: detail.prelabel_id,

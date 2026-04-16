@@ -481,6 +481,45 @@ describe('CanvasPanel', () => {
     expect(wrapper.get('[data-testid="annotation-label-select"]').element.value).toBe('asteroid')
   })
 
+  it('uses target_type from prelabel response when detail_type is unlabeled', async () => {
+    fetchCalls = mockImageFetch({}, {
+      prelabels: {
+        'PGC 17069': createPrelabel('PGC 17069', {
+          annotations: [
+            {
+              x: 16,
+              y: 24,
+              width: 20,
+              height: 28,
+              label: null,
+              detail_type: 'unlabeled',
+              target_type: 'asteroid',
+              confidence: 0.91,
+            },
+          ],
+        }),
+      },
+    })
+
+    const wrapper = mount(CanvasPanel, {
+      global: {
+        stubs: globalStubs,
+      },
+    })
+
+    await flushPromises()
+
+    await wrapper.get('[data-testid="apply-prelabel"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="prelabel-review-item"]').text()).toContain('asteroid')
+
+    await wrapper.get('[data-testid="confirm-prelabel-review"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="annotation-label-select"]').element.value).toBe('asteroid')
+  })
+
   it('allows admins to request prelabel regeneration for the current task', async () => {
     authState.username = 'admin'
     authState.role = 'admin'
