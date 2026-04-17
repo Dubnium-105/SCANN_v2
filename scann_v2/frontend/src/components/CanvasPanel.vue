@@ -2694,11 +2694,13 @@ function cancelPrelabelReview() {
 }
 
 function removePrelabelReviewAnnotation(annotationId) {
+  const removedIndex = prelabelReviewAnnotations.value.findIndex((item) => item.id === annotationId)
   const nextAnnotations = prelabelReviewAnnotations.value.filter((item) => item.id !== annotationId)
   prelabelReviewAnnotations.value = nextAnnotations
   if (selectedPrelabelReviewId.value === annotationId) {
     if (nextAnnotations.length > 0) {
-      selectPrelabelReviewAnnotation(nextAnnotations[0].id)
+      const nextSelectedIndex = Math.max(0, Math.min(removedIndex, nextAnnotations.length - 1))
+      selectPrelabelReviewAnnotation(nextAnnotations[nextSelectedIndex].id)
     } else {
       selectedPrelabelReviewId.value = ''
       selectedPrelabelReviewLabel.value = 'Unlabeled'

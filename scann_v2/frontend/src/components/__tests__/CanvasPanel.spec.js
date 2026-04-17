@@ -500,6 +500,136 @@ describe('CanvasPanel', () => {
     expect(isReviewItemSelected(reviewItems()[0])).toBe(false)
   })
 
+  it('keeps review focus on next item after deleting selected AI prelabel box', async () => {
+    fetchCalls = mockImageFetch({}, {
+      prelabels: {
+        'PGC 17069': createPrelabel('PGC 17069', {
+          box_count: 3,
+          annotations: [
+            {
+              x: 16,
+              y: 24,
+              width: 20,
+              height: 28,
+              label: null,
+              detail_type: 'asteroid',
+              confidence: 0.91,
+            },
+            {
+              x: 40,
+              y: 46,
+              width: 20,
+              height: 24,
+              label: null,
+              detail_type: 'supernova',
+              confidence: 0.88,
+            },
+            {
+              x: 70,
+              y: 80,
+              width: 18,
+              height: 22,
+              label: null,
+              detail_type: 'galaxy',
+              confidence: 0.85,
+            },
+          ],
+        }),
+      },
+    })
+
+    const wrapper = mount(CanvasPanel, {
+      global: {
+        stubs: globalStubs,
+      },
+    })
+
+    await flushPromises()
+    await wrapper.get('[data-testid="apply-prelabel"]').trigger('click')
+    await flushPromises()
+
+    const reviewItems = () => wrapper.findAll('[data-testid="prelabel-review-item"]')
+    const removeButtons = () => wrapper.findAll('[data-testid="prelabel-review-remove"]')
+    const isReviewItemSelected = (item) => item.element.parentElement.className.includes('border-amber-400')
+
+    await reviewItems()[1].trigger('click')
+    await flushPromises()
+
+    expect(isReviewItemSelected(reviewItems()[1])).toBe(true)
+
+    await removeButtons()[1].trigger('click')
+    await flushPromises()
+
+    expect(reviewItems()).toHaveLength(2)
+    expect(isReviewItemSelected(reviewItems()[1])).toBe(true)
+    expect(isReviewItemSelected(reviewItems()[0])).toBe(false)
+  })
+
+  it('falls back to previous item when deleting last selected AI prelabel box', async () => {
+    fetchCalls = mockImageFetch({}, {
+      prelabels: {
+        'PGC 17069': createPrelabel('PGC 17069', {
+          box_count: 3,
+          annotations: [
+            {
+              x: 16,
+              y: 24,
+              width: 20,
+              height: 28,
+              label: null,
+              detail_type: 'asteroid',
+              confidence: 0.91,
+            },
+            {
+              x: 40,
+              y: 46,
+              width: 20,
+              height: 24,
+              label: null,
+              detail_type: 'supernova',
+              confidence: 0.88,
+            },
+            {
+              x: 70,
+              y: 80,
+              width: 18,
+              height: 22,
+              label: null,
+              detail_type: 'galaxy',
+              confidence: 0.85,
+            },
+          ],
+        }),
+      },
+    })
+
+    const wrapper = mount(CanvasPanel, {
+      global: {
+        stubs: globalStubs,
+      },
+    })
+
+    await flushPromises()
+    await wrapper.get('[data-testid="apply-prelabel"]').trigger('click')
+    await flushPromises()
+
+    const reviewItems = () => wrapper.findAll('[data-testid="prelabel-review-item"]')
+    const removeButtons = () => wrapper.findAll('[data-testid="prelabel-review-remove"]')
+    const isReviewItemSelected = (item) => item.element.parentElement.className.includes('border-amber-400')
+
+    await reviewItems()[2].trigger('click')
+    await flushPromises()
+
+    expect(isReviewItemSelected(reviewItems()[2])).toBe(true)
+
+    await removeButtons()[2].trigger('click')
+    await flushPromises()
+
+    expect(reviewItems()).toHaveLength(2)
+    expect(isReviewItemSelected(reviewItems()[1])).toBe(true)
+    expect(isReviewItemSelected(reviewItems()[0])).toBe(false)
+  })
+
   it('uses target_type from prelabel response when detail_type is missing', async () => {
     fetchCalls = mockImageFetch({}, {
       prelabels: {
