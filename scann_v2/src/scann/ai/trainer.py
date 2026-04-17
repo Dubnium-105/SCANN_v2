@@ -74,12 +74,12 @@ class FocalLoss(nn.Module):
             if isinstance(self.alpha, (list, tuple)):
                 alpha_t = torch.tensor(self.alpha, dtype=logits.dtype, device=logits.device)
                 # 选择每个样本对应类别的权重
-                alpha_per_sample = alpha_t[t]
+                alpha_per_sample = alpha_t.gather(0, targets.view(-1))
                 loss = alpha_per_sample * loss
             elif isinstance(self.alpha, torch.Tensor):
                 # 如果是 tensor，直接使用（确保在正确的设备上）
                 alpha_t = self.alpha.to(dtype=logits.dtype, device=logits.device)
-                alpha_per_sample = alpha_t[t]
+                alpha_per_sample = alpha_t.gather(0, targets.view(-1))
                 loss = alpha_per_sample * loss
             else:
                 # alpha 是 float，对所有样本使用相同权重

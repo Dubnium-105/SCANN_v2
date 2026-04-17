@@ -9,6 +9,11 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from scann.ai.class_balance import (
+    build_class_audit,
+    merge_imbalance_config,
+    sample_records_from_snapshot_document,
+)
 from scann.core.dataset_storage import (
     DatasetSnapshotRecord,
     DatasetStorage,
@@ -178,11 +183,14 @@ class TrainingJobLifecycleResponse(BaseModel):
     run: TrainingRunResponse
     model: RegisteredModelResponse
     prelabel_enqueue: Optional[dict[str, Any]] = None
+    promotion_warnings: list[str] = Field(default_factory=list)
+    auto_promoted: bool = False
 
 
 class PromoteModelResponse(BaseModel):
     model: RegisteredModelResponse
     prelabel_enqueue: Optional[dict[str, Any]] = None
+    promotion_warnings: list[str] = Field(default_factory=list)
 
 
 class TrainingLifecycleService:
@@ -310,6 +318,77 @@ class TrainingLifecycleService:
         except ValueError:
             return str(path.resolve())
 
+    @staticmethod
+    def _class_audit_for_document(
+        document: dict[str, Any],
+        *,
+        config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        imbalance_config = merge_imbalance_config(config)
+        return build_class_audit(
+            sample_records_from_snapshot_document(document),
+            min_train_support=int(imbalance_config["min_train_support_warning"]),
+            min_val_support=int(imbalance_config["min_val_support_warning"]),
+        )
+
+    def _load_snapshot_document(self, snapshot: DatasetSnapshotRecord) -> dict[str, Any]:
+        file_path = (self.dataset_root / snapshot.document_relpath).resolve()
+        try:
+            file_path.relative_to(self.dataset_root)
+        except ValueError as exc:
+            raise ValueError("snapshot path is invalid") from exc
+        if not file_path.is_file():
+            raise ValueError("snapshot file does not exist")
+        payload = json.loads(file_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("snapshot document is invalid")
+        return payload
+
+    @staticmethod
+    def _promotion_warnings_from_model(model: RegisteredModelRecord) -> list[str]:
+        warnings: list[str] = []
+        for source in (model.metrics or {}, model.metadata or {}):
+            raw = source.get("promotion_warnings") if isinstance(source, dict) else None
+            if isinstance(raw, list):
+                warnings.extend(str(item) for item in raw if str(item).strip())
+        if warnings:
+            return list(dict.fromkeys(warnings))
+
+        metrics = model.metrics or {}
+        class_support = metrics.get("class_support") if isinstance(metrics, dict) else None
+        if isinstance(class_support, dict):
+            raw_warnings = class_support.get("promotion_warnings")
+            if isinstance(raw_warnings, list):
+                return [str(item) for item in raw_warnings if str(item).strip()]
+        return []
+
+    @staticmethod
+    def _promotion_warnings_for_completed_job(
+        *,
+        job: TrainingJobRecord,
+        snapshot: DatasetSnapshotRecord | None,
+        metrics: dict[str, Any],
+        metadata: dict[str, Any],
+    ) -> list[str]:
+        warnings: list[str] = []
+        for source in (metrics, metadata):
+            raw = source.get("promotion_warnings") if isinstance(source, dict) else None
+            if isinstance(raw, list):
+                warnings.extend(str(item) for item in raw if str(item).strip())
+        class_support = metrics.get("class_support") if isinstance(metrics, dict) else None
+        if isinstance(class_support, dict):
+            raw = class_support.get("promotion_warnings")
+            if isinstance(raw, list):
+                warnings.extend(str(item) for item in raw if str(item).strip())
+        if snapshot is not None and isinstance(snapshot.metadata, dict):
+            audit = snapshot.metadata.get("class_audit")
+            raw = audit.get("promotion_warnings") if isinstance(audit, dict) else None
+            if isinstance(raw, list):
+                warnings.extend(str(item) for item in raw if str(item).strip())
+        if warnings:
+            warnings.append("auto_promotion_suppressed_due_to_class_coverage")
+        return list(dict.fromkeys(warnings))
+
     def _build_snapshot_document(self, *, task_ids: list[str] | None = None) -> tuple[dict[str, Any], int, int]:
         annotations_by_id = self._storage.list_current_annotations()
         selected_ids = [task_id for task_id in dict.fromkeys(task_ids or []) if task_id]
@@ -319,12 +398,17 @@ class TrainingLifecycleService:
             images = list(annotations_by_id.values())
         images = [item for item in images if isinstance(item.get("annotations"), list) and item.get("annotations")]
         annotation_count = sum(len(item.get("annotations") or []) for item in images)
+        document = {
+            "version": "2.3",
+            "storage": "training_snapshot",
+            "images": images,
+        }
+        class_audit = self._class_audit_for_document(document)
+        document["metadata"] = {
+            "class_audit": class_audit,
+        }
         return (
-            {
-                "version": "2.3",
-                "storage": "training_snapshot",
-                "images": images,
-            },
+            document,
             len(images),
             annotation_count,
         )
@@ -356,6 +440,7 @@ class TrainingLifecycleService:
             metadata={
                 **payload.metadata,
                 "task_ids": list(payload.task_ids or []),
+                "class_audit": document.get("metadata", {}).get("class_audit", {}),
             },
         )
         return self._snapshot_to_response(record)
@@ -395,6 +480,13 @@ class TrainingLifecycleService:
                 "训练链路已统一为11类细分类，忽略 task_type=%s，强制使用 classification",
                 payload.task_type,
             )
+        train_config = dict(payload.train_config)
+        train_config.update(merge_imbalance_config(payload.train_config))
+        if isinstance(snapshot.metadata, dict) and isinstance(snapshot.metadata.get("class_audit"), dict):
+            class_audit = snapshot.metadata["class_audit"]
+            train_config["class_audit"] = class_audit
+            train_config["promotion_warnings"] = class_audit.get("promotion_warnings", [])
+        train_config["snapshot_document_relpath"] = snapshot.document_relpath
         record = self._storage.enqueue_training_job(
             snapshot_id=snapshot.snapshot_id,
             requested_by=requested_by,
@@ -402,7 +494,7 @@ class TrainingLifecycleService:
             model_version=payload.model_version,
             model_id=self._normalize_model_id(payload.model_id, model_version=payload.model_version),
             model_backbone=payload.model_backbone,
-            train_config=payload.train_config,
+            train_config=train_config,
             priority=payload.priority,
             promote_on_success=payload.promote_on_success,
             enqueue_prelabels_on_success=payload.enqueue_prelabels_on_success,
@@ -439,6 +531,7 @@ class TrainingLifecycleService:
         promoted = self._storage.promote_registered_model(model_id=model_id, promoted_by=promoted_by)
         if promoted is None:
             return None
+        promotion_warnings = self._promotion_warnings_from_model(promoted)
         prelabel_enqueue = None
         if enqueue_prelabels:
             result = self._prelabel_service.enqueue(
@@ -455,6 +548,7 @@ class TrainingLifecycleService:
         return PromoteModelResponse(
             model=self._model_to_response(promoted),
             prelabel_enqueue=prelabel_enqueue,
+            promotion_warnings=promotion_warnings,
         )
 
     def claim_next_job(self, payload: TrainingWorkerClaimRequest) -> TrainingWorkerClaimResponse | None:
@@ -550,23 +644,38 @@ class TrainingLifecycleService:
         )
 
     def complete_job(self, *, job_id: str, payload: TrainingWorkerCompleteRequest) -> TrainingJobLifecycleResponse | None:
+        pre_job = self._storage.get_training_job(job_id)
+        snapshot = self._storage.get_dataset_snapshot(pre_job.snapshot_id) if pre_job is not None else None
+        metrics = dict(payload.metrics or {})
+        metadata = dict(payload.metadata or {})
+        promotion_warnings = self._promotion_warnings_for_completed_job(
+            job=pre_job,
+            snapshot=snapshot,
+            metrics=metrics,
+            metadata=metadata,
+        ) if pre_job is not None else []
+        if promotion_warnings:
+            metrics["promotion_warnings"] = promotion_warnings
+            metadata["promotion_warnings"] = promotion_warnings
         completed = self._storage.complete_training_job(
             job_id=job_id,
             worker_id=payload.worker_id,
             artifact_path=payload.artifact_path,
-            metrics=payload.metrics,
-            metadata=payload.metadata,
+            metrics=metrics,
+            metadata=metadata,
         )
         if completed is None:
             return None
         job, run, model = completed
         prelabel_enqueue = None
         promoted = model
-        if job.promote_on_success:
+        auto_promoted = False
+        if job.promote_on_success and not promotion_warnings:
             promoted_model = self._storage.promote_registered_model(model_id=model.model_id, promoted_by=job.requested_by)
             if promoted_model is not None:
                 promoted = promoted_model
-        if job.enqueue_prelabels_on_success:
+                auto_promoted = True
+        if job.enqueue_prelabels_on_success and not promotion_warnings:
             result = self._prelabel_service.enqueue(
                 payload=PrelabelEnqueueRequest(
                     model_version=job.model_version,
@@ -583,6 +692,8 @@ class TrainingLifecycleService:
             run=self._run_to_response(run),
             model=self._model_to_response(promoted),
             prelabel_enqueue=prelabel_enqueue,
+            promotion_warnings=promotion_warnings,
+            auto_promoted=auto_promoted,
         )
 
     def fail_job(self, *, job_id: str, payload: TrainingWorkerFailRequest) -> TrainingWorkerJobAckResponse:

@@ -8,6 +8,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import AliasChoices, BaseModel, Field
 
+from scann.ai.class_balance import build_class_audit, sample_records_from_snapshot_document
 from scann.core.dataset_storage import (
     DatasetStorage,
     PrelabelJobRecord,
@@ -186,6 +187,43 @@ class PrelabelService:
 
     def _task_sessions_by_id(self) -> dict[str, TaskSession]:
         return {task.task_id: task for task in self._dataset_service.list_tasks()}
+
+    def _active_learning_task_order(self, tasks_by_id: dict[str, TaskSession]) -> list[tuple[str, int]]:
+        annotations_by_id = self._storage.list_current_annotations()
+        records = sample_records_from_snapshot_document({"images": list(annotations_by_id.values())})
+        audit = build_class_audit(records)
+        low_classes = set(audit.get("low_sample_classes", [])) | set(audit.get("missing_classes", []))
+
+        ranked: list[tuple[str, int]] = []
+        for task_id in tasks_by_id:
+            doc = annotations_by_id.get(task_id) or {}
+            annotations = doc.get("annotations") if isinstance(doc, dict) else None
+            score = 0
+            if not annotations:
+                score += 400
+            else:
+                for ann in annotations:
+                    if not isinstance(ann, dict):
+                        continue
+                    detail_type = str(ann.get("detail_type") or "").strip().lower()
+                    label = str(ann.get("label") or "").strip().lower()
+                    if detail_type in low_classes:
+                        score += 220
+                    if label == "real":
+                        score += 140
+            confidence = doc.get("ai_confidence") if isinstance(doc, dict) else None
+            try:
+                confidence_value = float(confidence)
+            except (TypeError, ValueError):
+                confidence_value = None
+            if confidence_value is not None:
+                if 0.0 <= confidence_value <= 1.0:
+                    score += int(round((1.0 - confidence_value) * 160.0))
+                if 0.35 <= confidence_value <= 0.65:
+                    score += 120
+            ranked.append((task_id, score))
+        ranked.sort(key=lambda item: (-item[1], item[0]))
+        return ranked
 
     def _build_input_fingerprint(
         self,
@@ -397,7 +435,9 @@ class PrelabelService:
         requested_by: str,
     ) -> PrelabelEnqueueResponse:
         tasks_by_id = self._task_sessions_by_id()
-        requested_ids = payload.task_ids or list(tasks_by_id.keys())
+        active_learning_order = self._active_learning_task_order(tasks_by_id) if not payload.task_ids else []
+        active_learning_score_by_id = {task_id: score for task_id, score in active_learning_order}
+        requested_ids = payload.task_ids or [task_id for task_id, _score in active_learning_order]
 
         job_ids: list[str] = []
         skipped_task_ids: list[str] = []
@@ -453,7 +493,7 @@ class PrelabelService:
                 candidate_limit=normalized_candidate_limit,
                 confidence_threshold=normalized_confidence_threshold,
                 input_fingerprint=input_fingerprint,
-                priority=payload.priority,
+                priority=int(payload.priority) + min(int(active_learning_score_by_id.get(task.task_id, 0)), 1000),
                 cancel_existing=payload.force,
             )
             if created:

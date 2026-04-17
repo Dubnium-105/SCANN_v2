@@ -136,6 +136,13 @@
                 </option>
               </select>
             </label>
+            <div
+              v-if="selectedSnapshotAudit"
+              data-testid="training-selected-snapshot-audit"
+              class="rounded border border-amber-800 bg-amber-950/20 px-2 py-1 text-[11px] text-amber-200"
+            >
+              {{ auditSummary(selectedSnapshotAudit) }}
+            </div>
             <div v-if="!jobForm.snapshotId" class="grid gap-2 rounded border border-slate-800 bg-slate-950/60 p-2">
               <label class="grid gap-1">
                 <span class="text-[11px] text-slate-500">新快照名称</span>
@@ -341,6 +348,13 @@
                 </span>
               </div>
               <p class="mt-1 text-slate-500">{{ formatMetrics(model.metrics) }}</p>
+              <p
+                v-if="promotionWarningsForModel(model).length"
+                data-testid="training-model-promotion-warnings"
+                class="mt-1 text-[10px] text-amber-300"
+              >
+                {{ warningSummary(promotionWarningsForModel(model)) }}
+              </p>
               <div class="mt-2 flex flex-wrap justify-end gap-2">
                 <button
                   type="button"
@@ -375,7 +389,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 
 import PrelabelControlPanel from './PrelabelControlPanel.vue'
 import {
@@ -407,6 +421,13 @@ const jobs = ref([])
 const runs = ref([])
 const models = ref([])
 const promotedModel = ref(null)
+
+const selectedSnapshot = computed(() => {
+  const snapshotId = String(jobForm.value.snapshotId || '')
+  return snapshots.value.find((snapshot) => String(snapshot.snapshot_id || '') === snapshotId) || null
+})
+
+const selectedSnapshotAudit = computed(() => selectedSnapshot.value?.metadata?.class_audit || null)
 
 const snapshotForm = ref({
   snapshotName: '',
@@ -449,7 +470,7 @@ function formatMetrics(metrics) {
   if (!metrics || typeof metrics !== 'object') {
     return '暂无指标'
   }
-  const keys = ['f1', 'best_f2', 'val_loss', 'precision', 'recall']
+  const keys = ['macro_f1_supported', 'best_macro_f1', 'f1', 'best_f2', 'val_loss', 'precision', 'recall']
   const parts = keys
     .filter((key) => Object.prototype.hasOwnProperty.call(metrics, key))
     .map((key) => {
@@ -457,6 +478,29 @@ function formatMetrics(metrics) {
       return Number.isFinite(value) ? `${key}=${value.toFixed(3)}` : `${key}=${String(metrics[key])}`
     })
   return parts.length > 0 ? parts.join(' · ') : '暂无指标'
+}
+
+function auditSummary(audit) {
+  if (!audit || typeof audit !== 'object') {
+    return ''
+  }
+  const buckets = audit.bucket_counts || {}
+  const missing = Array.isArray(audit.missing_classes) ? audit.missing_classes.length : 0
+  const low = Array.isArray(audit.low_sample_classes) ? audit.low_sample_classes.length : 0
+  return `samples=${Number(audit.total_samples || 0)} real=${Number(buckets.real || 0)} bogus=${Number(buckets.bogus || 0)} missing=${missing} low=${low}`
+}
+
+function promotionWarningsForModel(model) {
+  const direct = model?.metadata?.promotion_warnings || model?.metrics?.promotion_warnings
+  if (Array.isArray(direct) && direct.length > 0) {
+    return direct
+  }
+  const nested = model?.metrics?.class_support?.promotion_warnings
+  return Array.isArray(nested) ? nested : []
+}
+
+function warningSummary(warnings) {
+  return Array.isArray(warnings) ? warnings.slice(0, 3).join(' | ') : ''
 }
 
 function statusClass(status) {
@@ -586,6 +630,13 @@ async function promoteModel(model, enqueuePrelabels) {
   if (!modelId) {
     return
   }
+  const warnings = promotionWarningsForModel(model)
+  if (warnings.length > 0 && typeof window !== 'undefined' && typeof window.confirm === 'function') {
+    const accepted = window.confirm(`Model has class-coverage warnings:\n${warningSummary(warnings)}\nPromote anyway?`)
+    if (!accepted) {
+      return
+    }
+  }
   submitting.value = true
   message.value = ''
   error.value = ''
@@ -601,9 +652,13 @@ async function promoteModel(model, enqueuePrelabels) {
       is_promoted: item.model_id === response.model.model_id,
       promoted_at: item.model_id === response.model.model_id ? response.model.promoted_at : item.promoted_at,
     }))
+    const responseWarnings = Array.isArray(response.promotion_warnings) ? response.promotion_warnings : []
     message.value = enqueuePrelabels && response.prelabel_enqueue
       ? `已推广模型并排入 ${response.prelabel_enqueue.enqueued_count} 个预标注任务`
       : `已将 ${response.model.model_version} 设为当前模型`
+    if (responseWarnings.length > 0 && !(enqueuePrelabels && response.prelabel_enqueue)) {
+      message.value = `${message.value} | ${warningSummary(responseWarnings)}`
+    }
   } catch (err) {
     error.value = err instanceof Error ? err.message : '推广模型失败'
   } finally {

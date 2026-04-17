@@ -34,10 +34,20 @@ except Exception:
 
 import torch  # 现在导入torch
 
+from scann.ai.class_balance import (
+    DETAIL_TYPE_CLASS_ORDER,
+    DETAIL_TYPE_TO_CLASS_INDEX,
+    build_class_audit,
+    compute_class_balanced_weights,
+    compute_multiclass_metrics,
+    merge_imbalance_config,
+    normalize_detail_type,
+    sampler_weights_from_class_weights,
+    stratified_group_train_val_split,
+)
 from scann.ai.device_utils import resolve_device
 from scann.ai.model import ModelFormat, SCANNClassifier
 from scann.ai.trainer import TrainConfig
-from scann.core.annotation_models import DetailType
 from scann.core.fits_annotation_storage import load_v2_annotation_document
 from scann.core.fits_io import read_fits
 from scann.data.file_manager import FitsImagePair, match_new_old_pairs
@@ -45,24 +55,6 @@ from scann.services.detection_image_adapter import robust_to_uint8
 
 logger = logging.getLogger(__name__)
 
-
-DETAIL_TYPE_CLASS_ORDER: tuple[str, ...] = (
-    DetailType.ASTEROID.value,
-    DetailType.SUPERNOVA.value,
-    DetailType.VARIABLE_STAR.value,
-    DetailType.SATELLITE_TRAIL.value,
-    DetailType.NOISE.value,
-    DetailType.DIFFRACTION_SPIKE.value,
-    DetailType.CMOS_CONDENSATION.value,
-    DetailType.CORRESPONDING.value,
-    DetailType.DISAPPEARED_ASTEROID.value,
-    DetailType.DISAPPEARED_STAR.value,
-    DetailType.DISAPPEARED_GALAXY.value,
-)
-DETAIL_TYPE_TO_CLASS_INDEX: dict[str, int] = {
-    detail_type: index
-    for index, detail_type in enumerate(DETAIL_TYPE_CLASS_ORDER)
-}
 
 # 确认缓存目录
 torch.hub.set_dir(str(model_cache_dir))
@@ -192,14 +184,7 @@ class TrainingWorker(QThread):
 
     def _resolve_annotation_detail_type(self, ann: dict[str, Any], image_info: dict[str, Any]) -> str | None:
         detail_type = str(ann.get("detail_type") or image_info.get("detail_type") or "").strip()
-        if detail_type:
-            try:
-                return DetailType(detail_type).value
-            except Exception:
-                normalized = detail_type.lower()
-                if normalized in DETAIL_TYPE_TO_CLASS_INDEX:
-                    return normalized
-        return None
+        return normalize_detail_type(detail_type)
 
     def _ensure_2d_image(self, data: np.ndarray, path: Path) -> np.ndarray:
         arr = np.asarray(data)
@@ -292,7 +277,7 @@ class TrainingWorker(QThread):
             return None
         return x0, y0, x1, y1
 
-    def _collect_v2_samples_from_root(self, dataset_root: Path) -> list[tuple[np.ndarray, int]]:
+    def _collect_v2_sample_records_from_root(self, dataset_root: Path) -> list[dict[str, Any]]:
         new_dir = dataset_root / "new"
         old_dir = dataset_root / "old"
         ann_path = dataset_root / "annotations.json"
@@ -313,7 +298,7 @@ class TrainingWorker(QThread):
 
         pair_lookup = self._build_pair_lookup(pairs)
         pair_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
-        all_samples: list[tuple[np.ndarray, int]] = []
+        all_samples: list[dict[str, Any]] = []
 
         for image_info in images:
             annotations = image_info.get("annotations") or []
@@ -350,7 +335,8 @@ class TrainingWorker(QThread):
                 new_u8_view = new_u8
                 old_u8_view = old_u8
 
-            for ann in annotations:
+            image_id = str(image_info.get("id") or image_info.get("file_name") or image_info.get("file") or pair.name)
+            for ann_index, ann in enumerate(annotations):
                 detail_type = self._resolve_annotation_detail_type(ann, image_info)
                 if detail_type is None:
                     continue
@@ -369,11 +355,23 @@ class TrainingWorker(QThread):
                 class_index = DETAIL_TYPE_TO_CLASS_INDEX.get(detail_type)
                 if class_index is None:
                     continue
-                all_samples.append((triplet, class_index))
+                all_samples.append(
+                    {
+                        "data": triplet,
+                        "label": int(class_index),
+                        "detail_type": detail_type,
+                        "task_id": image_id,
+                        "annotation_index": int(ann_index),
+                    }
+                )
 
         if not all_samples:
             raise ValueError("v2 数据集里未找到可训练的已标注样本")
         return all_samples
+
+    def _collect_v2_samples_from_root(self, dataset_root: Path) -> list[tuple[np.ndarray, int]]:
+        records = self._collect_v2_sample_records_from_root(dataset_root)
+        return [(record["data"], int(record["label"])) for record in records]
 
     def _load_v2_annotations_document(self, dataset_root: Path) -> dict[str, Any]:
         snapshot_path_raw = str(self._params.get("annotations_document_path", "")).strip()
@@ -387,7 +385,7 @@ class TrainingWorker(QThread):
             return payload
         return load_v2_annotation_document(dataset_root)
 
-    def _build_sample_pool(self) -> tuple[list[tuple[Any, int]], str]:
+    def _build_sample_pool(self) -> tuple[list[dict[str, Any]], str]:
         dataset_dir = Path(str(self._params.get("dataset_dir", "")).strip())
         if not str(dataset_dir):
             raise ValueError("未设置数据集目录")
@@ -395,7 +393,7 @@ class TrainingWorker(QThread):
         dataset_format = self._resolve_dataset_format()
         if dataset_format != "v2":
             raise ValueError("当前训练链路已统一为11类细分类，仅支持 v2 FITS 标注数据集")
-        return self._collect_v2_samples_from_root(dataset_dir), "array"
+        return self._collect_v2_sample_records_from_root(dataset_dir), "array"
 
     @staticmethod
     def _compute_dense_detection_loss(
@@ -665,16 +663,18 @@ class TrainingWorker(QThread):
             )
 
             # 划分训练集/验证集
-            n = len(all_samples)
-            idx = np.arange(n)
-            np.random.shuffle(idx)
-            split = int((1.0 - val_split) * n)
-            split = min(max(split, 1), n - 1)
-            train_idx = idx[:split].tolist()
-            val_idx = idx[split:].tolist()
+            imbalance_config = merge_imbalance_config(self._params)
+            seed = int(self._params.get("seed", 42))
+            train_idx, val_idx, split_support = stratified_group_train_val_split(
+                all_samples,
+                val_split=val_split,
+                seed=seed,
+            )
 
-            train_samples = [all_samples[i] for i in train_idx]
-            val_samples = [all_samples[i] for i in val_idx]
+            train_records = [all_samples[i] for i in train_idx]
+            val_records = [all_samples[i] for i in val_idx]
+            train_samples = [(record["data"], int(record["label"])) for record in train_records]
+            val_samples = [(record["data"], int(record["label"])) for record in val_records]
 
             logger.info(f"训练集: {len(train_samples)}, 验证集: {len(val_samples)}")
 
@@ -697,15 +697,44 @@ class TrainingWorker(QThread):
             )
 
             # 类别平衡采样（11类）
-            train_labels = [all_samples[i][1] for i in train_idx]
+            train_labels = [int(record["label"]) for record in train_records]
             class_count = len(DETAIL_TYPE_CLASS_ORDER)
-            class_hist = [0] * class_count
-            for label in train_labels:
-                if 0 <= int(label) < class_count:
-                    class_hist[int(label)] += 1
-            weight_class = [1.0 / max(class_hist[index], 1) for index in range(class_count)]
-            samples_weight = [weight_class[y] for y in train_labels]
-            samples_weight = torch.tensor(samples_weight, dtype=torch.double)
+            weight_class = compute_class_balanced_weights(
+                train_labels,
+                beta=float(imbalance_config["class_weight_beta"]),
+                clip=imbalance_config["class_weight_clip"],
+                class_count=class_count,
+            )
+            sample_weight_values = sampler_weights_from_class_weights(
+                train_labels,
+                weight_class,
+                power=float(imbalance_config["sampler_power"]),
+                max_ratio=float(imbalance_config["sampler_max_ratio"]),
+            )
+            samples_weight = torch.tensor(sample_weight_values, dtype=torch.double)
+            class_support = build_class_audit(
+                all_samples,
+                split_support=split_support,
+                min_train_support=int(imbalance_config["min_train_support_warning"]),
+                min_val_support=int(imbalance_config["min_val_support_warning"]),
+            )
+            untrained_classes = [
+                detail_type
+                for detail_type, count in class_support["split_support"].get("train", {}).items()
+                if int(count) <= 0
+            ]
+            unverifiable_classes = [
+                detail_type
+                for detail_type, count in class_support["split_support"].get("val", {}).items()
+                if int(count) <= 0
+            ]
+            unreliable_classes = list(
+                dict.fromkeys(
+                    list(class_support.get("missing_classes", []))
+                    + list(class_support.get("low_sample_classes", []))
+                    + unverifiable_classes
+                )
+            )
 
             sampler = WeightedRandomSampler(
                 samples_weight, num_samples=len(train_set), replacement=True
@@ -736,7 +765,8 @@ class TrainingWorker(QThread):
             # === 3. 损失和优化器 ===
             from scann.ai.trainer import FocalLoss
 
-            criterion = FocalLoss(gamma=2.0, alpha=weight_class).to(device)
+            focal_gamma = float(self._params.get("focal_gamma", 2.0))
+            criterion = FocalLoss(gamma=focal_gamma, alpha=weight_class).to(device)
 
             optimizer_name = self._params.get("optimizer", "Adam")
             if optimizer_name == "AdamW":
@@ -751,6 +781,7 @@ class TrainingWorker(QThread):
             best_threshold = 0.5
             best_accuracy = 0.0
             best_epoch = 0
+            best_metrics: dict[str, Any] = {}
 
             for epoch in range(epochs):
                 if self._should_stop:
@@ -793,21 +824,17 @@ class TrainingWorker(QThread):
                         all_preds.append(torch.argmax(probs, dim=1).cpu().numpy())
                         all_labels.append(y.cpu().numpy())
 
-                if not all_probs:
-                    break
-
-                probs = np.concatenate(all_probs, axis=0)
-                labels = np.concatenate(all_labels)
-                preds = np.concatenate(all_preds)
+                if all_probs:
+                    labels = np.concatenate(all_labels)
+                    preds = np.concatenate(all_preds)
+                else:
+                    labels = np.asarray([], dtype=np.int64)
+                    preds = np.asarray([], dtype=np.int64)
 
                 # 多分类验证指标
-                try:
-                    from sklearn.metrics import f1_score
-
-                    macro_f1 = float(f1_score(labels, preds, average="macro", zero_division=0.0))
-                except Exception:
-                    macro_f1 = 0.0
-                accuracy = float((preds == labels).mean()) if labels.size > 0 else 0.0
+                metrics = compute_multiclass_metrics(labels, preds, class_count=class_count)
+                macro_f1 = float(metrics["macro_f1_supported"])
+                accuracy = float(metrics["accuracy"])
 
                 # 发射进度
                 self.progress.emit(epoch + 1, epochs, train_loss, macro_f1)
@@ -817,6 +844,7 @@ class TrainingWorker(QThread):
                     best_f2 = macro_f1
                     best_accuracy = accuracy
                     best_epoch = epoch
+                    best_metrics = dict(metrics)
 
                     # 确定保存格式
                     model_format = ModelFormat.V1_CLASSIFIER if save_format == "v1_classifier" else ModelFormat.V2_CLASSIFIER
@@ -838,6 +866,18 @@ class TrainingWorker(QThread):
                         class_names=list(DETAIL_TYPE_CLASS_ORDER),
                         num_classes=class_count,
                         classification_mode="detail_type_11",
+                        class_support=class_support,
+                        class_weights=weight_class,
+                        sampler_weight_range=[
+                            float(min(sample_weight_values)) if sample_weight_values else 0.0,
+                            float(max(sample_weight_values)) if sample_weight_values else 0.0,
+                        ],
+                        imbalance_config=imbalance_config,
+                        untrained_classes=untrained_classes,
+                        unverifiable_classes=unverifiable_classes,
+                        unreliable_classes=unreliable_classes,
+                        selection_metric=str(imbalance_config["selection_metric"]),
+                        best_metrics=best_metrics,
                     )
                     logger.info(
                         "保存最佳11类模型 (epoch=%s, macro_f1=%.4f, acc=%.4f)",
@@ -850,12 +890,25 @@ class TrainingWorker(QThread):
             final_metrics = {
                 "best_f2": best_f2,
                 "best_macro_f1": best_f2,
+                "macro_f1_supported": best_f2,
                 "best_accuracy": best_accuracy,
                 "best_threshold": best_threshold,
                 "best_epoch": best_epoch,
                 "num_classes": len(DETAIL_TYPE_CLASS_ORDER),
                 "class_names": list(DETAIL_TYPE_CLASS_ORDER),
+                "selection_metric": str(imbalance_config["selection_metric"]),
+                "class_support": class_support,
+                "class_weights": weight_class,
+                "sampler_weight_range": [
+                    float(min(sample_weight_values)) if sample_weight_values else 0.0,
+                    float(max(sample_weight_values)) if sample_weight_values else 0.0,
+                ],
+                "untrained_classes": untrained_classes,
+                "unverifiable_classes": unverifiable_classes,
+                "unreliable_classes": unreliable_classes,
+                "promotion_warnings": class_support.get("promotion_warnings", []),
             }
+            final_metrics.update(best_metrics)
             self.finished.emit(save_path, final_metrics)
 
         except Exception as e:

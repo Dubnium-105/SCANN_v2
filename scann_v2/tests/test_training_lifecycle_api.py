@@ -262,3 +262,89 @@ def test_training_job_can_create_snapshot_implicitly_and_requires_worker_token(t
     )
     assert incompatible_claim.status_code == 404
     assert incompatible_claim.json()["detail"] == "No queued training job"
+
+
+def test_low_support_training_completion_registers_but_does_not_auto_promote(tmp_path, monkeypatch) -> None:
+    dataset_root = tmp_path / "dataset"
+    monkeypatch.setenv("SCANN_NATIVE_DATASET_ROOT", str(dataset_root))
+    monkeypatch.setenv("SCANN_TRAINING_WORKER_TOKEN", "training-worker-secret")
+
+    client = TestClient(app)
+    _seed_annotation(client, dataset_root)
+    admin_headers = _auth_headers(client)
+
+    snapshot = client.post(
+        "/api/training/snapshots",
+        json={"snapshot_name": "low-support", "task_ids": ["PGC 17069"]},
+        headers=admin_headers,
+    )
+    assert snapshot.status_code == 200
+    snapshot_payload = snapshot.json()
+    assert "class_audit" in snapshot_payload["metadata"]
+
+    create_job = client.post(
+        "/api/training/jobs",
+        json={
+            "snapshot_id": snapshot_payload["snapshot_id"],
+            "task_type": "classification",
+            "model_version": "cls-low",
+            "model_id": "cls-low-run",
+            "model_backbone": "ResNet18",
+            "promote_on_success": True,
+            "enqueue_prelabels_on_success": True,
+        },
+        headers=admin_headers,
+    )
+    assert create_job.status_code == 200
+    assert create_job.json()["train_config"]["imbalance_strategy"] == "class_balanced_focal"
+
+    claim = client.post(
+        "/api/training-jobs/claim",
+        json={"worker_id": "trainer-low", "capabilities": {"task_types": ["classification"]}},
+        headers=_training_worker_headers(),
+    )
+    assert claim.status_code == 200
+    job_id = claim.json()["job_id"]
+
+    upload = client.post(
+        f"/api/training-jobs/{job_id}/artifact",
+        params={"worker_id": "trainer-low", "filename": "best_model.pth"},
+        content=b"mock-low-support-checkpoint",
+        headers={**_training_worker_headers(), "Content-Type": "application/octet-stream"},
+    )
+    assert upload.status_code == 200
+
+    complete = client.post(
+        f"/api/training-jobs/{job_id}/complete",
+        json={
+            "worker_id": "trainer-low",
+            "artifact_path": upload.json()["artifact_path"],
+            "metrics": {
+                "macro_f1_supported": 0.1,
+                "promotion_warnings": ["train_support_below_minimum: asteroid"],
+            },
+        },
+        headers=_training_worker_headers(),
+    )
+    assert complete.status_code == 200
+    complete_payload = complete.json()
+    assert complete_payload["model"]["is_promoted"] is False
+    assert complete_payload["auto_promoted"] is False
+    assert complete_payload["prelabel_enqueue"] is None
+    assert "auto_promotion_suppressed_due_to_class_coverage" in complete_payload["promotion_warnings"]
+
+    promoted = client.get(
+        "/api/training/models/promoted",
+        params={"task_type": "classification"},
+        headers=admin_headers,
+    )
+    assert promoted.status_code == 404
+
+    manual = client.post(
+        "/api/training/models/cls-low-run/promote",
+        headers=admin_headers,
+    )
+    assert manual.status_code == 200
+    manual_payload = manual.json()
+    assert manual_payload["model"]["is_promoted"] is True
+    assert "train_support_below_minimum: asteroid" in manual_payload["promotion_warnings"]

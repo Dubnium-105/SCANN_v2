@@ -1,5 +1,4 @@
 import json
-from typing import Optional
 from types import SimpleNamespace
 import torch
 import pytest
@@ -305,41 +304,34 @@ class TestTrainingWorkerDetectionTask:
         assert ckpt["bbox_loss_weight"] == 2.0
         assert ckpt["patch_size"] == 16
 
-    def test_detection_training_uses_snapshot_annotation_file(self, tmp_path, monkeypatch):
+    def test_training_uses_snapshot_annotation_document(self, tmp_path):
         snapshot_path = tmp_path / "snapshot.json"
-        snapshot_path.write_text(json.dumps({"version": "2.3", "images": []}), encoding="utf-8")
-
-        captured: dict[str, object] = {}
-
-        class _FakeDenseDataset:
-            def __init__(self, dataset_root: str, annotation_file: Optional[str] = None, patch_size: int = 16):
-                captured["dataset_root"] = dataset_root
-                captured["annotation_file"] = annotation_file
-                captured["patch_size"] = patch_size
-
-            def __len__(self) -> int:
-                return 1
-
-        monkeypatch.setattr("scann.ai.dataset.FitsDenseDetectionDataset", _FakeDenseDataset)
+        snapshot_path.write_text(
+            json.dumps(
+                {
+                    "version": "2.3",
+                    "images": [
+                        {
+                            "id": "from-snapshot",
+                            "annotations": [
+                                {"x": 1, "y": 2, "width": 3, "height": 4, "detail_type": "asteroid"}
+                            ],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
 
         worker = TrainingWorker(
             {
                 "dataset_dir": str(tmp_path),
                 "dataset_format": "v2",
-                "task_type": "detection",
+                "task_type": "classification",
                 "annotations_document_path": str(snapshot_path),
-                "epochs": 1,
-                "batch_size": 1,
-                "lr": 1e-3,
-                "backbone": "ResNet18",
-                "save_path": str(tmp_path / "dense-best.pth"),
             }
         )
-        errors: list[str] = []
-        worker.error.connect(errors.append)
 
-        worker.run()
+        payload = worker._load_v2_annotations_document(tmp_path)
 
-        assert captured["dataset_root"] == str(tmp_path)
-        assert captured["annotation_file"] == str(snapshot_path)
-        assert errors
+        assert payload["images"][0]["id"] == "from-snapshot"
