@@ -2876,13 +2876,14 @@ function isSelectedPrelabelOverlay(annotation) {
 
 function getPrelabelOverlayRectConfig(annotation) {
   const isSelected = isSelectedPrelabelOverlay(annotation)
+  const baseStrokeWidth = Math.max(0.2, Number(bboxStrokeWidth.value) || 0)
   return {
     x: annotation.x,
     y: annotation.y,
     width: annotation.width,
     height: annotation.height,
     stroke: isSelected ? '#fbbf24' : '#60a5fa',
-    strokeWidth: isSelected ? Math.max(3, bboxStrokeWidth.value + 1.5) : bboxStrokeWidth.value,
+    strokeWidth: isSelected ? baseStrokeWidth + 1.5 : baseStrokeWidth,
     fill: isSelected ? 'rgba(251, 191, 36, 0.16)' : 'rgba(96, 165, 250, 0.10)',
     dash: isSelected ? [10, 4] : [6, 4],
     shadowColor: isSelected ? '#fbbf24' : undefined,
