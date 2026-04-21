@@ -48,6 +48,12 @@ DEFAULT_IMBALANCE_CONFIG: dict[str, Any] = {
     "min_train_support_warning": 5,
     "min_val_support_warning": 1,
     "selection_metric": "macro_f1_supported",
+    "selection_metric_weights": {
+        "macro_f1_supported": 0.5,
+        "tail_recall@1": 0.3,
+        "macro_ap": 0.2,
+    },
+    "selection_constraints": {},
     "head_min_support": 100,
     "mid_min_support": 21,
     "tail_max_support": 20,
@@ -132,6 +138,32 @@ def merge_imbalance_config(raw: dict[str, Any] | None = None) -> dict[str, Any]:
     merged["mid_min_support"] = max(1, int(merged.get("mid_min_support") or 21))
     merged["tail_max_support"] = max(1, int(merged.get("tail_max_support") or 20))
     merged["tail_recall_max_support"] = max(1, int(merged.get("tail_recall_max_support") or 20))
+    weights = dict(DEFAULT_IMBALANCE_CONFIG["selection_metric_weights"])
+    if isinstance(merged.get("selection_metric_weights"), dict):
+        weights.update(merged["selection_metric_weights"])
+    clean_weights: dict[str, float] = {}
+    for key in ("macro_f1_supported", "tail_recall@1", "macro_ap"):
+        try:
+            value = float(weights.get(key, 0.0))
+        except (TypeError, ValueError):
+            value = 0.0
+        clean_weights[key] = value if math.isfinite(value) else 0.0
+    if sum(max(0.0, value) for value in clean_weights.values()) <= 0.0:
+        clean_weights = dict(DEFAULT_IMBALANCE_CONFIG["selection_metric_weights"])
+    merged["selection_metric_weights"] = clean_weights
+    constraints: dict[str, float] = {}
+    if isinstance(merged.get("selection_constraints"), dict):
+        for key, raw_value in merged["selection_constraints"].items():
+            normalized_key = str(key or "").strip()
+            if normalized_key not in {"macro_f1_supported", "tail_recall@1", "macro_ap", "long_tail_score"}:
+                continue
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value):
+                constraints[normalized_key] = max(0.0, value)
+    merged["selection_constraints"] = constraints
 
     vt = dict(DEFAULT_IMBALANCE_CONFIG["variance_transfer"])
     if isinstance(merged.get("variance_transfer"), dict):

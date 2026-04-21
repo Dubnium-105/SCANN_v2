@@ -48,7 +48,7 @@ function buildBaseFetchMock(extraHandler = null) {
           run_id: 'run-1',
           model_version: 'cls-v2',
           status: 'completed',
-          metrics: { f1: 0.91 },
+          metrics: { macro_f1_supported: 0.1324, 'tail_recall@1': 0.25, macro_ap: 0.19, f1: 0.91 },
         },
       ])
     }
@@ -68,14 +68,14 @@ function buildBaseFetchMock(extraHandler = null) {
           model_version: 'cls-v2',
           model_backbone: 'ResNet18',
           is_promoted: true,
-          metrics: { f1: 0.91 },
+          metrics: { macro_f1_supported: 0.1324, 'tail_recall@1': 0.25, macro_ap: 0.19, f1: 0.91 },
         },
         {
           model_id: 'model-1',
           model_version: 'cls-v3',
           model_backbone: 'ViT_B_16',
           is_promoted: false,
-          metrics: { f1: 0.93 },
+          metrics: { macro_f1_supported: 0.14, 'tail_recall@1': 0.3, macro_ap: 0.2, f1: 0.93 },
         },
       ])
     }
@@ -172,6 +172,8 @@ describe('TrainingLoopMenu', () => {
 
     expect(wrapper.get('[data-testid="header-training-menu"]').text()).toContain('round-1')
     expect(wrapper.get('[data-testid="training-promoted-model"]').text()).toContain('cls-v2')
+    expect(wrapper.get('[data-testid="header-training-menu"]').text()).toContain('tail_recall@1=0.250')
+    expect(wrapper.get('[data-testid="header-training-menu"]').text()).toContain('macro_ap=0.190')
     expect(wrapper.get('[data-testid="prelabel-control-panel"]').text()).toContain('GPU Worker')
     expect(wrapper.get('[data-testid="prelabel-selected-summary"]').text()).toContain('当前队列 1 个')
   })

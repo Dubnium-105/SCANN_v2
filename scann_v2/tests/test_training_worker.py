@@ -314,7 +314,7 @@ class TestTrainingWorkerDetectionTask:
                     "annotation_index": 0,
                     "detail_type": "asteroid",
                     "label": 0,
-                    "data": np.full((3, 8, 8), 0.2 + index * 0.01, dtype=np.float32),
+                    "data": np.full((3, 8 + index, 8 + index), 0.2 + index * 0.01, dtype=np.float32),
                     "quality_score": 1.0,
                 }
             )
@@ -325,7 +325,7 @@ class TestTrainingWorkerDetectionTask:
                     "annotation_index": 0,
                     "detail_type": "corresponding",
                     "label": 7,
-                    "data": np.full((3, 8, 8), 0.7 + index * 0.001, dtype=np.float32),
+                    "data": np.full((3, 10 + (index % 3), 10 + (index % 3)), 0.7 + index * 0.001, dtype=np.float32),
                     "quality_score": 1.0,
                 }
             )
@@ -382,6 +382,58 @@ class TestTrainingWorkerDetectionTask:
         assert ckpt["feature_encoder"] == "scann_test_identity"
         assert ckpt["variance_transfer_summary"]["synthetic_counts"]["asteroid"] == 3
         assert ckpt["class_log_prior"][1] == 0.0
+        assert "macro_f1_supported" in ckpt["best_metrics"]
+        assert "tail_recall@1" in ckpt["best_metrics"]
+        assert "macro_ap" in ckpt["best_metrics"]
+        assert "long_tail_score" in ckpt["best_metrics"]
+        assert "selection_score" in ckpt["best_metrics"]
+
+    def test_long_tail_selection_score_and_log_summary_are_deduplicated(self):
+        metrics = {
+            "macro_f1_supported": 0.10,
+            "tail_recall@1": 0.40,
+            "macro_ap": 0.20,
+        }
+        config = merge_imbalance_config(
+            {
+                "selection_metric": "long_tail_score",
+                "selection_metric_weights": {
+                    "macro_f1_supported": 0.5,
+                    "tail_recall@1": 0.3,
+                    "macro_ap": 0.2,
+                },
+            }
+        )
+
+        score = TrainingWorker._feature_selection_value(metrics, "long_tail_score", config)
+        summary = TrainingWorker._format_feature_metric_summary(
+            metrics,
+            leading=("tail_recall@1", metrics["tail_recall@1"]),
+        )
+
+        assert score == pytest.approx(0.21)
+        assert metrics["long_tail_score"] == pytest.approx(0.21)
+        assert summary.count("tail_recall@1") == 1
+
+    def test_selection_constraints_penalize_epochs_below_tail_floor(self):
+        metrics = {
+            "macro_f1_supported": 0.22,
+            "tail_recall@1": 0.05,
+            "macro_ap": 0.26,
+        }
+        config = merge_imbalance_config(
+            {
+                "selection_metric": "macro_f1_supported",
+                "selection_constraints": {"tail_recall@1": 0.15},
+            }
+        )
+
+        score = TrainingWorker._feature_selection_value(metrics, "macro_f1_supported", config)
+
+        assert score < 0.0
+        assert metrics["selection_raw_score"] == pytest.approx(0.22)
+        assert metrics["selection_constraint_penalty"] == pytest.approx(0.10)
+        assert metrics["selection_constraints_met"] is False
 
     def test_training_uses_snapshot_annotation_document(self, tmp_path):
         snapshot_path = tmp_path / "snapshot.json"

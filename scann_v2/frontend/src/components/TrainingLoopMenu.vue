@@ -458,6 +458,13 @@ const jobForm = ref({
     training_mode: 'frozen_feature_classifier',
     feature_encoder: 'dinov2_vitb14_reg',
     feature_cache_enabled: true,
+    selection_metric: 'macro_f1_supported',
+    selection_metric_weights: {
+      macro_f1_supported: 0.5,
+      'tail_recall@1': 0.3,
+      macro_ap: 0.2,
+    },
+    selection_constraints: {},
     prior_logit_correction: {
       enabled: true,
       tau: 1.0,
@@ -513,7 +520,19 @@ function formatMetrics(metrics) {
   if (!metrics || typeof metrics !== 'object') {
     return '暂无指标'
   }
-  const keys = ['macro_f1_supported', 'best_macro_f1', 'f1', 'best_f2', 'val_loss', 'precision', 'recall']
+  const keys = [
+    'macro_f1_supported',
+    'tail_recall@1',
+    'macro_ap',
+    'long_tail_score',
+    'selection_score',
+    'best_macro_f1',
+    'f1',
+    'best_f2',
+    'val_loss',
+    'precision',
+    'recall',
+  ]
   const parts = keys
     .filter((key) => Object.prototype.hasOwnProperty.call(metrics, key))
     .map((key) => {
@@ -653,6 +672,13 @@ async function submitTrainingJob() {
         training_mode: 'frozen_feature_classifier',
         feature_encoder: 'dinov2_vitb14_reg',
         feature_cache_enabled: true,
+        selection_metric: 'macro_f1_supported',
+        selection_metric_weights: {
+          macro_f1_supported: 0.5,
+          'tail_recall@1': 0.3,
+          macro_ap: 0.2,
+        },
+        selection_constraints: {},
         prior_logit_correction: { enabled: true, tau: 1.0 },
         ...advancedConfig,
         epochs: Number(jobForm.value.epochs) || 20,

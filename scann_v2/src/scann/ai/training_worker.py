@@ -34,6 +34,7 @@ except Exception:
     pass
 
 import torch  # 现在导入torch
+import torch.nn.functional as F
 
 from scann.ai.class_balance import (
     DETAIL_TYPE_CLASS_ORDER,
@@ -582,8 +583,21 @@ class TrainingWorker(QThread):
         with torch.no_grad():
             for start in range(0, len(records), max(1, int(batch_size))):
                 batch_records = records[start : start + max(1, int(batch_size))]
-                batch = np.stack([np.asarray(record["data"], dtype=np.float32) for record in batch_records], axis=0)
-                tensor = torch.from_numpy(batch).to(device)
+                tensors: list[torch.Tensor] = []
+                for record in batch_records:
+                    data = np.asarray(record["data"], dtype=np.float32)
+                    if data.ndim != 3:
+                        raise ValueError("feature records must contain CHW patch data")
+                    tensor = torch.from_numpy(data).float().unsqueeze(0).to(device)
+                    if tensor.shape[-2:] != (int(spec.input_size), int(spec.input_size)):
+                        tensor = F.interpolate(
+                            tensor,
+                            size=(int(spec.input_size), int(spec.input_size)),
+                            mode="bilinear",
+                            align_corners=False,
+                        )
+                    tensors.append(tensor.squeeze(0))
+                tensor = torch.stack(tensors, dim=0)
                 prepared = preprocess_feature_batch(tensor, input_size=spec.input_size)
                 encoded = forward_feature_encoder(encoder, prepared, family=spec.family)
                 features.append(encoded.detach().cpu().numpy().astype(np.float32))
@@ -662,6 +676,97 @@ class TrainingWorker(QThread):
 
         weights = class_weight * quality_weight
         return (base_loss * weights).sum() / weights.sum().clamp_min(1e-12)
+
+    @staticmethod
+    def _attach_long_tail_score(metrics: dict[str, Any], imbalance_config: dict[str, Any]) -> float:
+        raw_weights = imbalance_config.get("selection_metric_weights")
+        weights = raw_weights if isinstance(raw_weights, dict) else {}
+        default_weights = {
+            "macro_f1_supported": 0.5,
+            "tail_recall@1": 0.3,
+            "macro_ap": 0.2,
+        }
+        score = 0.0
+        for key, default_weight in default_weights.items():
+            try:
+                weight = float(weights.get(key, default_weight))
+            except (TypeError, ValueError):
+                weight = default_weight
+            try:
+                value = float(metrics.get(key, 0.0) or 0.0)
+            except (TypeError, ValueError):
+                value = 0.0
+            if not np.isfinite(weight) or not np.isfinite(value):
+                continue
+            score += weight * value
+        metrics["long_tail_score"] = float(score)
+        return float(score)
+
+    @classmethod
+    def _feature_selection_value(
+        cls,
+        metrics: dict[str, Any],
+        metric_name: str,
+        imbalance_config: dict[str, Any],
+    ) -> float:
+        normalized = str(metric_name or "macro_f1_supported").strip()
+        if normalized in {"long_tail_score", "balanced_long_tail_score"}:
+            raw_score = cls._attach_long_tail_score(metrics, imbalance_config)
+        else:
+            if "long_tail_score" not in metrics:
+                cls._attach_long_tail_score(metrics, imbalance_config)
+            try:
+                raw_score = float(metrics.get(normalized, metrics.get("macro_f1_supported", 0.0)) or 0.0)
+            except (TypeError, ValueError):
+                raw_score = 0.0
+
+        penalty = 0.0
+        constraints = imbalance_config.get("selection_constraints")
+        if isinstance(constraints, dict):
+            for key, raw_floor in constraints.items():
+                try:
+                    floor = float(raw_floor)
+                    value = float(metrics.get(str(key), 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                if not np.isfinite(floor) or not np.isfinite(value):
+                    continue
+                if value < floor:
+                    penalty += floor - value
+        metrics["selection_raw_score"] = float(raw_score)
+        metrics["selection_constraint_penalty"] = float(penalty)
+        metrics["selection_constraints_met"] = bool(penalty <= 1e-12)
+        if penalty > 0.0:
+            return float(raw_score - 1.0 - penalty)
+        return float(raw_score)
+
+    @staticmethod
+    def _format_feature_metric_summary(
+        metrics: dict[str, Any],
+        *,
+        leading: tuple[str, float] | None = None,
+    ) -> str:
+        parts: list[str] = []
+        seen: set[str] = set()
+
+        def add(key: str, value: Any) -> None:
+            if key in seen:
+                return
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                return
+            if not np.isfinite(numeric):
+                return
+            seen.add(key)
+            parts.append(f"{key}={numeric:.4f}")
+
+        if leading is not None:
+            add(str(leading[0]), leading[1])
+        for key in ("macro_f1_supported", "tail_recall@1", "macro_ap", "long_tail_score", "selection_score"):
+            if key in metrics:
+                add(key, metrics[key])
+        return ", ".join(parts)
 
     @staticmethod
     def _evaluate_feature_head(
@@ -851,8 +956,17 @@ class TrainingWorker(QThread):
                 tail_max_support=tail_max_support,
             )
             metric_name = str(imbalance_config.get("selection_metric") or "macro_f1_supported")
-            metric_value = float(metrics.get(metric_name, metrics.get("macro_f1_supported", 0.0)) or 0.0)
+            metric_value = self._feature_selection_value(metrics, metric_name, imbalance_config)
+            metrics["selection_score"] = float(metric_value)
+            metric_summary = self._format_feature_metric_summary(metrics)
             self.progress.emit(epoch + 1, int(epochs), train_loss, metric_value)
+            logger.info(
+                "Frozen-feature epoch %d/%d: loss=%.4f, %s",
+                epoch + 1,
+                int(epochs),
+                train_loss,
+                metric_summary,
+            )
 
             if metric_value > best_metric + 0.001:
                 best_metric = metric_value
@@ -887,6 +1001,9 @@ class TrainingWorker(QThread):
                     "class_support": class_support,
                     "class_weights": weight_class,
                     "selection_metric": metric_name,
+                    "selection_metric_weights": imbalance_config.get("selection_metric_weights", {}),
+                    "selection_constraints": imbalance_config.get("selection_constraints", {}),
+                    "selection_score": float(metric_value),
                     "best_epoch": int(best_epoch),
                     "best_metrics": best_metrics,
                     "feature_cache_path": str(cache_path) if cache_path is not None else "",
@@ -894,16 +1011,17 @@ class TrainingWorker(QThread):
                 }
                 torch.save(ckpt, save_path)
                 logger.info(
-                    "Saved frozen-feature classifier (epoch=%d, %s=%.4f, encoder=%s)",
+                    "Saved frozen-feature classifier (epoch=%d, %s, encoder=%s)",
                     epoch + 1,
-                    metric_name,
-                    metric_value,
+                    self._format_feature_metric_summary(best_metrics, leading=("selection_score", metric_value)),
                     spec.name,
                 )
 
         if best_epoch < 0:
             raise ValueError("frozen feature training did not produce a valid checkpoint")
 
+        final_selection_metric = str(imbalance_config.get("selection_metric") or "macro_f1_supported")
+        final_selection_score = self._feature_selection_value(best_metrics, final_selection_metric, imbalance_config)
         final_metrics = {
             "training_mode": "frozen_feature_classifier",
             "feature_encoder": spec.name,
@@ -913,11 +1031,16 @@ class TrainingWorker(QThread):
             "macro_f1_supported": float(best_metrics.get("macro_f1_supported", 0.0)),
             "macro_ap": float(best_metrics.get("macro_ap", 0.0)),
             "tail_recall@1": float(best_metrics.get("tail_recall@1", 0.0)),
+            "long_tail_score": float(best_metrics.get("long_tail_score", 0.0)),
             "num_classes": class_count,
             "class_names": list(DETAIL_TYPE_CLASS_ORDER),
             "class_support": class_support,
             "class_weights": weight_class,
             "class_log_prior": class_log_prior,
+            "selection_metric": final_selection_metric,
+            "selection_metric_weights": imbalance_config.get("selection_metric_weights", {}),
+            "selection_constraints": imbalance_config.get("selection_constraints", {}),
+            "selection_score": float(final_selection_score),
             "variance_transfer_summary": vt_summary,
             "feature_cache_path": str(cache_path) if cache_path is not None else "",
             "feature_cache_hit": bool(cache_hit),
@@ -934,6 +1057,11 @@ class TrainingWorker(QThread):
             ),
         }
         final_metrics.update(best_metrics)
+        logger.info(
+            "Frozen-feature training best metrics: epoch=%d, %s",
+            int(best_epoch) + 1,
+            self._format_feature_metric_summary(final_metrics),
+        )
         self.finished.emit(save_path, final_metrics)
 
     def run(self) -> None:

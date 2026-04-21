@@ -334,6 +334,16 @@ class InferenceEngine:
             for p in batch_raw:
                 t = torch.from_numpy(p).float()
                 if uses_internal_preprocessing:
+                    target_size = int(getattr(getattr(self.model, "spec", None), "input_size", 224) or 224)
+                    if t.ndim != 3:
+                        raise ValueError("frozen feature classifier expects CHW patch data")
+                    if t.shape[-2:] != (target_size, target_size):
+                        t = F.interpolate(
+                            t.unsqueeze(0),
+                            size=(target_size, target_size),
+                            mode="bilinear",
+                            align_corners=False,
+                        ).squeeze(0)
                     tensors.append(t)
                     continue
                 if self.is_v1:
