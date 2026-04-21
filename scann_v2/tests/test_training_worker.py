@@ -7,6 +7,7 @@ import numpy as np
 from PIL import Image
 from unittest.mock import patch
 
+from scann.ai.class_balance import build_class_audit, merge_imbalance_config
 from scann.ai.training_worker import TrainingWorker
 
 
@@ -303,6 +304,84 @@ class TestTrainingWorkerDetectionTask:
         assert ckpt["heatmap_threshold"] == 0.35
         assert ckpt["bbox_loss_weight"] == 2.0
         assert ckpt["patch_size"] == 16
+
+    def test_frozen_feature_training_smoke_writes_metadata(self, tmp_path):
+        records = []
+        for index in range(3):
+            records.append(
+                {
+                    "task_id": f"tail-{index}",
+                    "annotation_index": 0,
+                    "detail_type": "asteroid",
+                    "label": 0,
+                    "data": np.full((3, 8, 8), 0.2 + index * 0.01, dtype=np.float32),
+                    "quality_score": 1.0,
+                }
+            )
+        for index in range(12):
+            records.append(
+                {
+                    "task_id": f"head-{index}",
+                    "annotation_index": 0,
+                    "detail_type": "corresponding",
+                    "label": 7,
+                    "data": np.full((3, 8, 8), 0.7 + index * 0.001, dtype=np.float32),
+                    "quality_score": 1.0,
+                }
+            )
+
+        train_idx = list(range(2)) + list(range(3, 13))
+        val_idx = [2, 13, 14]
+        split_support = {
+            "train": [2, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0],
+            "val": [1, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0],
+        }
+        class_support = build_class_audit(records, split_support=split_support)
+        output_path = tmp_path / "frozen_feature.pth"
+        config = merge_imbalance_config(
+            {
+                "feature_encoder": "scann_test_identity",
+                "variance_transfer": {
+                    "enabled": True,
+                    "synthetic_per_tail": 3,
+                    "tail_max_support": 2,
+                    "donor_min_support": 10,
+                    "covariance_mode": "full",
+                },
+                "prior_logit_correction": {"enabled": True, "tau": 1.0},
+            }
+        )
+        worker = TrainingWorker(
+            {
+                "feature_encoder": "scann_test_identity",
+                "epochs": 2,
+                "batch_size": 4,
+                "lr": 0.01,
+                "seed": 4,
+            }
+        )
+
+        worker._run_frozen_feature_training(
+            dataset_root=tmp_path,
+            all_samples=records,
+            train_idx=train_idx,
+            val_idx=val_idx,
+            split_support=split_support,
+            class_support=class_support,
+            imbalance_config=config,
+            device=torch.device("cpu"),
+            epochs=2,
+            batch_size=4,
+            lr=0.01,
+            save_path=str(output_path),
+            backbone_name="ViT_B_16",
+        )
+
+        ckpt = torch.load(output_path, map_location="cpu", weights_only=False)
+        assert ckpt["model_format"] == "frozen_feature_classifier"
+        assert ckpt["feature_encoder"] == "scann_test_identity"
+        assert ckpt["variance_transfer_summary"]["synthetic_counts"]["asteroid"] == 3
+        assert ckpt["class_log_prior"][1] == 0.0
 
     def test_training_uses_snapshot_annotation_document(self, tmp_path):
         snapshot_path = tmp_path / "snapshot.json"

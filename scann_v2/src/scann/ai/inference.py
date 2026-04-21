@@ -19,6 +19,7 @@ import torch.nn.functional as F
 from torchvision import transforms
 
 from scann.ai.device_utils import get_mixed_precision_context, resolve_device
+from scann.ai.feature_classifier import FrozenFeaturePatchClassifier
 from scann.core.annotation_models import DETAIL_TYPE_TO_LABEL, DetailType
 from scann.core.models import Candidate, Detection, MarkerType
 
@@ -107,6 +108,19 @@ class InferenceEngine:
                 normalized_class_names = [str(item).strip().lower() for item in raw_class_names if str(item).strip()]
                 if normalized_class_names:
                     self._class_names = normalized_class_names
+
+            if (
+                str(ckpt.get("model_format") or "").strip().lower() == "frozen_feature_classifier"
+                or str(ckpt.get("training_mode") or "").strip().lower() == "frozen_feature_classifier"
+            ):
+                self._model_format = "frozen_feature_classifier"
+                self._model_backbone = str(ckpt.get("backbone") or ckpt.get("feature_encoder") or "frozen_feature_classifier")
+                if ckpt.get("threshold") is not None:
+                    self.threshold = float(ckpt["threshold"])
+                self.model = FrozenFeaturePatchClassifier.from_checkpoint(ckpt, device=self.device)
+                self.model.eval()
+                _logger.info("浣跨敤 frozen feature checkpoint 鍔犺浇: encoder=%s", ckpt.get("feature_encoder"))
+                return
 
             # 确定实际的模型格式
             if "model_format" in ckpt:
@@ -309,6 +323,7 @@ class InferenceEngine:
 
         norm = transforms.Normalize(list(normalize_mean), list(normalize_std))
         resize = transforms.Resize((224, 224), antialias=True)
+        uses_internal_preprocessing = bool(getattr(self.model, "uses_internal_preprocessing", False))
 
         all_details: list[dict[str, object]] = []
         batch_size = self.config.batch_size
@@ -318,6 +333,9 @@ class InferenceEngine:
             tensors = []
             for p in batch_raw:
                 t = torch.from_numpy(p).float()
+                if uses_internal_preprocessing:
+                    tensors.append(t)
+                    continue
                 if self.is_v1:
                     t = t.unsqueeze(0)
                     t = F.interpolate(

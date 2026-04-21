@@ -244,6 +244,15 @@
               </label>
             </div>
             <label class="grid gap-1">
+              <span class="text-[11px] text-slate-500">Advanced JSON</span>
+              <textarea
+                v-model="jobForm.advancedConfigText"
+                data-testid="training-job-advanced-config"
+                rows="6"
+                class="rounded border border-slate-700 bg-slate-950 px-2 py-1 font-mono text-[11px] text-slate-100"
+              />
+            </label>
+            <label class="grid gap-1">
               <span class="text-[11px] text-slate-500">训练成功后重排预标注任务</span>
               <input
                 v-model="jobForm.prelabelTaskIdsText"
@@ -445,6 +454,28 @@ const jobForm = ref({
   epochs: 20,
   batchSize: 32,
   learningRate: 0.001,
+  advancedConfigText: JSON.stringify({
+    training_mode: 'frozen_feature_classifier',
+    feature_encoder: 'dinov2_vitb14_reg',
+    feature_cache_enabled: true,
+    prior_logit_correction: {
+      enabled: true,
+      tau: 1.0,
+    },
+    variance_transfer: {
+      enabled: true,
+      synthetic_per_tail: 500,
+      tail_max_support: 20,
+      donor_min_support: 100,
+      shrinkage: 0.2,
+    },
+    dbl: {
+      enabled: true,
+    },
+    expert_distillation: {
+      enabled: false,
+    },
+  }, null, 2),
   promoteOnSuccess: true,
   enqueuePrelabelsOnSuccess: true,
   prelabelTaskIdsText: '',
@@ -456,6 +487,18 @@ function parseTaskIds(raw) {
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean)
+}
+
+function parseAdvancedConfig(raw) {
+  const text = String(raw || '').trim()
+  if (!text) {
+    return {}
+  }
+  const parsed = JSON.parse(text)
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Advanced JSON must be an object')
+  }
+  return parsed
 }
 
 function formatTime(value) {
@@ -597,6 +640,7 @@ async function submitTrainingJob() {
   message.value = ''
   error.value = ''
   try {
+    const advancedConfig = parseAdvancedConfig(jobForm.value.advancedConfigText)
     const job = await createTrainingJob({
       snapshotId: jobForm.value.snapshotId,
       snapshotName: jobForm.value.snapshotName,
@@ -606,6 +650,11 @@ async function submitTrainingJob() {
       modelId: jobForm.value.modelId,
       modelBackbone: jobForm.value.modelBackbone,
       trainConfig: {
+        training_mode: 'frozen_feature_classifier',
+        feature_encoder: 'dinov2_vitb14_reg',
+        feature_cache_enabled: true,
+        prior_logit_correction: { enabled: true, tau: 1.0 },
+        ...advancedConfig,
         epochs: Number(jobForm.value.epochs) || 20,
         batch_size: Number(jobForm.value.batchSize) || 32,
         lr: Number(jobForm.value.learningRate) || 0.001,

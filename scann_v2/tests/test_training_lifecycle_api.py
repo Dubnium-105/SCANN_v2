@@ -175,8 +175,10 @@ def test_training_snapshot_job_complete_promote_and_enqueue_prelabels(tmp_path, 
     assert complete_payload["run"]["status"] == "completed"
     assert complete_payload["run"]["artifact_path"] == upload_payload["artifact_path"]
     assert complete_payload["model"]["model_id"] == "cls-v3-run-001"
-    assert complete_payload["model"]["is_promoted"] is True
-    assert complete_payload["prelabel_enqueue"]["enqueued_count"] == 1
+    assert complete_payload["model"]["is_promoted"] is False
+    assert complete_payload["auto_promoted"] is False
+    assert complete_payload["prelabel_enqueue"] is None
+    assert any("zero_shot_classes_present" in item for item in complete_payload["promotion_warnings"])
 
     runs = client.get("/api/training/runs", headers=admin_headers)
     assert runs.status_code == 200
@@ -193,10 +195,7 @@ def test_training_snapshot_job_complete_promote_and_enqueue_prelabels(tmp_path, 
         params={"task_type": "classification"},
         headers=admin_headers,
     )
-    assert promoted.status_code == 200
-    promoted_payload = promoted.json()
-    assert promoted_payload["model_id"] == "cls-v3-run-001"
-    assert promoted_payload["artifact_path"] == upload_payload["artifact_path"]
+    assert promoted.status_code == 404
 
     artifact = client.get(
         "/api/training/models/cls-v3-run-001/artifact",
@@ -204,6 +203,27 @@ def test_training_snapshot_job_complete_promote_and_enqueue_prelabels(tmp_path, 
     )
     assert artifact.status_code == 200
     assert artifact.content == b"mock-checkpoint"
+
+    manual_promote = client.post(
+        "/api/training/models/cls-v3-run-001/promote",
+        params={"enqueue_prelabels": "true", "force_prelabel": "true", "task_ids": "PGC 17069"},
+        headers=admin_headers,
+    )
+    assert manual_promote.status_code == 200
+    manual_payload = manual_promote.json()
+    assert manual_payload["model"]["is_promoted"] is True
+    assert manual_payload["prelabel_enqueue"]["enqueued_count"] == 1
+    assert any("zero_shot_classes_present" in item for item in manual_payload["promotion_warnings"])
+
+    promoted = client.get(
+        "/api/training/models/promoted",
+        params={"task_type": "classification"},
+        headers=admin_headers,
+    )
+    assert promoted.status_code == 200
+    promoted_payload = promoted.json()
+    assert promoted_payload["model_id"] == "cls-v3-run-001"
+    assert promoted_payload["artifact_path"] == upload_payload["artifact_path"]
 
     tasks = client.get("/api/tasks", headers=admin_headers)
     assert tasks.status_code == 200

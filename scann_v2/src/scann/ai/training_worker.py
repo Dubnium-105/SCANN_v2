@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import random
+import hashlib
 from pathlib import Path
 from typing import Any, Optional
 
@@ -38,14 +39,25 @@ from scann.ai.class_balance import (
     DETAIL_TYPE_CLASS_ORDER,
     DETAIL_TYPE_TO_CLASS_INDEX,
     build_class_audit,
+    build_class_log_prior,
     compute_class_balanced_weights,
     compute_multiclass_metrics,
+    compute_sample_quality,
+    generate_variance_transfer_features,
     merge_imbalance_config,
     normalize_detail_type,
     sampler_weights_from_class_weights,
     stratified_group_train_val_split,
 )
 from scann.ai.device_utils import resolve_device
+from scann.ai.feature_classifier import (
+    FeatureHeadClassifier,
+    apply_prior_logit_correction,
+    feature_encoder_spec,
+    forward_feature_encoder,
+    load_feature_encoder,
+    preprocess_feature_batch,
+)
 from scann.ai.model import ModelFormat, SCANNClassifier
 from scann.ai.trainer import TrainConfig
 from scann.core.fits_annotation_storage import load_v2_annotation_document
@@ -355,14 +367,27 @@ class TrainingWorker(QThread):
                 class_index = DETAIL_TYPE_TO_CLASS_INDEX.get(detail_type)
                 if class_index is None:
                     continue
+                edge_margin = min(
+                    float(center_x),
+                    float(center_y),
+                    max(0.0, float(new_u8_view.shape[1]) - float(center_x)),
+                    max(0.0, float(new_u8_view.shape[0]) - float(center_y)),
+                )
+                record = {
+                    "data": triplet,
+                    "label": int(class_index),
+                    "detail_type": detail_type,
+                    "task_id": image_id,
+                    "annotation_index": int(ann_index),
+                    "bbox_width": float(ann.get("width", 0) or 0),
+                    "bbox_height": float(ann.get("height", 0) or 0),
+                    "confidence": float(ann.get("confidence", 1.0) or 1.0),
+                    "patch_size": int(patch_size),
+                    "edge_margin": float(edge_margin),
+                }
+                record["quality_score"] = compute_sample_quality(record)
                 all_samples.append(
-                    {
-                        "data": triplet,
-                        "label": int(class_index),
-                        "detail_type": detail_type,
-                        "task_id": image_id,
-                        "annotation_index": int(ann_index),
-                    }
+                    record
                 )
 
         if not all_samples:
@@ -456,6 +481,460 @@ class TrainingWorker(QThread):
             "patch_size": int(patch_size),
         }
         torch.save(checkpoint, save_path)
+
+    def _resolve_training_mode(self, imbalance_config: dict[str, Any]) -> str:
+        raw = self._params.get("training_mode", imbalance_config.get("training_mode", "end_to_end"))
+        normalized = str(raw or "").strip().lower()
+        if normalized in {"frozen_feature_classifier", "frozen_features", "feature_head"}:
+            return "frozen_feature_classifier"
+        return "end_to_end"
+
+    def _snapshot_cache_id(self) -> str:
+        for key in ("snapshot_id", "annotations_document_path", "snapshot_document_relpath"):
+            raw = str(self._params.get(key, "") or "").strip()
+            if raw:
+                stem = Path(raw).stem
+                if stem:
+                    return stem
+        digest = hashlib.sha1(json.dumps(self._params, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+        return f"live-{digest[:12]}"
+
+    def _feature_cache_path(self, dataset_root: Path, feature_encoder: str) -> Path:
+        safe_encoder = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "-" for ch in feature_encoder)
+        return dataset_root / ".scann_control" / "feature_cache" / self._snapshot_cache_id() / f"{safe_encoder}.npz"
+
+    @staticmethod
+    def _feature_record_key(record: dict[str, Any]) -> str:
+        return "|".join(
+            [
+                str(record.get("task_id", "")),
+                str(record.get("annotation_index", "")),
+                str(record.get("label", "")),
+                str(record.get("detail_type", "")),
+            ]
+        )
+
+    def _load_feature_cache(
+        self,
+        cache_path: Path,
+        records: list[dict[str, Any]],
+        *,
+        feature_encoder: str,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+        if not cache_path.is_file():
+            return None
+        try:
+            payload = np.load(cache_path, allow_pickle=False)
+            if str(payload["feature_encoder"].item()) != feature_encoder:
+                return None
+            cached_keys = [str(item) for item in payload["keys"].tolist()]
+            expected_keys = [self._feature_record_key(record) for record in records]
+            if cached_keys != expected_keys:
+                return None
+            features = np.asarray(payload["features"], dtype=np.float32)
+            labels = np.asarray(payload["labels"], dtype=np.int64)
+            qualities = np.asarray(payload["qualities"], dtype=np.float32)
+            if features.shape[0] != len(records) or labels.shape[0] != len(records) or qualities.shape[0] != len(records):
+                return None
+            logger.info("Feature cache hit: %s", cache_path)
+            return features, labels, qualities
+        except Exception:
+            logger.warning("Ignoring invalid feature cache: %s", cache_path, exc_info=True)
+            return None
+
+    def _save_feature_cache(
+        self,
+        cache_path: Path,
+        records: list[dict[str, Any]],
+        *,
+        feature_encoder: str,
+        features: np.ndarray,
+        labels: np.ndarray,
+        qualities: np.ndarray,
+    ) -> None:
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            np.savez_compressed(
+                cache_path,
+                feature_encoder=np.asarray(feature_encoder),
+                keys=np.asarray([self._feature_record_key(record) for record in records]),
+                features=np.asarray(features, dtype=np.float32),
+                labels=np.asarray(labels, dtype=np.int64),
+                qualities=np.asarray(qualities, dtype=np.float32),
+            )
+            logger.info("Feature cache saved: %s", cache_path)
+        except Exception:
+            logger.warning("Failed to save feature cache: %s", cache_path, exc_info=True)
+
+    def _extract_features_for_records(
+        self,
+        records: list[dict[str, Any]],
+        *,
+        feature_encoder: str,
+        batch_size: int,
+        device: torch.device,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        encoder, spec = load_feature_encoder(feature_encoder, device=device)
+        features: list[np.ndarray] = []
+        labels: list[int] = []
+        qualities: list[float] = []
+
+        with torch.no_grad():
+            for start in range(0, len(records), max(1, int(batch_size))):
+                batch_records = records[start : start + max(1, int(batch_size))]
+                batch = np.stack([np.asarray(record["data"], dtype=np.float32) for record in batch_records], axis=0)
+                tensor = torch.from_numpy(batch).to(device)
+                prepared = preprocess_feature_batch(tensor, input_size=spec.input_size)
+                encoded = forward_feature_encoder(encoder, prepared, family=spec.family)
+                features.append(encoded.detach().cpu().numpy().astype(np.float32))
+                labels.extend(int(record["label"]) for record in batch_records)
+                qualities.extend(float(record.get("quality_score", compute_sample_quality(record))) for record in batch_records)
+
+        return (
+            np.concatenate(features, axis=0).astype(np.float32) if features else np.empty((0, spec.feature_dim), dtype=np.float32),
+            np.asarray(labels, dtype=np.int64),
+            np.asarray(qualities, dtype=np.float32),
+        )
+
+    def _extract_or_load_features(
+        self,
+        dataset_root: Path,
+        records: list[dict[str, Any]],
+        *,
+        feature_encoder: str,
+        batch_size: int,
+        device: torch.device,
+        cache_enabled: bool,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, Path | None, bool]:
+        cache_path = self._feature_cache_path(dataset_root, feature_encoder) if cache_enabled else None
+        if cache_path is not None:
+            cached = self._load_feature_cache(cache_path, records, feature_encoder=feature_encoder)
+            if cached is not None:
+                features, labels, qualities = cached
+                return features, labels, qualities, cache_path, True
+
+        features, labels, qualities = self._extract_features_for_records(
+            records,
+            feature_encoder=feature_encoder,
+            batch_size=batch_size,
+            device=device,
+        )
+        if cache_path is not None:
+            self._save_feature_cache(
+                cache_path,
+                records,
+                feature_encoder=feature_encoder,
+                features=features,
+                labels=labels,
+                qualities=qualities,
+            )
+        return features, labels, qualities, cache_path, False
+
+    @staticmethod
+    def _feature_dbl_loss(
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        qualities: torch.Tensor,
+        *,
+        class_weights: list[float],
+        dbl_config: dict[str, Any],
+    ) -> torch.Tensor:
+        logp = torch.log_softmax(logits, dim=1)
+        probs = torch.softmax(logits, dim=1)
+        target_index = targets.view(-1, 1)
+        logp_t = logp.gather(1, target_index).squeeze(1)
+        p_t = probs.gather(1, target_index).squeeze(1)
+
+        gamma = float(dbl_config.get("focal_gamma", 2.0) or 0.0)
+        base_loss = -logp_t * ((1.0 - p_t).clamp_min(0.0) ** gamma)
+
+        class_weight_tensor = torch.as_tensor(class_weights, dtype=logits.dtype, device=logits.device)
+        safe_targets = targets.view(-1).clamp(0, class_weight_tensor.numel() - 1)
+        class_weight = class_weight_tensor.gather(0, safe_targets)
+
+        if bool(dbl_config.get("enabled", True)):
+            q_min = float(dbl_config.get("quality_min_weight", 0.35) or 0.0)
+            q_max = float(dbl_config.get("quality_max_weight", 1.0) or 1.0)
+            quality = qualities.to(dtype=logits.dtype, device=logits.device).clamp(0.0, 1.0)
+            quality_weight = q_min + (q_max - q_min) * quality
+        else:
+            quality_weight = torch.ones_like(base_loss)
+
+        weights = class_weight * quality_weight
+        return (base_loss * weights).sum() / weights.sum().clamp_min(1e-12)
+
+    @staticmethod
+    def _evaluate_feature_head(
+        head: torch.nn.Module,
+        features: np.ndarray,
+        labels: np.ndarray,
+        *,
+        device: torch.device,
+        batch_size: int,
+        class_log_prior: list[float],
+        prior_config: dict[str, Any],
+        class_count: int,
+        tail_max_support: int,
+    ) -> dict[str, Any]:
+        head.eval()
+        all_probs: list[np.ndarray] = []
+        all_preds: list[np.ndarray] = []
+        with torch.no_grad():
+            for start in range(0, len(labels), max(1, int(batch_size))):
+                batch = torch.from_numpy(features[start : start + max(1, int(batch_size))]).float().to(device)
+                logits = head(batch)
+                if bool(prior_config.get("enabled", True)):
+                    logits = apply_prior_logit_correction(
+                        logits,
+                        class_log_prior,
+                        tau=float(prior_config.get("tau", 1.0) or 0.0),
+                    )
+                probs = torch.softmax(logits, dim=1)
+                all_probs.append(probs.detach().cpu().numpy())
+                all_preds.append(torch.argmax(probs, dim=1).detach().cpu().numpy())
+        probs_np = np.concatenate(all_probs, axis=0) if all_probs else np.empty((0, class_count), dtype=np.float32)
+        preds_np = np.concatenate(all_preds, axis=0) if all_preds else np.empty((0,), dtype=np.int64)
+        return compute_multiclass_metrics(
+            labels,
+            preds_np,
+            probs=probs_np,
+            class_count=class_count,
+            tail_max_support=tail_max_support,
+        )
+
+    def _run_frozen_feature_training(
+        self,
+        *,
+        dataset_root: Path,
+        all_samples: list[dict[str, Any]],
+        train_idx: list[int],
+        val_idx: list[int],
+        split_support: dict[str, list[int]],
+        class_support: dict[str, Any],
+        imbalance_config: dict[str, Any],
+        device: torch.device,
+        epochs: int,
+        batch_size: int,
+        lr: float,
+        save_path: str,
+        backbone_name: str,
+    ) -> None:
+        from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
+        import torch.optim as optim
+
+        class_count = len(DETAIL_TYPE_CLASS_ORDER)
+        feature_encoder_raw = str(self._params.get("feature_encoder") or imbalance_config.get("feature_encoder") or "auto")
+        spec = feature_encoder_spec(feature_encoder_raw, device=device)
+        cache_enabled = bool(self._params.get("feature_cache_enabled", imbalance_config.get("feature_cache_enabled", True)))
+
+        features, labels, qualities, cache_path, cache_hit = self._extract_or_load_features(
+            dataset_root,
+            all_samples,
+            feature_encoder=spec.name,
+            batch_size=batch_size,
+            device=device,
+            cache_enabled=cache_enabled,
+        )
+        if features.shape[0] != len(all_samples):
+            raise ValueError("feature extraction returned an unexpected number of rows")
+
+        train_features = features[train_idx]
+        train_labels = labels[train_idx]
+        train_qualities = qualities[train_idx]
+        val_features = features[val_idx]
+        val_labels = labels[val_idx]
+
+        weight_class = compute_class_balanced_weights(
+            train_labels.tolist(),
+            beta=float(imbalance_config["class_weight_beta"]),
+            clip=imbalance_config["class_weight_clip"],
+            class_count=class_count,
+        )
+        prior_config = imbalance_config.get("prior_logit_correction", {})
+        class_log_prior = build_class_log_prior(
+            train_labels.tolist(),
+            class_count=class_count,
+            smoothing=float(prior_config.get("smoothing", 1.0) or 0.0),
+        )
+
+        vt_features, vt_labels, vt_summary = generate_variance_transfer_features(
+            train_features,
+            train_labels,
+            class_count=class_count,
+            config=imbalance_config.get("variance_transfer", {}),
+            seed=int(self._params.get("seed", 42)),
+        )
+        if vt_features.size:
+            train_features_aug = np.concatenate([train_features, vt_features], axis=0).astype(np.float32)
+            train_labels_aug = np.concatenate([train_labels, vt_labels], axis=0).astype(np.int64)
+            train_qualities_aug = np.concatenate(
+                [train_qualities, np.ones((vt_labels.shape[0],), dtype=np.float32)],
+                axis=0,
+            ).astype(np.float32)
+        else:
+            train_features_aug = train_features.astype(np.float32)
+            train_labels_aug = train_labels.astype(np.int64)
+            train_qualities_aug = train_qualities.astype(np.float32)
+
+        sample_weight_values = sampler_weights_from_class_weights(
+            train_labels_aug.tolist(),
+            weight_class,
+            power=float(imbalance_config["sampler_power"]),
+            max_ratio=float(imbalance_config["sampler_max_ratio"]),
+        )
+        sampler = WeightedRandomSampler(
+            torch.tensor(sample_weight_values, dtype=torch.double),
+            num_samples=len(train_labels_aug),
+            replacement=True,
+        )
+        train_dataset = TensorDataset(
+            torch.from_numpy(train_features_aug).float(),
+            torch.from_numpy(train_labels_aug).long(),
+            torch.from_numpy(train_qualities_aug).float(),
+        )
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler, num_workers=0)
+
+        head_config = self._params.get("feature_head") if isinstance(self._params.get("feature_head"), dict) else {}
+        head = FeatureHeadClassifier(
+            feature_dim=int(train_features_aug.shape[1]),
+            num_classes=class_count,
+            hidden_dim=int(head_config.get("hidden_dim") or 0),
+            dropout=float(head_config.get("dropout") or 0.0),
+        ).to(device)
+        optimizer = optim.AdamW(
+            head.parameters(),
+            lr=float(self._params.get("feature_head_lr", lr) or lr),
+            weight_decay=float(self._params.get("weight_decay", 1e-3) or 1e-3),
+        )
+
+        best_metric = -1.0
+        best_metrics: dict[str, Any] = {}
+        best_epoch = -1
+        tail_max_support = int(imbalance_config.get("tail_recall_max_support", 20) or 20)
+
+        for epoch in range(int(epochs)):
+            if self._should_stop:
+                break
+            head.train()
+            loss_sum = 0.0
+            seen = 0
+            for xb, yb, qb in train_loader:
+                if self._should_stop:
+                    break
+                xb = xb.to(device)
+                yb = yb.to(device)
+                qb = qb.to(device)
+                optimizer.zero_grad()
+                logits = head(xb)
+                loss = self._feature_dbl_loss(
+                    logits,
+                    yb,
+                    qb,
+                    class_weights=weight_class,
+                    dbl_config=imbalance_config.get("dbl", {}),
+                )
+                loss.backward()
+                optimizer.step()
+                loss_sum += float(loss.item()) * xb.size(0)
+                seen += xb.size(0)
+
+            train_loss = loss_sum / max(seen, 1)
+            metrics = self._evaluate_feature_head(
+                head,
+                val_features.astype(np.float32),
+                val_labels.astype(np.int64),
+                device=device,
+                batch_size=batch_size,
+                class_log_prior=class_log_prior,
+                prior_config=prior_config,
+                class_count=class_count,
+                tail_max_support=tail_max_support,
+            )
+            metric_name = str(imbalance_config.get("selection_metric") or "macro_f1_supported")
+            metric_value = float(metrics.get(metric_name, metrics.get("macro_f1_supported", 0.0)) or 0.0)
+            self.progress.emit(epoch + 1, int(epochs), train_loss, metric_value)
+
+            if metric_value > best_metric + 0.001:
+                best_metric = metric_value
+                best_epoch = epoch
+                best_metrics = dict(metrics)
+                ckpt = {
+                    "state": {"head": head.state_dict()},
+                    "head_state": head.state_dict(),
+                    "model_format": "frozen_feature_classifier",
+                    "task_type": "classification",
+                    "training_mode": "frozen_feature_classifier",
+                    "backbone": backbone_name,
+                    "feature_encoder": spec.name,
+                    "feature_dim": int(train_features_aug.shape[1]),
+                    "feature_head_config": {
+                        "hidden_dim": int(head_config.get("hidden_dim") or 0),
+                        "dropout": float(head_config.get("dropout") or 0.0),
+                    },
+                    "class_names": list(DETAIL_TYPE_CLASS_ORDER),
+                    "num_classes": class_count,
+                    "class_counts": {
+                        DETAIL_TYPE_CLASS_ORDER[index]: int((train_labels == index).sum())
+                        for index in range(class_count)
+                    },
+                    "class_log_prior": class_log_prior,
+                    "prior_correction_tau": float(prior_config.get("tau", 1.0) if prior_config.get("enabled", True) else 0.0),
+                    "prior_logit_correction": prior_config,
+                    "variance_transfer_config": imbalance_config.get("variance_transfer", {}),
+                    "variance_transfer_summary": vt_summary,
+                    "dbl_config": imbalance_config.get("dbl", {}),
+                    "classification_mode": "detail_type_11",
+                    "class_support": class_support,
+                    "class_weights": weight_class,
+                    "selection_metric": metric_name,
+                    "best_epoch": int(best_epoch),
+                    "best_metrics": best_metrics,
+                    "feature_cache_path": str(cache_path) if cache_path is not None else "",
+                    "feature_cache_hit": bool(cache_hit),
+                }
+                torch.save(ckpt, save_path)
+                logger.info(
+                    "Saved frozen-feature classifier (epoch=%d, %s=%.4f, encoder=%s)",
+                    epoch + 1,
+                    metric_name,
+                    metric_value,
+                    spec.name,
+                )
+
+        if best_epoch < 0:
+            raise ValueError("frozen feature training did not produce a valid checkpoint")
+
+        final_metrics = {
+            "training_mode": "frozen_feature_classifier",
+            "feature_encoder": spec.name,
+            "feature_dim": int(train_features_aug.shape[1]),
+            "best_epoch": best_epoch,
+            "best_macro_f1": float(best_metrics.get("macro_f1_supported", 0.0)),
+            "macro_f1_supported": float(best_metrics.get("macro_f1_supported", 0.0)),
+            "macro_ap": float(best_metrics.get("macro_ap", 0.0)),
+            "tail_recall@1": float(best_metrics.get("tail_recall@1", 0.0)),
+            "num_classes": class_count,
+            "class_names": list(DETAIL_TYPE_CLASS_ORDER),
+            "class_support": class_support,
+            "class_weights": weight_class,
+            "class_log_prior": class_log_prior,
+            "variance_transfer_summary": vt_summary,
+            "feature_cache_path": str(cache_path) if cache_path is not None else "",
+            "feature_cache_hit": bool(cache_hit),
+            "split_support": split_support,
+            "promotion_warnings": class_support.get("promotion_warnings", []),
+            "untrained_classes": class_support.get("untrained_classes", []),
+            "unverifiable_classes": class_support.get("unverifiable_classes", []),
+            "unreliable_classes": list(
+                dict.fromkeys(
+                    list(class_support.get("missing_classes", []))
+                    + list(class_support.get("low_sample_classes", []))
+                    + list(class_support.get("unverifiable_classes", []))
+                )
+            ),
+        }
+        final_metrics.update(best_metrics)
+        self.finished.emit(save_path, final_metrics)
 
     def run(self) -> None:
         """执行训练流程"""
@@ -651,6 +1130,7 @@ class TrainingWorker(QThread):
                 return
 
             # === 1. 数据集加载 ===
+            dataset_root = Path(str(self._params.get("dataset_dir", "")).strip())
             all_samples, sample_kind = self._build_sample_pool()
             if len(all_samples) < 2:
                 raise ValueError("训练至少需要 2 个样本")
@@ -735,6 +1215,24 @@ class TrainingWorker(QThread):
                     + unverifiable_classes
                 )
             )
+
+            if self._resolve_training_mode(imbalance_config) == "frozen_feature_classifier":
+                self._run_frozen_feature_training(
+                    dataset_root=dataset_root,
+                    all_samples=all_samples,
+                    train_idx=train_idx,
+                    val_idx=val_idx,
+                    split_support=split_support,
+                    class_support=class_support,
+                    imbalance_config=imbalance_config,
+                    device=device,
+                    epochs=epochs,
+                    batch_size=batch_size,
+                    lr=lr,
+                    save_path=save_path,
+                    backbone_name=backbone_name,
+                )
+                return
 
             sampler = WeightedRandomSampler(
                 samples_weight, num_samples=len(train_set), replacement=True
@@ -827,12 +1325,14 @@ class TrainingWorker(QThread):
                 if all_probs:
                     labels = np.concatenate(all_labels)
                     preds = np.concatenate(all_preds)
+                    probs_np = np.concatenate(all_probs)
                 else:
                     labels = np.asarray([], dtype=np.int64)
                     preds = np.asarray([], dtype=np.int64)
+                    probs_np = np.empty((0, class_count), dtype=np.float32)
 
                 # 多分类验证指标
-                metrics = compute_multiclass_metrics(labels, preds, class_count=class_count)
+                metrics = compute_multiclass_metrics(labels, preds, probs=probs_np, class_count=class_count)
                 macro_f1 = float(metrics["macro_f1_supported"])
                 accuracy = float(metrics["accuracy"])
 
