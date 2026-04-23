@@ -347,14 +347,32 @@
         <aside class="w-full max-w-xl rounded-lg border border-slate-700 bg-slate-950 p-3 space-y-3 max-h-[80vh] flex flex-col">
           <div class="flex items-center justify-between gap-2">
             <p class="text-sm text-slate-200">总任务目录</p>
-            <button
-              data-testid="task-catalog-close"
-              class="text-xs px-2 py-1 rounded border border-slate-700 text-slate-300"
-              @click="closeTaskCatalog"
-            >
-              关闭
-            </button>
+            <div class="inline-flex items-center gap-2">
+              <button
+                data-testid="task-catalog-preprocess"
+                class="text-xs px-2 py-1 rounded border border-sky-700 text-sky-200 disabled:opacity-50"
+                :disabled="isCatalogRefreshingFromFolder"
+                @click="refreshTaskCatalogFromDataset"
+              >
+                {{ isCatalogRefreshingFromFolder ? '检测中...' : '检测并更新目录' }}
+              </button>
+              <button
+                data-testid="task-catalog-close"
+                class="text-xs px-2 py-1 rounded border border-slate-700 text-slate-300"
+                @click="closeTaskCatalog"
+              >
+                关闭
+              </button>
+            </div>
           </div>
+          <p
+            v-if="taskCatalogActionMessage"
+            data-testid="task-catalog-action-message"
+            class="text-[11px]"
+            :class="taskCatalogActionTone === 'error' ? 'text-rose-300' : 'text-emerald-300'"
+          >
+            {{ taskCatalogActionMessage }}
+          </p>
           <input
             v-model="taskCatalogQuery"
             data-testid="task-catalog-search"
@@ -986,6 +1004,7 @@ import {
 import { fetchAnnotationHistory, fetchAnnotationRevision } from '../services/annotationHistoryApi'
 import { submitAnnotations } from '../services/annotationApi'
 import { authState } from '../services/authStore'
+import { preprocessDataset } from '../services/datasetApi'
 import { enqueueTaskPrelabel, fetchTaskPrelabel } from '../services/prelabelApi'
 import {
   claimNextTask,
@@ -1036,6 +1055,9 @@ const selectedAnnotationId = ref('')
 const selectedLabel = ref('Unlabeled')
 const taskCatalogVisible = ref(false)
 const taskCatalogQuery = ref('')
+const isCatalogRefreshingFromFolder = ref(false)
+const taskCatalogActionMessage = ref('')
+const taskCatalogActionTone = ref('info')
 const undoDeleteVisible = ref(false)
 const undoDeleteMessage = ref('')
 const lastRemovedAnnotation = ref(null)
@@ -2090,6 +2112,8 @@ async function goToNextTask() {
 
 async function openTaskCatalog() {
   taskCatalogQuery.value = ''
+  taskCatalogActionMessage.value = ''
+  taskCatalogActionTone.value = 'info'
   taskCatalogVisible.value = true
   try {
     await refreshTaskList()
@@ -2100,6 +2124,29 @@ async function openTaskCatalog() {
 
 function closeTaskCatalog() {
   taskCatalogVisible.value = false
+}
+
+async function refreshTaskCatalogFromDataset() {
+  if (isCatalogRefreshingFromFolder.value) {
+    return
+  }
+
+  isCatalogRefreshingFromFolder.value = true
+  taskCatalogActionMessage.value = ''
+  taskCatalogActionTone.value = 'info'
+  try {
+    const result = await preprocessDataset()
+    await refreshTaskList()
+    const taskCount = Number(result?.task_count)
+    taskCatalogActionMessage.value = Number.isFinite(taskCount)
+      ? `目录检测完成，当前共 ${taskCount} 个任务`
+      : '目录检测完成，任务目录已更新'
+  } catch (err) {
+    taskCatalogActionTone.value = 'error'
+    taskCatalogActionMessage.value = err instanceof Error ? err.message : '目录检测失败'
+  } finally {
+    isCatalogRefreshingFromFolder.value = false
+  }
 }
 
 async function jumpToTaskIndex(index) {
