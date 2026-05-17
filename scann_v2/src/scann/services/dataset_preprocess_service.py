@@ -119,6 +119,45 @@ class DatasetPreprocessService:
     def _task_manifest_path(root: Path) -> Path:
         return Path(root) / _TASK_MANIFEST_FILE
 
+    @staticmethod
+    def _parse_date_typed_raw_dir(folder_name: str) -> tuple[str, str] | None:
+        suffix_to_role = (
+            ("_marked", "new_marked"),
+            ("_mark", "new_marked"),
+            ("_new", "new"),
+        )
+        for suffix, role in suffix_to_role:
+            if not folder_name.endswith(suffix):
+                continue
+            date_token = folder_name[:-len(suffix)]
+            if len(date_token) == 8 and date_token.isdigit():
+                return role, date_token
+        return None
+
+    @classmethod
+    def _raw_asset_sources(cls, dataset_root: Path) -> list[tuple[str, Path, str | None]]:
+        raw_root = dataset_root / "dataset_raw"
+        sources: list[tuple[str, Path, str | None]] = []
+
+        for role in ("new", "old", "new_marked"):
+            raw_dir = raw_root / role
+            if raw_dir.is_dir():
+                sources.append((role, raw_dir, None))
+
+        if not raw_root.is_dir():
+            return sources
+
+        for raw_dir in sorted(raw_root.iterdir()):
+            if not raw_dir.is_dir():
+                continue
+            parsed = cls._parse_date_typed_raw_dir(raw_dir.name)
+            if parsed is None:
+                continue
+            role, date_token = parsed
+            sources.append((role, raw_dir, date_token))
+
+        return sources
+
     @classmethod
     def load_task_manifest(cls, root: Path) -> list[PreparedTaskPaths]:
         storage = DatasetStorage(Path(root))
@@ -223,10 +262,7 @@ class DatasetPreprocessService:
     def _scan_raw_assets(self, root: Path) -> list[RawAssetRecord]:
         dataset_root = Path(root)
         assets: list[RawAssetRecord] = []
-        for role in ("new", "old", "new_marked"):
-            raw_dir = dataset_root / "dataset_raw" / role
-            if not raw_dir.is_dir():
-                continue
+        for role, raw_dir, date_dir_token in self._raw_asset_sources(dataset_root):
             for file_path in sorted(raw_dir.iterdir()):
                 if not file_path.is_file() or file_path.suffix.lower() not in _FITS_EXTS:
                     continue
@@ -237,7 +273,17 @@ class DatasetPreprocessService:
                 field_name = DatasetStorage.normalize_field_name(file_path.stem)
                 field_key = DatasetStorage.normalize_field_key(file_path.stem)
                 capture_key = DatasetStorage.normalize_capture_key(file_path.stem)
-                date_obs = self._extract_date_obs_token(file_path)
+                metadata = {"raw": True}
+                if date_dir_token is not None and role in {"new", "new_marked"}:
+                    capture_key = f"{date_dir_token}:{capture_key}"
+                    metadata.update(
+                        {
+                            "date_type_input": True,
+                            "date_folder": date_dir_token,
+                            "date_type_folder": raw_dir.name,
+                        }
+                    )
+                date_obs = self._extract_date_obs_token(file_path) or date_dir_token
                 assets.append(
                     RawAssetRecord(
                         asset_id=uuid.uuid5(uuid.NAMESPACE_URL, file_path.relative_to(dataset_root).as_posix()).hex,
@@ -252,7 +298,7 @@ class DatasetPreprocessService:
                         date_obs=date_obs,
                         size_bytes=int(stat.st_size),
                         modified_time=float(stat.st_mtime),
-                        metadata={"raw": True},
+                        metadata=metadata,
                     )
                 )
         return assets
@@ -344,6 +390,26 @@ class DatasetPreprocessService:
             return compact[:15]
         return compact or None
 
+    @staticmethod
+    def _is_date_typed_raw_asset(asset: RawAssetRecord) -> bool:
+        metadata = asset.metadata or {}
+        return bool(metadata.get("date_type_input"))
+
+    @staticmethod
+    def _pop_marked_asset(
+        queue: Deque[RawAssetRecord] | None,
+        used_asset_ids: set[str],
+    ) -> RawAssetRecord | None:
+        if queue is None:
+            return None
+        while queue:
+            candidate = queue.popleft()
+            if candidate.asset_id in used_asset_ids:
+                continue
+            used_asset_ids.add(candidate.asset_id)
+            return candidate
+        return None
+
     def _plan_tasks(self, root: Path) -> list[_PlannedTask]:
         storage = self._dataset_storage(root)
         new_assets = storage.list_raw_assets("new")
@@ -358,10 +424,12 @@ class DatasetPreprocessService:
         marked_by_field: dict[str, Deque[RawAssetRecord]] = defaultdict(deque)
         for asset in marked_assets:
             marked_by_capture[asset.capture_key].append(asset)
-            marked_by_field[asset.field_key].append(asset)
+            if not self._is_date_typed_raw_asset(asset):
+                marked_by_field[asset.field_key].append(asset)
 
         planned: list[_PlannedTask] = []
         task_rows: list[TaskRecord] = []
+        used_marked_asset_ids: set[str] = set()
         for asset in new_assets:
             existing_task = storage.get_task_by_new_asset_id(asset.asset_id)
             task_id = (
@@ -374,14 +442,15 @@ class DatasetPreprocessService:
                 )
             )
             old_asset = old_by_field.get(asset.field_key)
-            marked_asset = None
-            capture_queue = marked_by_capture.get(asset.capture_key)
-            if capture_queue:
-                marked_asset = capture_queue.popleft()
-            else:
-                field_queue = marked_by_field.get(asset.field_key)
-                if field_queue:
-                    marked_asset = field_queue.popleft()
+            marked_asset = self._pop_marked_asset(
+                marked_by_capture.get(asset.capture_key),
+                used_marked_asset_ids,
+            )
+            if marked_asset is None and not self._is_date_typed_raw_asset(asset):
+                marked_asset = self._pop_marked_asset(
+                    marked_by_field.get(asset.field_key),
+                    used_marked_asset_ids,
+                )
             task_rows.append(
                 TaskRecord(
                     task_id=task_id,

@@ -10,7 +10,7 @@ from scann.core.models import AlignResult
 from scann.services.dataset_preprocess_service import DatasetPreprocessService
 
 
-def _write_fits(path: Path, data: np.ndarray, *, date_obs: str) -> None:
+def _write_fits(path: Path, data: np.ndarray, *, date_obs: str | None = None) -> None:
     try:
         from astropy.io import fits as astro_fits
     except ImportError:
@@ -18,7 +18,8 @@ def _write_fits(path: Path, data: np.ndarray, *, date_obs: str) -> None:
 
     path.parent.mkdir(parents=True, exist_ok=True)
     header = astro_fits.Header()
-    header["DATE-OBS"] = date_obs
+    if date_obs is not None:
+        header["DATE-OBS"] = date_obs
     astro_fits.writeto(str(path), data, header=header, overwrite=True)
 
 
@@ -92,6 +93,86 @@ def test_prepare_dataset_is_idempotent_for_dataset_raw_inputs(dataset_raw_root: 
     assert second.generated_marked_crops == 0
     assert second.reused_aligned_pairs == 2
     assert second.task_count == 2
+
+
+def test_prepare_dataset_supports_date_typed_new_and_marked_raw_dirs(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "dataset"
+    data = np.arange(32 * 32, dtype=np.float32).reshape(32, 32)
+    marked = data + 1000.0
+
+    _write_fits(
+        dataset_root / "dataset_raw" / "old" / "FW_NGC 1003.fit",
+        data.copy(),
+        date_obs="2026-02-01T20:00:00",
+    )
+    _write_fits(
+        dataset_root / "dataset_raw" / "20260216_new" / "FW_NGC 1003.fit",
+        data,
+        date_obs="2026-02-16T21:00:00",
+    )
+    _write_fits(
+        dataset_root / "dataset_raw" / "20260216_mark" / "FW_NGC 1003.fit",
+        marked,
+        date_obs="2026-02-16T21:00:00",
+    )
+
+    service = DatasetPreprocessService(align_fn=_fake_align)
+    report = service.prepare_dataset(dataset_root)
+    tasks = service.collect_preprocessed_tasks(dataset_root)
+    storage = DatasetStorage(dataset_root)
+
+    assert report.standardized_files == 3
+    assert report.generated_aligned_pairs == 1
+    assert report.generated_marked_crops == 1
+    assert [task.task_id for task in tasks] == ["20260216T210000__NGC 1003"]
+    assert tasks[0].new_path.parent == dataset_root / "new"
+    assert tasks[0].old_path is not None and tasks[0].old_path.parent == dataset_root / "old"
+    assert tasks[0].new_marked_path is not None
+    assert tasks[0].new_marked_path.parent == dataset_root / "new_marked"
+
+    new_assets = storage.list_raw_assets("new")
+    marked_assets = storage.list_raw_assets("new_marked")
+    assert [asset.relpath for asset in new_assets] == [
+        "dataset_raw/20260216_new/FW_NGC 1003.fit",
+    ]
+    assert [asset.relpath for asset in marked_assets] == [
+        "dataset_raw/20260216_mark/FW_NGC 1003.fit",
+    ]
+
+
+def test_prepare_dataset_scopes_date_typed_marked_inputs_by_date(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "dataset"
+    data = np.arange(24 * 24, dtype=np.float32).reshape(24, 24)
+
+    _write_fits(dataset_root / "dataset_raw" / "old" / "field_001.fits", data.copy())
+    _write_fits(dataset_root / "dataset_raw" / "20260216_new" / "field_001.fits", data)
+    _write_fits(dataset_root / "dataset_raw" / "20260217_new" / "field_001.fits", data + 10.0)
+    _write_fits(dataset_root / "dataset_raw" / "20260217_marked" / "field_001.fits", data + 500.0)
+
+    service = DatasetPreprocessService(align_fn=_fake_align)
+    report = service.prepare_dataset(dataset_root)
+    storage = DatasetStorage(dataset_root)
+    db_tasks = storage.list_tasks()
+    raw_assets = {
+        asset.asset_id: asset
+        for role in ("new", "old", "new_marked")
+        for asset in storage.list_raw_assets(role)
+    }
+
+    assert report.task_count == 2
+    assert report.generated_aligned_pairs == 2
+    assert report.generated_marked_crops == 1
+    assert [task.task_id for task in db_tasks] == [
+        "20260216__field_001",
+        "20260217__field_001",
+    ]
+
+    first, second = db_tasks
+    assert "dataset_raw/20260216_new/" in raw_assets[first.new_asset_id].relpath
+    assert first.new_marked_asset_id is None
+    assert "dataset_raw/20260217_new/" in raw_assets[second.new_asset_id].relpath
+    assert second.new_marked_asset_id is not None
+    assert "dataset_raw/20260217_marked/" in raw_assets[second.new_marked_asset_id].relpath
 
 
 def test_prepare_dataset_reuses_single_old_asset_for_multiple_new_tasks(tmp_path: Path) -> None:
