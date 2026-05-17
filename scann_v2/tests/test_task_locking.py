@@ -171,6 +171,29 @@ def test_tasks_endpoint_includes_lock_summary_for_claimed_tasks(tmp_path, monkey
     assert other_tasks[0]["lock_expires_at"]
 
 
+def test_tasks_endpoint_handles_large_task_lists(tmp_path, monkeypatch) -> None:
+    dataset_root = tmp_path / "dataset"
+    task_count = 1005
+
+    for index in range(task_count):
+        name = f"field_{index:04d}.fts"
+        _touch(dataset_root / "new" / name)
+        _touch(dataset_root / "old" / name)
+        _touch(dataset_root / "new_marked" / name)
+
+    monkeypatch.setenv("SCANN_NATIVE_DATASET_ROOT", str(dataset_root))
+    client = TestClient(app)
+    headers = _auth_headers(client)
+
+    response = client.get("/api/tasks", params={"client_id": "client-large"}, headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == task_count
+    assert payload[0]["task_id"] == "field_0000"
+    assert payload[-1]["task_id"] == "field_1004"
+
+
 def test_release_endpoint_releases_lock_for_next_client(tmp_path, monkeypatch) -> None:
     dataset_root = tmp_path / "dataset"
 

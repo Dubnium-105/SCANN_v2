@@ -14,6 +14,7 @@ from typing import Any, Iterable
 
 DEFAULT_DATASET_DB_FILE = "scann_dataset.db"
 _CAPABILITY_WILDCARDS = {"", "auto", "any", "*"}
+_SQLITE_QUERY_BATCH_SIZE = 500
 
 _EXPLORER_COPY_SUFFIX_RE = re.compile(r"^(?P<base>.*?)(?:\s+\((?P<index>\d+)\))$")
 
@@ -698,6 +699,17 @@ class DatasetStorage:
         connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}")
 
     @staticmethod
+    def _iter_query_batches(values: Iterable[str], *, batch_size: int = _SQLITE_QUERY_BATCH_SIZE) -> Iterable[list[str]]:
+        batch: list[str] = []
+        for value in values:
+            batch.append(value)
+            if len(batch) >= batch_size:
+                yield batch
+                batch = []
+        if batch:
+            yield batch
+
+    @staticmethod
     def strip_explorer_copy_suffix(stem: str) -> tuple[str, int]:
         normalized = stem.strip()
         match = _EXPLORER_COPY_SUFFIX_RE.match(normalized)
@@ -758,7 +770,6 @@ class DatasetStorage:
     def upsert_raw_assets(self, assets: Iterable[RawAssetRecord]) -> None:
         now = _utc_now_iso()
         asset_list = list(assets)
-        active_relpaths = {asset.relpath for asset in asset_list}
         with self._connect() as connection:
             self._ensure_schema(connection)
             connection.execute("UPDATE raw_assets SET status = 'missing', updated_at = ?", (now,))
@@ -822,12 +833,6 @@ class DatasetStorage:
                         created_at,
                         now,
                     ),
-                )
-            if active_relpaths:
-                placeholders = ",".join("?" for _ in active_relpaths)
-                connection.execute(
-                    f"UPDATE raw_assets SET status = 'missing', updated_at = ? WHERE relpath NOT IN ({placeholders})",
-                    (now, *sorted(active_relpaths)),
                 )
             connection.commit()
 
@@ -956,10 +961,24 @@ class DatasetStorage:
                     ),
                 )
             if active_new_asset_ids:
-                placeholders = ",".join("?" for _ in active_new_asset_ids)
+                connection.execute("DROP TABLE IF EXISTS temp_active_task_new_assets")
                 connection.execute(
-                    f"UPDATE tasks SET preprocess_status = 'missing', updated_at = ? WHERE new_asset_id NOT IN ({placeholders})",
-                    (now, *sorted(active_new_asset_ids)),
+                    "CREATE TEMP TABLE temp_active_task_new_assets (new_asset_id TEXT PRIMARY KEY)"
+                )
+                connection.executemany(
+                    "INSERT INTO temp_active_task_new_assets (new_asset_id) VALUES (?)",
+                    ((asset_id,) for asset_id in sorted(active_new_asset_ids)),
+                )
+                connection.execute(
+                    """
+                    UPDATE tasks
+                    SET preprocess_status = 'missing',
+                        updated_at = ?
+                    WHERE new_asset_id NOT IN (
+                        SELECT new_asset_id FROM temp_active_task_new_assets
+                    )
+                    """,
+                    (now,),
                 )
             connection.commit()
 
@@ -1736,16 +1755,20 @@ class DatasetStorage:
         normalized_ids = [task_id for task_id in dict.fromkeys(task_ids) if task_id]
         if not normalized_ids:
             return []
-        placeholders = ",".join("?" for _ in normalized_ids)
+        rows: list[sqlite3.Row] = []
         with self._connect() as connection:
             self._ensure_schema(connection)
-            rows = connection.execute(
-                f"""
-                SELECT * FROM tasks
-                WHERE task_id IN ({placeholders})
-                """,
-                tuple(normalized_ids),
-            ).fetchall()
+            for batch in self._iter_query_batches(normalized_ids):
+                placeholders = ",".join("?" for _ in batch)
+                rows.extend(
+                    connection.execute(
+                        f"""
+                        SELECT * FROM tasks
+                        WHERE task_id IN ({placeholders})
+                        """,
+                        tuple(batch),
+                    ).fetchall()
+                )
         tasks_by_id = {
             task.task_id: task
             for task in (self._row_to_task(row) for row in rows)
@@ -2718,38 +2741,45 @@ class DatasetStorage:
         normalized_ids = [task_id for task_id in dict.fromkeys(task_ids) if task_id]
         if not normalized_ids:
             return {}
-        placeholders = ",".join("?" for _ in normalized_ids)
+        prelabel_rows: list[sqlite3.Row] = []
+        job_rows: list[sqlite3.Row] = []
         with self._connect() as connection:
             self._ensure_schema(connection)
-            prelabel_rows = connection.execute(
-                f"""
-                SELECT p.*
-                FROM task_ai_prelabels p
-                INNER JOIN (
-                    SELECT task_id, MAX(rowid) AS latest_rowid
-                    FROM task_ai_prelabels
-                    WHERE status IN ('available', 'accepted', 'hidden')
-                      AND task_id IN ({placeholders})
-                    GROUP BY task_id
-                ) latest
-                    ON latest.latest_rowid = p.rowid
-                """,
-                tuple(normalized_ids),
-            ).fetchall()
-            job_rows = connection.execute(
-                f"""
-                SELECT j.*
-                FROM prelabel_jobs j
-                INNER JOIN (
-                    SELECT task_id, MAX(rowid) AS latest_rowid
-                    FROM prelabel_jobs
-                    WHERE task_id IN ({placeholders})
-                    GROUP BY task_id
-                ) latest
-                    ON latest.latest_rowid = j.rowid
-                """,
-                tuple(normalized_ids),
-            ).fetchall()
+            for batch in self._iter_query_batches(normalized_ids):
+                placeholders = ",".join("?" for _ in batch)
+                prelabel_rows.extend(
+                    connection.execute(
+                        f"""
+                        SELECT p.*
+                        FROM task_ai_prelabels p
+                        INNER JOIN (
+                            SELECT task_id, MAX(rowid) AS latest_rowid
+                            FROM task_ai_prelabels
+                            WHERE status IN ('available', 'accepted', 'hidden')
+                              AND task_id IN ({placeholders})
+                            GROUP BY task_id
+                        ) latest
+                            ON latest.latest_rowid = p.rowid
+                        """,
+                        tuple(batch),
+                    ).fetchall()
+                )
+                job_rows.extend(
+                    connection.execute(
+                        f"""
+                        SELECT j.*
+                        FROM prelabel_jobs j
+                        INNER JOIN (
+                            SELECT task_id, MAX(rowid) AS latest_rowid
+                            FROM prelabel_jobs
+                            WHERE task_id IN ({placeholders})
+                            GROUP BY task_id
+                        ) latest
+                            ON latest.latest_rowid = j.rowid
+                        """,
+                        tuple(batch),
+                    ).fetchall()
+                )
 
         summaries: dict[str, TaskPrelabelSummaryRecord] = {}
         for row in job_rows:

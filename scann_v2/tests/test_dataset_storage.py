@@ -199,3 +199,94 @@ def test_list_prepared_task_paths_skips_missing_files(tmp_path) -> None:
     aligned_new.unlink()
     prepared = storage.list_prepared_task_paths()
     assert prepared == []
+
+
+def test_list_tasks_by_ids_handles_large_id_batches(tmp_path) -> None:
+    storage = DatasetStorage(tmp_path)
+    storage.ensure_schema()
+
+    count = 1005
+    storage.upsert_raw_assets(
+        [
+            RawAssetRecord(
+                asset_id=f"new-{index}",
+                asset_role="new",
+                field_key=f"field_{index:04d}",
+                field_name=f"field_{index:04d}",
+                capture_key=f"field_{index:04d}",
+                relpath=f"dataset_raw/new/field_{index:04d}.fits",
+                file_name=f"field_{index:04d}.fits",
+                file_stem=f"field_{index:04d}",
+                suffix=".fits",
+            )
+            for index in range(count)
+        ]
+    )
+    storage.sync_tasks(
+        [
+            TaskRecord(
+                task_id=f"task-{index:04d}",
+                field_key=f"field_{index:04d}",
+                field_name=f"field_{index:04d}",
+                capture_key=f"field_{index:04d}",
+                new_asset_id=f"new-{index}",
+                preprocess_status="ready",
+            )
+            for index in range(count)
+        ]
+    )
+
+    task_ids = [f"task-{index:04d}" for index in range(count)]
+    tasks = storage.list_tasks_by_ids(task_ids)
+
+    assert [task.task_id for task in tasks] == task_ids
+
+
+def test_list_task_prelabel_summaries_handles_large_id_batches(tmp_path) -> None:
+    storage = DatasetStorage(tmp_path)
+    storage.ensure_schema()
+
+    count = 1005
+    storage.upsert_raw_assets(
+        [
+            RawAssetRecord(
+                asset_id=f"new-{index}",
+                asset_role="new",
+                field_key=f"field_{index:04d}",
+                field_name=f"field_{index:04d}",
+                capture_key=f"field_{index:04d}",
+                relpath=f"dataset_raw/new/field_{index:04d}.fits",
+                file_name=f"field_{index:04d}.fits",
+                file_stem=f"field_{index:04d}",
+                suffix=".fits",
+            )
+            for index in range(count)
+        ]
+    )
+    storage.sync_tasks(
+        [
+            TaskRecord(
+                task_id=f"task-{index:04d}",
+                field_key=f"field_{index:04d}",
+                field_name=f"field_{index:04d}",
+                capture_key=f"field_{index:04d}",
+                new_asset_id=f"new-{index}",
+                preprocess_status="ready",
+            )
+            for index in range(count)
+        ]
+    )
+    for index in range(0, count, 100):
+        storage.enqueue_prelabel_job(
+            task_id=f"task-{index:04d}",
+            requested_by="tester",
+            model_version="test-model",
+            input_fingerprint=f"fingerprint-{index}",
+        )
+
+    summaries = storage.list_task_prelabel_summaries(
+        f"task-{index:04d}" for index in range(count)
+    )
+
+    assert sorted(summaries) == [f"task-{index:04d}" for index in range(0, count, 100)]
+    assert {summary.prelabel_status for summary in summaries.values()} == {"queued"}
