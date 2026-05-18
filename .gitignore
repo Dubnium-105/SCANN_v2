@@ -208,3 +208,7 @@ docker/logs/
 *.local.yml
 *.local.toml
 scann_v2/models/snapshots/b71043b15a3d4276b86b39bf65d17267.json
+scann_v2/scann_v2_config.json
+scann_v2/scann_v2_config.json
+scann_v2/scann_v2_config.json
+scann_v2/scann_v2_config.json

@@ -453,13 +453,37 @@ class FitsAnnotationBackend(AnnotationBackend):
         sample_id: str,
     ) -> Optional[dict]:
         """兼容标准化前后的样本 ID。"""
-        if sample_id in existing_annotations:
-            return existing_annotations[sample_id]
+        candidates: list[str] = []
 
-        legacy_id = DatasetPreprocessService.strip_datetime_prefix(sample_id)
-        if legacy_id in existing_annotations:
-            return existing_annotations[legacy_id]
-        return None
+        def add_candidate(value: str) -> None:
+            if value and value not in candidates:
+                candidates.append(value)
+
+        add_candidate(sample_id)
+        without_crop = DatasetPreprocessService.strip_aligned_crop_suffix(sample_id)
+        add_candidate(without_crop)
+        add_candidate(DatasetPreprocessService.strip_datetime_prefix(sample_id))
+        add_candidate(DatasetPreprocessService.strip_datetime_prefix(without_crop))
+
+        first_match: Optional[dict] = None
+        for candidate in candidates:
+            if candidate in existing_annotations:
+                entry = existing_annotations[candidate]
+                if self._annotation_entry_has_content(entry):
+                    return entry
+                if first_match is None:
+                    first_match = entry
+        return first_match
+
+    @staticmethod
+    def _annotation_entry_has_content(entry: dict) -> bool:
+        annotations = entry.get("annotations")
+        if isinstance(annotations, list) and annotations:
+            return True
+        return any(
+            entry.get(key) is not None
+            for key in ("label", "detail_type", "ai_suggestion", "ai_confidence")
+        )
 
     def _standardize_dataset_by_date_obs(self, root: Path) -> None:
         """标准化数据集命名并完成新旧图对齐准备。"""
@@ -591,7 +615,7 @@ class FitsAnnotationBackend(AnnotationBackend):
             )
             if new_aligned_path.is_file() and old_aligned_path.is_file():
                 if not new_marker_path.exists() or not old_marker_path.exists():
-                    marker_text = "aligned=1\n"
+                    marker_text = "aligned=1\nmethod=siril\nrotation=0\ndx=0.000000\ndy=0.000000\n"
                     new_marker_path.write_text(marker_text, encoding="utf-8")
                     old_marker_path.write_text(marker_text, encoding="utf-8")
                 self._ensure_marked_aligned_crop_file(root, pair, new_aligned_path, new_marker_path)
@@ -640,7 +664,7 @@ class FitsAnnotationBackend(AnnotationBackend):
         result = align(
             new_fits.data,
             old_fits.data,
-            method="auto",
+            method="siril",
             max_shift=fallback_max_shift,
         )
 
@@ -668,6 +692,8 @@ class FitsAnnotationBackend(AnnotationBackend):
         write_fits(old_aligned_path, cropped_old, old_fits.header)
         marker_text = (
             "aligned=1\n"
+            "method=siril\n"
+            f"rotation={float(getattr(result, 'rotation', 0.0) or 0.0):.0f}\n"
             f"dx={result.dx:.6f}\n"
             f"dy={result.dy:.6f}\n"
             f"crop={x0},{x1},{y0},{y1}\n"

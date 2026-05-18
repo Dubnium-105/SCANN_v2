@@ -10,7 +10,7 @@ from PyQt5.QtCore import QThread, pyqtSignal
 from PyQt5.QtWidgets import QApplication, QFileDialog
 
 from scann.core.dataset_storage import DatasetStorage
-from scann.core.image_aligner import align, align_with_rot180_selection
+from scann.core.image_aligner import align
 from scann.data.file_manager import FitsImagePair
 from scann.services.dataset_preprocess_service import DatasetPreprocessService
 from scann.services.pair_service import PairService
@@ -429,23 +429,18 @@ class PairController:
             return aligned_marked
 
         max_shift = max(100, int(min(raw_new_data.shape[:2]) * 0.45))
-        result, attempt_name, original_score, rotated_score = align_with_rot180_selection(
+        result = align(
             raw_new_data,
             aligned_marked,
-            method="auto",
+            method="siril",
             max_shift=max_shift,
-            align_fn=align,
         )
-        if attempt_name == "rot180" and rotated_score > original_score + 1e-3:
+        if float(getattr(result, "rotation", 0.0) or 0.0) == 180.0:
             self._window._logger.info(
-                "检测到带标记新图更接近旋转180度版本，优先旋转后对齐: %s (original=%.4f, rot180=%.4f)",
+                "Marked image aligned after Siril 180-degree rotation: %s",
                 pair.name,
-                original_score,
-                rotated_score,
             )
         if result.success and result.aligned_old is not None:
-            if attempt_name == "rot180":
-                self._window._logger.info("带标记新图旋转180度后对齐成功: %s", pair.name)
             return self._sanitize_image_data(result.aligned_old)
 
         self._window._logger.warning(

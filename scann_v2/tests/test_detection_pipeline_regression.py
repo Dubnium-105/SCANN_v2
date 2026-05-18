@@ -36,7 +36,7 @@ class TestDetectionPipelineRegression:
         inference_engine = Mock()
         inference_engine.is_ready = True
         inference_engine.threshold = 0.6
-        inference_engine.classify_patches.return_value = [0.62, 0.91, 0.31]
+        inference_engine.classify_patches_detailed.return_value = [0.62, 0.91, 0.31]
 
         pipeline = DetectionPipeline(inference_engine=inference_engine, patch_size=16)
         mock_align.return_value = AlignResult(
@@ -72,7 +72,7 @@ class TestDetectionPipelineRegression:
         inference_engine = Mock()
         inference_engine.is_ready = True
         inference_engine.threshold = 0.5
-        inference_engine.classify_patches.return_value = [0.8, 0.7]
+        inference_engine.classify_patches_detailed.return_value = [0.8, 0.7]
 
         kept_candidate = Candidate(x=11, y=12)
         removed_candidate = Candidate(x=21, y=22, is_known=True)
@@ -146,7 +146,7 @@ class TestDetectionPipelineRegression:
         assert result.align_result is None
 
     @patch("scann.services.detection_service.align")
-    def test_process_pair_uses_auto_alignment_method(self, mock_align):
+    def test_process_pair_uses_siril_alignment_method(self, mock_align):
         pipeline = DetectionPipeline()
         image = np.ones((32, 32), dtype=np.float32)
         mock_align.return_value = AlignResult(
@@ -154,9 +154,9 @@ class TestDetectionPipelineRegression:
             success=True,
         )
 
-        pipeline.process_pair("pair-auto-001", image, image)
+        pipeline.process_pair("pair-siril-001", image, image)
 
-        assert mock_align.call_args.kwargs["method"] == "auto"
+        assert mock_align.call_args.kwargs["method"] == "siril"
 
     @patch("scann.services.detection_service.detect_candidates")
     @patch("scann.services.detection_service.align")
@@ -253,7 +253,7 @@ class TestDetectionPipelineRegression:
         inference_engine.is_ready = True
         inference_engine.threshold = 0.5
         inference_engine.detect_dense_full_image.side_effect = RuntimeError("dense failed")
-        inference_engine.classify_patches.return_value = [0.88]
+        inference_engine.classify_patches_detailed.return_value = [0.88]
 
         pipeline = DetectionPipeline(
             inference_engine=inference_engine,
@@ -287,7 +287,7 @@ class TestDetectionPipelineRegression:
         inference_engine.detect_dense_full_image.return_value = [
             Detection(x=10, y=11, width=6, height=6, confidence=0.61),
         ]
-        inference_engine.classify_patches.return_value = [0.93]
+        inference_engine.classify_patches_detailed.return_value = [0.93]
 
         pipeline = DetectionPipeline(
             inference_engine=inference_engine,
@@ -319,7 +319,7 @@ class TestDetectionPipelineRegression:
         inference_engine = Mock()
         inference_engine.is_ready = True
         inference_engine.threshold = 0.4
-        inference_engine.classify_patches.return_value = [0.79]
+        inference_engine.classify_patches_detailed.return_value = [0.79]
 
         pipeline = DetectionPipeline(
             inference_engine=inference_engine,

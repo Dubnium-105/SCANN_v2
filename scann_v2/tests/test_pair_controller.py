@@ -252,7 +252,7 @@ class TestPairController:
         controller.load_pair(0)
 
         mock_align.assert_called_once()
-        np.testing.assert_array_equal(mock_align.call_args.args[1], aligned_marked)
+        np.testing.assert_array_equal(mock_align.call_args.args[1], raw_marked)
         np.testing.assert_array_equal(
             window._new_marked_image_data,
             aligned_marked[4:10, 3:9],

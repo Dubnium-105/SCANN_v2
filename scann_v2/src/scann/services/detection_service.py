@@ -17,7 +17,7 @@ class DetectionPipeline(_DetectionPipeline):
     """保留旧模块路径，内部实现委托给新 detection_pipeline 模块。"""
 
     def _align_images(self, new_data, old_data) -> AlignResult:
-        return align(new_data, old_data, method="auto")
+        return align(new_data, old_data, method="siril")
 
     def _detect_candidates(self, new_data, old_data, params) -> list[Candidate]:
         return detect_candidates(new_data, old_data, params=params)

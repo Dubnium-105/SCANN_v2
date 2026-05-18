@@ -159,7 +159,7 @@ class DetectionPipeline:
         )
 
     def _align_images(self, new_data: np.ndarray, old_data: np.ndarray) -> AlignResult:
-        return align(new_data, old_data, method="auto")
+        return align(new_data, old_data, method="siril")
 
     def _normalize_detection_mode(self, mode: Optional[str]) -> str:
         if mode in {"patch", "full_image", "hybrid"}:

@@ -20,6 +20,23 @@ from scann.core.annotation_models import (
 )
 
 
+@pytest.fixture(autouse=True)
+def fake_siril_alignment(monkeypatch):
+    from scann.core.models import AlignResult
+
+    def fake_align(new_data, old_data, method="siril", max_shift=None):
+        return AlignResult(
+            aligned_old=np.asarray(old_data, dtype=np.float32),
+            dx=0.0,
+            dy=0.0,
+            rotation=0.0,
+            success=True,
+        )
+
+    monkeypatch.setattr("scann.core.fits_annotation_backend.align", fake_align)
+    monkeypatch.setattr("scann.core.image_aligner.align", fake_align)
+
+
 # ─── Fixtures ───
 
 
@@ -295,14 +312,14 @@ class TestFitsPersistence:
             detail_type="asteroid",
         )
 
-        db_file = fits_dataset / "annotations.db"
+        db_file = fits_dataset / "scann_dataset.db"
         manifest_file = fits_dataset / "annotations.json"
         assert db_file.exists()
         assert manifest_file.exists()
 
         manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
-        assert manifest.get("storage") == "sqlite"
-        assert manifest.get("db_file") == "annotations.db"
+        assert manifest.get("storage") == "dataset_db"
+        assert manifest.get("db_file") == "scann_dataset.db"
 
     def test_reload_preserves_annotations(self, fits_backend, fits_dataset: Path):
         """保存后重新加载，标注信息不丢失"""
@@ -332,8 +349,8 @@ class TestFitsPersistence:
             (fits_dataset / "annotations.json").read_text(encoding="utf-8")
         )
         assert "version" in data
-        assert data["version"] == "2.1"
-        assert data["storage"] == "sqlite"
+        assert data["version"] == "2.3"
+        assert data["storage"] == "dataset_db"
 
     def test_apply_ai_preannotations_persists_ai_metadata(
         self,

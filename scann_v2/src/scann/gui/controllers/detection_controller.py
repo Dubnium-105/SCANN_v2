@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import QApplication
 
 from scann.core.candidate_detector import DetectionParams
 from scann.core.fits_io import read_fits, write_fits
-from scann.core.image_aligner import align, align_with_rot180_selection
+from scann.core.image_aligner import align
 from scann.core.image_processor import denoise, pseudo_flat_field
 from scann.core.models import TargetVerdict
 from scann.data.file_manager import scan_fits_folder
@@ -90,23 +90,18 @@ class DetectionController:
             return aligned_marked
 
         max_shift = max(100, int(min(new_data.shape[:2]) * 0.45))
-        marked_result, attempt_name, original_score, rotated_score = align_with_rot180_selection(
+        marked_result = align(
             new_data,
             marked_data,
-            method="auto",
+            method="siril",
             max_shift=max_shift,
-            align_fn=align,
         )
-        if attempt_name == "rot180" and rotated_score > original_score + 1e-3:
+        if float(getattr(marked_result, "rotation", 0.0) or 0.0) == 180.0:
             self._window._logger.info(
-                "检测到带标记新图更接近旋转180度版本，优先旋转后对齐: %s (original=%.4f, rot180=%.4f)",
+                "Marked image aligned after Siril 180-degree rotation: %s",
                 pair_name,
-                original_score,
-                rotated_score,
             )
         if marked_result.success and marked_result.aligned_old is not None:
-            if attempt_name == "rot180":
-                self._window._logger.info("带标记新图旋转180度后对齐成功: %s", pair_name)
             return np.nan_to_num(
                 marked_result.aligned_old.astype(np.float32),
                 nan=0.0,
@@ -225,26 +220,17 @@ class DetectionController:
 
                     result = align(new_fits.data, old_fits.data, method="siril")
                     if not result.success or result.aligned_old is None:
-                        h, w = new_fits.data.shape[:2]
-                        fallback_max_shift = max(100, int(min(h, w) * 0.45))
                         self._window._logger.warning(
-                            "[%s/%s] Siril 对齐失败，回退 auto: %s; reason=%s; fallback_max_shift=%s",
+                            "[%s/%s] Siril alignment failed: %s; reason=%s",
                             idx,
                             total,
                             pair.name,
                             result.error_message,
-                            fallback_max_shift,
                         )
                         self._window._show_message(
-                            f"[{idx}/{total}] Siril 失败，回退内置对齐: {pair.name}",
+                            f"[{idx}/{total}] Siril alignment failed: {pair.name}",
                             1500,
                             level="WARNING",
-                        )
-                        result = align(
-                            new_fits.data,
-                            old_fits.data,
-                            method="auto",
-                            max_shift=fallback_max_shift,
                         )
 
                     if result.success and result.aligned_old is not None:
@@ -290,6 +276,8 @@ class DetectionController:
                         write_fits(old_aligned_path, cropped_old, old_fits.header)
                         marker_text = (
                             "aligned=1\n"
+                            "method=siril\n"
+                            f"rotation={float(getattr(result, 'rotation', 0.0) or 0.0):.0f}\n"
                             f"dx={result.dx:.6f}\n"
                             f"dy={result.dy:.6f}\n"
                             f"crop={x0},{x1},{y0},{y1}\n"

@@ -306,7 +306,7 @@ def test_batch_align_saves_marked_crop_with_same_crop_window(
     controller.batch_align()
 
     assert mock_align.call_count == 2
-    np.testing.assert_array_equal(mock_align.call_args_list[1].args[1], aligned_marked)
+    np.testing.assert_array_equal(mock_align.call_args_list[1].args[1], marked_data)
     expected_marked = aligned_marked[1:4, 1:3]
     assert mock_write.call_count == 3
     assert any(

@@ -189,20 +189,22 @@ def test_api_dataset_preprocess_exposes_uploaded_annotation_views(tmp_path, monk
 
     assert preprocess.status_code == 200
     payload = preprocess.json()
-    assert payload["standardized_files"] == 0
-    assert payload["generated_aligned_pairs"] == 0
-    assert payload["generated_marked_crops"] == 0
+    assert payload["standardized_files"] == 3
+    assert payload["generated_aligned_pairs"] == 1
+    assert payload["generated_marked_crops"] == 1
     assert payload["task_count"] == 1
+    assert payload["total_task_count"] == 1
+    assert payload["align_failed_count"] == 0
 
     tasks = client.get("/api/tasks", headers=headers)
 
     assert tasks.status_code == 200
     assert tasks.json() == [
         _expected_task_payload(
-            task_id="field_001",
-            new_path="new/field_001.fits",
-            old_path="old/field_001.fits",
-            new_marked_path="new_marked/field_001.fits",
+            task_id="20260115T203000__field_001",
+            new_path="new/20260115T203000__field_001__aligned_crop.fts",
+            old_path="old/20260115T203000__field_001__aligned_crop.fts",
+            new_marked_path="new_marked/20260115T203000__field_001__aligned_crop.fts",
             field_key="field_001",
             field_name="field_001",
             capture_key="field_001",

@@ -17,7 +17,7 @@ import numpy as np
 from scann.core.brightness_match import brightness_match_anchors
 from scann.core.dataset_storage import DatasetStorage, RawAssetRecord, TaskArtifactRecord, TaskRecord
 from scann.core.fits_io import read_fits, write_fits
-from scann.core.image_aligner import align, align_with_rot180_selection
+from scann.core.image_aligner import align
 from scann.data.file_manager import FitsImagePair, match_new_old_pairs
 from scann.services.pair_service import PairService
 
@@ -32,6 +32,26 @@ _MATCH_ADAPTIVE_HIGH_PERCENTILE = False
 _TASK_MANIFEST_FILE = "preprocessed_tasks.json"
 _TASK_MANIFEST_VERSION = "1.0"
 _PREPROCESS_ALIGN_METHOD = "siril"
+
+
+def _alignment_marker_text(
+    result: object | None = None,
+    crop_bounds: tuple[int, int, int, int] | None = None,
+) -> str:
+    dx = float(getattr(result, "dx", 0.0) or 0.0)
+    dy = float(getattr(result, "dy", 0.0) or 0.0)
+    rotation = float(getattr(result, "rotation", 0.0) or 0.0)
+    lines = [
+        "aligned=1",
+        "method=siril",
+        f"rotation={rotation:.0f}",
+        f"dx={dx:.6f}",
+        f"dy={dy:.6f}",
+    ]
+    if crop_bounds is not None:
+        x0, x1, y0, y1 = crop_bounds
+        lines.append(f"crop={x0},{x1},{y0},{y1}")
+    return "\n".join(lines) + "\n"
 
 
 @dataclass(frozen=True)
@@ -1021,12 +1041,7 @@ class DatasetPreprocessService:
         cropped_old = result.aligned_old[y0:y1, x0:x1]
         self._write_fits(new_aligned_path, cropped_new, new_fits.header)
         self._write_fits(old_aligned_path, cropped_old, old_fits.header)
-        marker_text = (
-            "aligned=1\n"
-            f"dx={result.dx:.6f}\n"
-            f"dy={result.dy:.6f}\n"
-            f"crop={x0},{x1},{y0},{y1}\n"
-        )
+        marker_text = _alignment_marker_text(result, crop_bounds)
         new_marker_path.write_text(marker_text, encoding="utf-8")
         old_marker_path.write_text(marker_text, encoding="utf-8")
         self._dataset_storage(root).update_task_preprocess_state(
@@ -1079,7 +1094,7 @@ class DatasetPreprocessService:
         )
         if new_aligned_path.is_file() and old_aligned_path.is_file():
             if not new_marker_path.exists() or not old_marker_path.exists():
-                marker_text = "aligned=1\n"
+                marker_text = _alignment_marker_text()
                 new_marker_path.write_text(marker_text, encoding="utf-8")
                 old_marker_path.write_text(marker_text, encoding="utf-8")
             generated_marked_crop = int(
@@ -1168,12 +1183,7 @@ class DatasetPreprocessService:
 
         self._write_fits(new_aligned_path, cropped_new, new_fits.header)
         self._write_fits(old_aligned_path, cropped_old, old_fits.header)
-        marker_text = (
-            "aligned=1\n"
-            f"dx={result.dx:.6f}\n"
-            f"dy={result.dy:.6f}\n"
-            f"crop={x0},{x1},{y0},{y1}\n"
-        )
+        marker_text = _alignment_marker_text(result, crop_bounds)
         new_marker_path.write_text(marker_text, encoding="utf-8")
         old_marker_path.write_text(marker_text, encoding="utf-8")
         return True
@@ -1263,23 +1273,18 @@ class DatasetPreprocessService:
             return aligned_marked
 
         max_shift = max(100, int(min(reference_new_data.shape[:2]) * 0.45))
-        result, attempt_name, original_score, rotated_score = align_with_rot180_selection(
+        result = self._align(
             reference_new_data,
             marked_data,
-            method="auto",
+            method=_PREPROCESS_ALIGN_METHOD,
             max_shift=max_shift,
-            align_fn=self._align,
         )
-        if attempt_name == "rot180" and rotated_score > original_score + 1e-3:
+        if float(getattr(result, "rotation", 0.0) or 0.0) == 180.0:
             logger.info(
-                "检测到带标记新图更接近旋转180度版本，优先旋转后对齐: %s (original=%.4f, rot180=%.4f)",
+                "Marked image aligned after Siril 180-degree rotation: %s",
                 log_context,
-                original_score,
-                rotated_score,
             )
         if getattr(result, "success", False) and getattr(result, "aligned_old", None) is not None:
-            if attempt_name == "rot180":
-                logger.info("带标记新图旋转180度后对齐成功: %s", log_context)
             return self._sanitize_image_data(result.aligned_old)
 
         logger.warning(

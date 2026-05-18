@@ -75,6 +75,10 @@ def test_prepare_dataset_from_dataset_raw_creates_db_tasks_and_artifacts(dataset
     ]
     assert all(task.new_path.exists() for task in tasks)
     assert all(task.old_path is not None and task.old_path.exists() for task in tasks)
+    marker_text = (dataset_raw_root / "new" / f"{tasks[0].task_id}__aligned.marker").read_text(encoding="utf-8")
+    assert "method=siril" in marker_text
+    assert "rotation=0" in marker_text
+    assert "crop=" in marker_text
 
     db_tasks = storage.list_tasks()
     assert len(db_tasks) == 2
@@ -257,22 +261,24 @@ def test_prepare_dataset_aligns_marked_new_to_new_before_cropping(tmp_path: Path
     )
 
     align_inputs: list[np.ndarray] = []
+    align_methods: list[str] = []
 
     def _align_with_marked_step(reference, moving, method="auto", max_shift=None):
         align_inputs.append(np.asarray(moving, dtype=np.float32))
-        if np.array_equal(moving, marked_aligned):
+        align_methods.append(method)
+        if np.array_equal(moving, marked_rotated):
             return AlignResult(
                 aligned_old=marked_aligned,
                 dx=0.0,
                 dy=0.0,
+                rotation=180.0,
                 success=True,
             )
         return AlignResult(
             aligned_old=np.asarray(moving, dtype=np.float32),
             dx=0.0,
             dy=0.0,
-            success=not np.array_equal(moving, marked_rotated),
-            error_message="alignment failed" if np.array_equal(moving, marked_rotated) else "",
+            success=True,
         )
 
     service = DatasetPreprocessService(align_fn=_align_with_marked_step)
@@ -289,5 +295,6 @@ def test_prepare_dataset_aligns_marked_new_to_new_before_cropping(tmp_path: Path
         generated = np.asarray(hdul[0].data, dtype=np.float32)
 
     assert len(align_inputs) == 2
-    np.testing.assert_array_equal(align_inputs[1], marked_aligned)
+    assert align_methods == ["siril", "siril"]
+    np.testing.assert_array_equal(align_inputs[1], marked_rotated)
     np.testing.assert_array_equal(generated, generated_new + 500.0)

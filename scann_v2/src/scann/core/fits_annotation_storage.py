@@ -51,23 +51,51 @@ class FitsAnnotationStorage:
 
     def load_annotations(self) -> LoadedAnnotations:
         current = self._dataset_storage.list_current_annotations()
-        if current:
-            return LoadedAnnotations(by_id=current)
-
         manifest = self._read_manifest_json()
 
+        legacy_by_id: dict[str, dict] = {}
+        loaded_from_legacy_json = False
         if self.legacy_db_path.exists():
-            return LoadedAnnotations(by_id=self._load_map_from_legacy_db())
+            legacy_by_id = self._load_map_from_legacy_db()
+        else:
+            legacy_images = manifest.get("images")
+            if isinstance(legacy_images, list):
+                for image in legacy_images:
+                    if isinstance(image, dict) and image.get("id"):
+                        legacy_by_id[str(image["id"])] = image
+            loaded_from_legacy_json = bool(legacy_by_id)
 
-        legacy_images = manifest.get("images")
-        if isinstance(legacy_images, list):
-            by_id: dict[str, dict] = {}
-            for image in legacy_images:
-                if isinstance(image, dict) and image.get("id"):
-                    by_id[str(image["id"])] = image
-            return LoadedAnnotations(by_id=by_id, loaded_from_legacy_json=bool(by_id))
+        if current:
+            merged = dict(current)
+            for annotation_id, legacy_entry in legacy_by_id.items():
+                current_entry = merged.get(annotation_id)
+                if current_entry is None or (
+                    not self._has_annotation_content(current_entry)
+                    and self._has_annotation_content(legacy_entry)
+                ):
+                    merged[annotation_id] = legacy_entry
+            return LoadedAnnotations(
+                by_id=merged,
+                loaded_from_legacy_json=loaded_from_legacy_json,
+            )
+
+        if legacy_by_id:
+            return LoadedAnnotations(
+                by_id=legacy_by_id,
+                loaded_from_legacy_json=loaded_from_legacy_json,
+            )
 
         return LoadedAnnotations(by_id={})
+
+    @staticmethod
+    def _has_annotation_content(entry: dict) -> bool:
+        annotations = entry.get("annotations")
+        if isinstance(annotations, list) and annotations:
+            return True
+        return any(
+            entry.get(key) is not None
+            for key in ("label", "detail_type", "ai_suggestion", "ai_confidence")
+        )
 
     def bulk_replace(self, samples: Iterable[AnnotationSample]) -> None:
         for sample in samples:

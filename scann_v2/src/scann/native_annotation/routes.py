@@ -111,6 +111,8 @@ class DatasetPreprocessResponse(BaseModel):
     generated_aligned_pairs: int
     generated_marked_crops: int
     task_count: int
+    total_task_count: int = 0
+    align_failed_count: int = 0
 
 
 def get_dataset_root() -> Path:
@@ -296,7 +298,7 @@ def preprocess_dataset(
 ) -> DatasetPreprocessResponse:
     _ = current_user
     dataset_root = get_dataset_root()
-    report = get_dataset_preprocess_service().prepare_annotation_dataset(dataset_root)
+    report = get_dataset_preprocess_service().prepare_dataset(dataset_root)
     return DatasetPreprocessResponse(
         dataset_root=str(dataset_root),
         standardized_files=report.standardized_files,
@@ -304,6 +306,8 @@ def preprocess_dataset(
         generated_aligned_pairs=report.generated_aligned_pairs,
         generated_marked_crops=report.generated_marked_crops,
         task_count=report.task_count,
+        total_task_count=report.total_task_count,
+        align_failed_count=report.align_failed_count,
     )
 
 
