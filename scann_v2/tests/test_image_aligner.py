@@ -60,6 +60,31 @@ class TestImageAlignCrop:
         assert x1 <= w
         assert y1 <= h
 
+    def test_calc_overlap_crop_bounds_removes_nonzero_constant_siril_fill(self) -> None:
+        service = PairService()
+        h, w = 24, 30
+        rng = np.random.default_rng(123)
+        new_image = rng.normal(1200.0, 10.0, size=(h, w)).astype(np.float32)
+        aligned_old = rng.normal(1200.0, 10.0, size=(h, w)).astype(np.float32)
+        aligned_old[:4, :] = 1033.0
+        aligned_old[:, -5:] = 1033.0
+
+        crop_bounds = service.calc_overlap_crop_bounds(
+            w=w,
+            h=h,
+            dx=0.0,
+            dy=0.0,
+            aligned_old=aligned_old,
+            new_image=new_image,
+        )
+
+        assert crop_bounds is not None
+        x0, x1, y0, y1 = crop_bounds
+        assert x0 == 0
+        assert y0 >= 4
+        assert x1 <= w - 5
+        assert y1 == h
+
     def test_calc_overlap_crop_bounds_falls_back_to_geometry(self) -> None:
         service = PairService()
 

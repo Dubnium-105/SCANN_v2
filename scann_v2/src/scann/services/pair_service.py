@@ -218,8 +218,45 @@ class PairService:
                 return mask & (~low_mask)
             return mask
 
+        def _remove_constant_edge_fill(mask: np.ndarray, arr: np.ndarray) -> np.ndarray:
+            """Remove constant Siril fill bands that are non-zero but not real sky."""
+            if arr.ndim != 2:
+                return mask
+            height, width = arr.shape
+            if height == 0 or width == 0:
+                return mask
+
+            dynamic_range = float(np.nanpercentile(arr, 99) - np.nanpercentile(arr, 1))
+            std_epsilon = max(dynamic_range * 1e-6, 1e-3)
+            row_std = np.nanstd(arr, axis=1)
+            col_std = np.nanstd(arr, axis=0)
+
+            top = 0
+            while top < height and float(row_std[top]) <= std_epsilon:
+                top += 1
+            bottom = height
+            while bottom > top and float(row_std[bottom - 1]) <= std_epsilon:
+                bottom -= 1
+            left = 0
+            while left < width and float(col_std[left]) <= std_epsilon:
+                left += 1
+            right = width
+            while right > left and float(col_std[right - 1]) <= std_epsilon:
+                right -= 1
+
+            if top == 0 and bottom == height and left == 0 and right == width:
+                return mask
+            if top >= bottom or left >= right:
+                return mask
+
+            trimmed = np.zeros_like(mask, dtype=bool)
+            trimmed[top:bottom, left:right] = True
+            return mask & trimmed
+
         mask_new = _remove_edge_floor(mask_new, new_arr)
         mask_old = _remove_edge_floor(mask_old, old_arr)
+        mask_new = _remove_constant_edge_fill(mask_new, new_arr)
+        mask_old = _remove_constant_edge_fill(mask_old, old_arr)
         common = mask_new & mask_old
         if not np.any(common):
             return None
