@@ -854,22 +854,15 @@ class DatasetStorage:
         field_name: str,
         capture_key: str,
     ) -> str:
+        """Generate a task_id in the format {date_token}__{field_name}.
+
+        No suffix is ever appended. If the generated task_id already exists,
+        the base is returned as-is; the caller is responsible for skipping
+        duplicate assets.
+        """
         safe_field = field_name.strip() or capture_key.strip() or "task"
         base = f"{date_token}__{safe_field}" if date_token else safe_field
-        with self._connect() as connection:
-            self._ensure_schema(connection)
-            existing = {
-                str(row["task_id"])
-                for row in connection.execute("SELECT task_id FROM tasks").fetchall()
-            }
-        if base not in existing:
-            return base
-        index = 1
-        while True:
-            candidate = f"{base}__{index:02d}"
-            if candidate not in existing:
-                return candidate
-            index += 1
+        return base
 
     def sync_tasks(self, tasks: Iterable[TaskRecord]) -> None:
         task_list = list(tasks)
@@ -884,6 +877,11 @@ class DatasetStorage:
             for task in task_list:
                 existing_row = existing_by_new_asset.get(task.new_asset_id)
                 task_id = str(existing_row["task_id"]) if existing_row is not None else task.task_id
+                # Skip restored tasks to preserve their status and metadata
+                if existing_row is not None:
+                    existing_asset_id = str(existing_row["new_asset_id"])
+                    if existing_asset_id.startswith("restored_"):
+                        continue
                 created_at = str(existing_row["created_at"]) if existing_row is not None else now
                 connection.execute(
                     """
@@ -977,6 +975,7 @@ class DatasetStorage:
                     WHERE new_asset_id NOT IN (
                         SELECT new_asset_id FROM temp_active_task_new_assets
                     )
+                    AND new_asset_id NOT LIKE 'restored_%'  -- Skip manually restored tasks
                     """,
                     (now,),
                 )
@@ -1130,8 +1129,13 @@ class DatasetStorage:
         prepared: list[dict[str, str | None]] = []
         for row in rows:
             new_rel = str(row["new_path"]) if row["new_path"] is not None else None
-            if not new_rel or not (self.dataset_root / new_rel).is_file():
+            if not new_rel:
                 continue
+            # Accept the path even if the file does not exist on disk;
+            # restored tasks may reference placeholder / missing raw assets.
+            if not (self.dataset_root / new_rel).is_file():
+                if not new_rel.startswith('_restored/'):
+                    continue
 
             old_rel = str(row["old_path"]) if row["old_path"] is not None else None
             if old_rel and not (self.dataset_root / old_rel).is_file():

@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY docker/backend/requirements.txt /tmp/requirements.txt
 
-RUN pip install --no-cache-dir --prefix=/install -r /tmp/requirements.txt
+RUN pip install -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn --no-cache-dir --prefix=/install -r /tmp/requirements.txt
 
 
 ARG PYTHON_BASE_IMAGE=python:3.11-slim
@@ -55,6 +55,8 @@ RUN set -eux; \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    siril \
+    xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /install /install

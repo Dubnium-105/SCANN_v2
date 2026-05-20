@@ -206,7 +206,7 @@ def _align_siril(
 
             try:
                 proc = subprocess.run(
-                    [executable, "-d", str(work_dir), "-s", str(script_path)],
+                    ["xvfb-run", "--auto-servernum", executable, "-d", str(work_dir), "-s", str(script_path)],
                     capture_output=True,
                     text=False,
                     timeout=120,
