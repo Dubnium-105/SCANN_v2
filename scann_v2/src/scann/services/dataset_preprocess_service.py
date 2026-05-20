@@ -452,15 +452,22 @@ class DatasetPreprocessService:
         used_marked_asset_ids: set[str] = set()
         for asset in new_assets:
             existing_task = storage.get_task_by_new_asset_id(asset.asset_id)
-            task_id = (
-                existing_task.task_id
-                if existing_task is not None
-                else storage.allocate_task_id(
+            if existing_task is not None:
+                task_id = existing_task.task_id
+            else:
+                task_id = storage.allocate_task_id(
                     date_token=self._date_token_from_asset(asset),
                     field_name=asset.field_name,
                     capture_key=asset.capture_key,
                 )
-            )
+                # Skip if a task with this task_id already exists (e.g. restored tasks)
+                if storage.get_task_by_id(task_id) is not None:
+                    logger.info(
+                        "Skipping new asset %s: task_id %s already exists (preserving existing task)",
+                        asset.asset_id,
+                        task_id,
+                    )
+                    continue
             old_asset = old_by_field.get(asset.field_key)
             marked_asset = self._pop_marked_asset(
                 marked_by_capture.get(asset.capture_key),
