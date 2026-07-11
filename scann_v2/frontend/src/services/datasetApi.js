@@ -42,3 +42,22 @@ export async function preprocessDataset(fetchImpl = authFetch) {
   }
   return response.json()
 }
+
+export async function fetchDatasetStats(options = {}, fetchImpl = authFetch) {
+  if (typeof options === 'function') {
+    fetchImpl = options
+    options = {}
+  }
+  const params = new URLSearchParams()
+  if (options.noCache) {
+    params.set('fresh', '1')
+  }
+  const suffix = params.size ? `?${params.toString()}` : ''
+  const response = await fetchImpl(`/api/dataset/stats${suffix}`, {
+    headers: options.noCache ? { 'Cache-Control': 'no-store' } : {},
+  })
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response, '获取数据集统计失败'))
+  }
+  return response.json()
+}

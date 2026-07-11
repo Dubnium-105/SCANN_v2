@@ -57,7 +57,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     siril \
     xvfb \
+    libze1 \
+    ocl-icd-libopencl1 \
     && rm -rf /var/lib/apt/lists/*
+
+# Create render group (GID 992 matches host) for /dev/dri access
+RUN groupadd -g 992 render 2>/dev/null || true; \
+    groupadd -g 44 video 2>/dev/null || true; \
+    usermod -a -G render,video root 2>/dev/null || true
 
 COPY --from=builder /install /install
 COPY scann_v2/src /app/scann_v2/src

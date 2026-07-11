@@ -10,6 +10,176 @@
       <div v-if="isAdmin" class="relative">
         <button
           type="button"
+          data-testid="header-dataset-stats-toggle"
+          class="text-xs rounded border border-purple-700 px-2 py-1 text-purple-200"
+          @click="toggleDatasetStats"
+        >
+          数据集统计
+        </button>
+        <div
+          v-if="datasetStatsOpen"
+          data-testid="header-dataset-stats-panel"
+          class="absolute right-0 top-full z-40 mt-2 w-[28rem] max-w-[92vw] rounded border border-slate-700 bg-slate-950 p-3 text-xs text-slate-300 shadow-xl"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <p class="font-semibold text-slate-100">数据集统计</p>
+            <div class="flex items-center gap-2">
+              <button
+                type="button"
+                data-testid="dataset-stats-refresh"
+                class="rounded border border-slate-700 px-2 py-0.5 text-[10px] text-slate-400 disabled:opacity-50"
+                :disabled="datasetStatsLoading"
+                @click="refreshDatasetStats"
+              >
+                刷新
+              </button>
+              <button
+                type="button"
+                class="rounded border border-slate-700 px-2 py-0.5 text-[10px] text-slate-400"
+                @click="datasetStatsOpen = false"
+              >
+                关闭
+              </button>
+            </div>
+          </div>
+
+          <p v-if="datasetStatsError" data-testid="dataset-stats-error" class="mt-2 text-[11px] text-rose-300">
+            {{ datasetStatsError }}
+          </p>
+
+          <div v-if="datasetStats" class="mt-3 max-h-[70vh] space-y-3 overflow-y-auto pr-1">
+            <!-- 概览区 -->
+            <section class="rounded border border-slate-800 bg-slate-900/70 p-3">
+              <p class="mb-2 font-medium text-slate-100">概览</p>
+              <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+                <div class="flex justify-between gap-2">
+                  <span class="text-slate-500">任务总数</span>
+                  <span class="text-slate-200">{{ datasetStats.task_stats.total_tasks }}</span>
+                </div>
+                <div class="flex justify-between gap-2">
+                  <span class="text-slate-500">已标注任务</span>
+                  <span class="text-emerald-300">{{ datasetStats.task_stats.annotated_tasks }}</span>
+                </div>
+                <div class="flex justify-between gap-2">
+                  <span class="text-slate-500">未标注任务</span>
+                  <span class="text-amber-300">{{ datasetStats.task_stats.unannotated_tasks }}</span>
+                </div>
+                <div class="flex justify-between gap-2">
+                  <span class="text-slate-500">标注框总数</span>
+                  <span class="text-slate-200">{{ datasetStats.annotation_stats.total_annotations }}</span>
+                </div>
+                <div class="flex justify-between gap-2">
+                  <span class="text-slate-500">平均框数/任务</span>
+                  <span class="text-slate-200">{{ datasetStats.annotation_stats.avg_annotations_per_task }}</span>
+                </div>
+                <div class="flex justify-between gap-2">
+                  <span class="text-slate-500">类别数</span>
+                  <span class="text-slate-200">{{ datasetStats.num_classes }}</span>
+                </div>
+              </div>
+            </section>
+
+            <!-- 类别分布表格 -->
+            <section class="rounded border border-slate-800 bg-slate-900/70 p-3">
+              <p class="mb-2 font-medium text-slate-100">
+                类别分布
+                <span class="ml-1 text-[10px] text-slate-500">({{ datasetStats.num_classes }} 类)</span>
+              </p>
+              <div>
+                <table class="w-full text-[11px]">
+                  <thead>
+                    <tr class="text-left text-slate-500">
+                      <th class="pb-1 pr-2">类别</th>
+                      <th class="pb-1 pr-2 text-right">数量</th>
+                      <th class="pb-1 pr-2 text-right">占比</th>
+                      <th class="pb-1">分布</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="(info, label) in datasetStats.class_distribution"
+                      :key="label"
+                      class="border-t border-slate-800/50"
+                    >
+                      <td class="py-0.5 pr-2 text-slate-300">{{ label }}</td>
+                      <td class="py-0.5 pr-2 text-right text-slate-400">{{ info.count }}</td>
+                      <td class="py-0.5 pr-2 text-right text-slate-400">{{ info.percentage }}%</td>
+                      <td class="py-0.5">
+                        <div class="h-1.5 w-full rounded-full bg-slate-800">
+                          <div
+                            class="h-1.5 rounded-full"
+                            :class="info.percentage > 5 ? 'bg-purple-500' : info.percentage >= 1 ? 'bg-sky-500' : 'bg-amber-500'"
+                            :style="{ width: Math.max(info.percentage, 0.5) + '%' }"
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <!-- 长尾指标区 -->
+            <section class="rounded border border-slate-800 bg-slate-900/70 p-3">
+              <p class="mb-2 font-medium text-slate-100">长尾分析</p>
+              <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+                <div class="flex justify-between gap-2">
+                  <span class="text-slate-500">不平衡比 (max/min)</span>
+                  <span
+                    :class="datasetStats.long_tail_analysis.imbalance_ratio > 10 ? 'text-rose-300' : 'text-emerald-300'"
+                  >
+                    {{ typeof datasetStats.long_tail_analysis.imbalance_ratio === 'number' && Number.isFinite(datasetStats.long_tail_analysis.imbalance_ratio) ? datasetStats.long_tail_analysis.imbalance_ratio : '∞' }}
+                  </span>
+                </div>
+                <div class="flex justify-between gap-2">
+                  <span class="text-slate-500">类别中位数</span>
+                  <span class="text-slate-200">{{ datasetStats.long_tail_analysis.median_class_count }}</span>
+                </div>
+                <div class="flex justify-between gap-2">
+                  <span class="text-slate-500">最大类别数</span>
+                  <span class="text-slate-200">{{ datasetStats.long_tail_analysis.max_class_count }}</span>
+                </div>
+                <div class="flex justify-between gap-2">
+                  <span class="text-slate-500">最小类别数</span>
+                  <span class="text-slate-200">{{ datasetStats.long_tail_analysis.min_class_count }}</span>
+                </div>
+                <div class="flex justify-between gap-2">
+                  <span class="text-slate-500">&lt;10 样本类别</span>
+                  <span
+                    :class="datasetStats.long_tail_analysis.classes_with_less_than_10 > 0 ? 'text-amber-300' : 'text-emerald-300'"
+                  >
+                    {{ datasetStats.long_tail_analysis.classes_with_less_than_10 }}
+                  </span>
+                </div>
+                <div class="flex justify-between gap-2">
+                  <span class="text-slate-500">&lt;5 样本类别</span>
+                  <span
+                    :class="datasetStats.long_tail_analysis.classes_with_less_than_5 > 0 ? 'text-rose-300' : 'text-emerald-300'"
+                  >
+                    {{ datasetStats.long_tail_analysis.classes_with_less_than_5 }}
+                  </span>
+                </div>
+              </div>
+              <div v-if="datasetStats.head_classes.length > 0" class="mt-2 text-[11px]">
+                <span class="text-slate-500">头部类别 (&gt;5%): </span>
+                <span class="text-purple-300">{{ datasetStats.head_classes.join(', ') }}</span>
+              </div>
+              <div v-if="datasetStats.tail_classes.length > 0" class="mt-1 text-[11px]">
+                <span class="text-slate-500">尾部类别 (&lt;1%): </span>
+                <span class="text-amber-300">{{ datasetStats.tail_classes.join(', ') }}</span>
+              </div>
+            </section>
+          </div>
+
+          <div v-else-if="!datasetStatsError" class="mt-3 text-[11px] text-slate-500">
+            加载中...
+          </div>
+        </div>
+      </div>
+
+      <div v-if="isAdmin" class="relative">
+        <button
+          type="button"
           data-testid="header-sync-menu-toggle"
           class="text-xs rounded border border-sky-700 px-2 py-1 text-sky-200"
           @click="toggleSyncMenu"
@@ -117,6 +287,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import { fetchAnnotationSyncStatus, runAnnotationSync } from '../services/annotationSyncApi'
+import { fetchDatasetStats } from '../services/datasetApi'
 import TrainingLoopMenu from './TrainingLoopMenu.vue'
 
 const props = defineProps({
@@ -144,6 +315,10 @@ const usernameText = computed(() => (props.username ? `用户: ${props.username}
 const nowMs = ref(Date.now())
 const syncMenuOpen = ref(false)
 const syncStatus = ref(null)
+const datasetStatsOpen = ref(false)
+const datasetStats = ref(null)
+const datasetStatsLoading = ref(false)
+const datasetStatsError = ref('')
 const syncLoading = ref(false)
 const syncMessage = ref('')
 const syncError = ref('')
@@ -267,9 +442,40 @@ watch(
   { immediate: true },
 )
 
+async function loadDatasetStats(options = {}) {
+  datasetStatsLoading.value = true
+  datasetStatsError.value = ''
+  try {
+    datasetStats.value = await fetchDatasetStats(options)
+  } catch (err) {
+    datasetStatsError.value = err instanceof Error ? err.message : '加载数据集统计失败'
+  } finally {
+    datasetStatsLoading.value = false
+  }
+}
+
+async function refreshDatasetStats() {
+  if (!isAdmin.value) {
+    return
+  }
+  await loadDatasetStats({ noCache: true })
+}
+
+async function toggleDatasetStats() {
+  datasetStatsOpen.value = !datasetStatsOpen.value
+  if (datasetStatsOpen.value && !datasetStats.value) {
+    await loadDatasetStats()
+  }
+}
+
+defineExpose({
+  refreshDatasetStats,
+})
+
 watch(isAdmin, (value) => {
   if (!value) {
     syncMenuOpen.value = false
+    datasetStatsOpen.value = false
   }
 })
 

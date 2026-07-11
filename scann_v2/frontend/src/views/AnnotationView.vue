@@ -1,6 +1,7 @@
 <template>
   <div class="h-full grid grid-rows-[56px_1fr]">
     <HeaderBar
+      ref="headerBarRef"
       :username="authState.username"
       :token="authState.token"
       :role="authState.role"
@@ -135,6 +136,7 @@ const activeTaskId = ref('')
 const historyRefreshKey = ref(0)
 const taskRefreshKey = ref(0)
 const activeRevisionOverlay = ref(null)
+const headerBarRef = ref(null)
 const mainRef = ref(null)
 
 const LEFT_MIN_WIDTH = 180
@@ -218,6 +220,7 @@ function onTaskChanged(taskId) {
 function onAnnotationsSaved() {
   historyRefreshKey.value += 1
   activeRevisionOverlay.value = null
+  headerBarRef.value?.refreshDatasetStats?.()
 }
 
 function onRevisionSelected(revisionDetail) {

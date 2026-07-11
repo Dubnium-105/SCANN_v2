@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import hmac
 import os
+import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import Response
@@ -69,11 +70,18 @@ from .training_lifecycle_service import (
     TrainingWorkerHeartbeatRequest,
     TrainingWorkerJobAckResponse,
 )
+from scann.core.dataset_storage import DatasetStorage
 from scann.services.dataset_preprocess_service import DatasetPreprocessService
 
 api_router = APIRouter(prefix="/api", tags=["api"])
 _fits_engines: Dict[str, FITSEngine] = {}
 _task_lock_services: Dict[str, TaskLockService] = {}
+_DATASET_STATS_CACHE_TTL_SECONDS = 30.0
+_dataset_stats_cache: Dict[str, Any] = {
+    "dataset_root": "",
+    "expires_at": 0.0,
+    "payload": None,
+}
 
 
 class TaskClaimResponse(TaskSession):
@@ -123,6 +131,10 @@ def get_dataset_service() -> DatasetService:
     return DatasetService(dataset_root=get_dataset_root())
 
 
+def get_dataset_storage() -> DatasetStorage:
+    return DatasetStorage(dataset_root=get_dataset_root())
+
+
 def get_dataset_preprocess_service() -> DatasetPreprocessService:
     return DatasetPreprocessService()
 
@@ -157,6 +169,34 @@ def get_annotation_service() -> AnnotationService:
 
 def get_annotation_sync_service():
     return build_annotation_sync_service_from_env(get_dataset_root())
+
+
+def invalidate_dataset_stats_cache() -> None:
+    _dataset_stats_cache.update({"dataset_root": "", "expires_at": 0.0, "payload": None})
+
+
+def load_dataset_stats_cached(fresh: bool = False) -> dict:
+    dataset_root = str(get_dataset_root())
+    now = time.monotonic()
+    cached_payload = _dataset_stats_cache.get("payload")
+    if (
+        not fresh
+        and cached_payload is not None
+        and _dataset_stats_cache.get("dataset_root") == dataset_root
+        and float(_dataset_stats_cache.get("expires_at") or 0.0) > now
+    ):
+        return cached_payload
+
+    storage = get_dataset_storage()
+    payload = storage.get_dataset_statistics()
+    _dataset_stats_cache.update(
+        {
+            "dataset_root": dataset_root,
+            "expires_at": now + _DATASET_STATS_CACHE_TTL_SECONDS,
+            "payload": payload,
+        }
+    )
+    return payload
 
 
 def get_prelabel_service() -> PrelabelService:
@@ -696,6 +736,17 @@ def run_annotation_sync(
     return service.sync_now(full=full)
 
 
+@api_router.get("/dataset/stats")
+def get_dataset_stats(
+    fresh: bool = Query(False),
+    current_user: AuthUser = Depends(get_current_user),
+):
+    """Return aggregate dataset statistics. Admin-only."""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can view dataset statistics")
+    return load_dataset_stats_cached(fresh=fresh)
+
+
 @api_router.get("/tasks/next", response_model=TaskClaimResponse)
 def claim_next_task(
     client_id: str = Query(..., min_length=1),
@@ -858,6 +909,7 @@ def save_annotations(
     )
     try:
         result = service.save(task_id=task_id, payload=payload, submitted_by=current_user.username)
+        invalidate_dataset_stats_cache()
         if normalized_client_id and release_after_save:
             lock_service.release_task(task_id=task_id, client_id=normalized_client_id)
         return result

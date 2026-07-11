@@ -3513,6 +3513,138 @@ class DatasetStorage:
             connection.commit()
         return True
 
+    def get_dataset_statistics(self) -> dict:
+        """Return aggregate statistics about the dataset for the statistics panel."""
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+
+            # --- task stats ---
+            total_tasks_row = connection.execute("SELECT COUNT(*) FROM tasks").fetchone()
+            total_tasks = int(total_tasks_row[0]) if total_tasks_row else 0
+
+            annotated_tasks_row = connection.execute(
+                "SELECT COUNT(DISTINCT task_id) FROM task_annotation_boxes_current"
+            ).fetchone()  # based on actual boxes, not stale current_annotation_count
+            annotated_tasks = int(annotated_tasks_row[0]) if annotated_tasks_row else 0
+            unannotated_tasks = total_tasks - annotated_tasks
+
+            # --- annotation stats ---
+            total_annotations_row = connection.execute(
+                "SELECT COUNT(*) FROM task_annotation_boxes_current"
+            ).fetchone()
+            total_annotations = int(total_annotations_row[0]) if total_annotations_row else 0
+
+            avg_annotations_per_task = round(total_annotations / total_tasks, 2) if total_tasks > 0 else 0.0
+
+            # --- class distribution ---
+            ALL_CLASSES = [
+                ("real", "asteroid"),
+                ("real", "supernova"),
+                ("real", "variable_star"),
+                ("bogus", "satellite_trail"),
+                ("bogus", "noise"),
+                ("bogus", "diffraction_spike"),
+                ("bogus", "cmos_condensation"),
+                ("bogus", "corresponding"),
+                ("bogus", "disappeared_asteroid"),
+                ("bogus", "disappeared_star"),
+                ("bogus", "disappeared_galaxy"),
+            ]
+
+            # Build a CTE-based query that LEFT JOINs all known classes with actual data
+            values_clause = ", ".join(
+                f"('{label}', '{detail_type}')" for label, detail_type in ALL_CLASSES
+            )
+            # Build detail_type -> label inference for NULL-label boxes (AI pre-labeling
+            # often fills detail_type but leaves label NULL).
+            dt_to_label = {dt: lbl for lbl, dt in ALL_CLASSES}
+            infer_label_case = " ".join(
+                f"WHEN '{dt}' THEN '{lbl}'" for dt, lbl in dt_to_label.items()
+            )
+            class_rows = connection.execute(
+                f"""
+                WITH all_classes(label, detail_type) AS (
+                    VALUES {values_clause}
+                )
+                SELECT ac.label, ac.detail_type,
+                       COALESCE(COUNT(tabc.box_index), 0) AS cnt
+                FROM all_classes ac
+                LEFT JOIN task_annotation_boxes_current tabc
+                    ON tabc.detail_type = ac.detail_type
+                    AND (
+                        (tabc.label IS NOT NULL AND tabc.label != '' AND tabc.label = ac.label)
+                        OR
+                        ((tabc.label IS NULL OR tabc.label = '')
+                         AND ac.label = CASE tabc.detail_type {infer_label_case} END)
+                    )
+                GROUP BY ac.label, ac.detail_type
+                ORDER BY cnt DESC
+                """
+            ).fetchall()
+
+            class_distribution: dict[str, dict] = {}
+            for row in class_rows:
+                lbl = str(row["label"])
+                dt = str(row["detail_type"]) if row["detail_type"] else ""
+                combined = f"{lbl}/{dt}" if dt else lbl
+                count = int(row["cnt"])
+                percentage = round(count / total_annotations * 100, 2) if total_annotations > 0 else 0.0
+                class_distribution[combined] = {"count": count, "percentage": percentage}
+
+            num_classes = 11
+
+            head_classes = [k for k, v in class_distribution.items() if v["percentage"] > 5]
+            tail_classes = [k for k, v in class_distribution.items() if v["percentage"] < 1]
+
+            # --- long-tail analysis ---
+            counts = [v["count"] for v in class_distribution.values()]
+            max_class_count = max(counts) if counts else 0
+            min_class_count = min(counts) if counts else 0
+
+            sorted_counts = sorted(counts)
+            n = len(sorted_counts)
+            if n == 0:
+                median_class_count = 0
+            elif n % 2 == 1:
+                median_class_count = sorted_counts[n // 2]
+            else:
+                median_class_count = (sorted_counts[n // 2 - 1] + sorted_counts[n // 2]) / 2.0
+
+            if min_class_count > 0:
+                imbalance_ratio = round(max_class_count / min_class_count, 2)
+            elif max_class_count > 0:
+                imbalance_ratio = None  # was float("inf"), not JSON-compliant
+            else:
+                imbalance_ratio = 0.0
+
+            classes_with_less_than_10 = sum(1 for c in counts if c < 10)
+            classes_with_less_than_5 = sum(1 for c in counts if c < 5)
+
+            return {
+                "task_stats": {
+                    "total_tasks": total_tasks,
+                    "annotated_tasks": annotated_tasks,
+                    "unannotated_tasks": unannotated_tasks,
+                },
+                "annotation_stats": {
+                    "total_annotations": total_annotations,
+                    "avg_annotations_per_task": avg_annotations_per_task,
+                },
+                "class_distribution": class_distribution,
+                "num_classes": num_classes,
+                "head_classes": head_classes,
+                "tail_classes": tail_classes,
+                "long_tail_analysis": {
+                    "max_class_count": max_class_count,
+                    "min_class_count": min_class_count,
+                    "median_class_count": median_class_count,
+                    "imbalance_ratio": imbalance_ratio,
+                    "classes_with_less_than_10": classes_with_less_than_10,
+                    "classes_with_less_than_5": classes_with_less_than_5,
+                },
+            }
+
+
     @staticmethod
     def _row_to_raw_asset(row: sqlite3.Row) -> RawAssetRecord:
         metadata_raw = row["metadata_json"]
