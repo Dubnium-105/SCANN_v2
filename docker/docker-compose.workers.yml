@@ -27,6 +27,7 @@ services:
       SCANN_TRAINING_WORKER_IDLE_SECONDS: ${SCANN_TRAINING_WORKER_IDLE_SECONDS:-10}
       SCANN_TRAINING_WORKER_HEARTBEAT_SECONDS: ${SCANN_TRAINING_WORKER_HEARTBEAT_SECONDS:-60}
       SCANN_TRAINING_WORKER_REQUEST_TIMEOUT_SECONDS: ${SCANN_TRAINING_WORKER_REQUEST_TIMEOUT_SECONDS:-120}
+      SCANN_TORCH_CACHE_DIR: /opt/torch-cache
       TORCH_HOME: /opt/torch-cache
       TORCH_HUB: /opt/torch-cache/hub
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
@@ -34,6 +35,7 @@ services:
       - nvidia.com/gpu=all
     volumes:
       - ./runtime/torch-cache:/opt/torch-cache
+      - ./runtime/torch-cache:/opt/scann_v2/models/torch_cache
       - ./runtime/training-output:/data/training-output
       - ./runtime/scann-checkpoints:/data/checkpoints
       - ./runtime/worker-logs/training:/var/log/scann
@@ -86,6 +88,7 @@ services:
       SCANN_PRELABEL_WORKER_IDLE_SECONDS: ${SCANN_PRELABEL_WORKER_IDLE_SECONDS:-5}
       SCANN_PRELABEL_WORKER_HEARTBEAT_SECONDS: ${SCANN_PRELABEL_WORKER_HEARTBEAT_SECONDS:-30}
       SCANN_PRELABEL_WORKER_REQUEST_TIMEOUT_SECONDS: ${SCANN_PRELABEL_WORKER_REQUEST_TIMEOUT_SECONDS:-60}
+      SCANN_TORCH_CACHE_DIR: /opt/torch-cache
       TORCH_HOME: /opt/torch-cache
       TORCH_HUB: /opt/torch-cache/hub
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
@@ -93,6 +96,7 @@ services:
       - nvidia.com/gpu=all
     volumes:
       - ./runtime/torch-cache:/opt/torch-cache
+      - ./runtime/torch-cache:/opt/scann_v2/models/torch_cache
       - ./runtime/prelabel-output:/data/prelabel-output
       - ./runtime/worker-logs/prelabel:/var/log/scann
       - ${SCANN_DATASET_DIR:-/mnt/disk1/scann-dataset}:/data/dataset:ro

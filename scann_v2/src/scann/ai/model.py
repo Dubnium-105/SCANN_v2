@@ -15,12 +15,14 @@ from enum import Enum
 from pathlib import Path
 from typing import Dict, Optional
 
+from scann.ai.cache_paths import configure_torch_cache
+
 # 设置PyTorch模型下载路径到项目内（必须在导入torch之前设置）
 try:
     model_file = Path(__file__).resolve()
     # model.py 位于 scann_v2/src/scann/ai/model.py，需要向上4级到 scann_v2/
     scann_v2_root = model_file.parent.parent.parent.parent
-    model_cache_dir = scann_v2_root / "models" / "torch_cache"
+    model_cache_dir = configure_torch_cache(scann_v2_root)
     model_cache_dir.mkdir(parents=True, exist_ok=True)
     
     # 设置环境变量

@@ -54,6 +54,8 @@ if not getattr(sys, "frozen", False):
     if str(src_path) not in sys.path:
         sys.path.insert(0, str(src_path))
 
+from scann.ai.cache_paths import configure_torch_cache
+
 # 设置PyTorch模型下载路径到项目内（必须在导入torch之前设置）
 # 非冻结模式：app.py 位于 scann_v2/src/scann/app.py，需要向上3级到 scann_v2/
 # 冻结模式：以可执行文件所在目录为根目录
@@ -61,7 +63,7 @@ if getattr(sys, "frozen", False):
     project_root = Path(sys.executable).resolve().parent
 else:
     project_root = Path(__file__).parent.parent.parent
-model_cache_dir = project_root / "models" / "torch_cache"
+model_cache_dir = configure_torch_cache(project_root)
 model_cache_dir.mkdir(parents=True, exist_ok=True)
 
 # 设置环境变量
