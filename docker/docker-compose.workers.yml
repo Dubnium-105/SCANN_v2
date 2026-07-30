@@ -1,0 +1,119 @@
+name: scann-native-workers
+
+services:
+  scann-native-training-worker:
+    build:
+      context: ..
+      dockerfile: docker/worker/Dockerfile
+      args:
+        SCANN_IMAGE_REVISION: ${SCANN_IMAGE_REVISION:-unknown}
+    image: ${SCANN_WORKER_IMAGE:-scann/native-worker:local}
+    container_name: scann-native-training-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SCANN_TRAINING_SERVER_URL: ${SCANN_TRAINING_SERVER_URL:-http://backend:8000}
+      SCANN_TRAINING_WORKER_TOKEN: ${SCANN_TRAINING_WORKER_TOKEN:?set SCANN_TRAINING_WORKER_TOKEN in docker/.env}
+      SCANN_TRAINING_WORKER_DATASET_ROOT: /data/dataset
+      SCANN_TRAINING_WORKER_OUTPUT_ROOT: /data/training-output
+      SCANN_TRAINING_WORKER_CHECKPOINT_DIR: /data/checkpoints
+      SCANN_TRAINING_WORKER_HOST_NAME: ${SCANN_TRAINING_WORKER_HOST_NAME:-training-worker}
+      SCANN_TRAINING_WORKER_ID: ${SCANN_TRAINING_WORKER_ID:-training-worker}
+      SCANN_TRAINING_WORKER_NAME: ${SCANN_TRAINING_WORKER_NAME:-training-worker}
+      SCANN_TRAINING_WORKER_DEVICE: ${SCANN_TRAINING_WORKER_DEVICE:-cuda}
+      SCANN_TRAINING_WORKER_DEVICE_LABEL: ${SCANN_TRAINING_WORKER_DEVICE_LABEL:-auto}
+      SCANN_TRAINING_WORKER_LOG_LEVEL: ${SCANN_TRAINING_WORKER_LOG_LEVEL:-INFO}
+      SCANN_TRAINING_WORKER_IDLE_SECONDS: ${SCANN_TRAINING_WORKER_IDLE_SECONDS:-10}
+      SCANN_TRAINING_WORKER_HEARTBEAT_SECONDS: ${SCANN_TRAINING_WORKER_HEARTBEAT_SECONDS:-60}
+      SCANN_TRAINING_WORKER_REQUEST_TIMEOUT_SECONDS: ${SCANN_TRAINING_WORKER_REQUEST_TIMEOUT_SECONDS:-120}
+      TORCH_HOME: /opt/torch-cache
+      TORCH_HUB: /opt/torch-cache/hub
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+    devices:
+      - nvidia.com/gpu=all
+    volumes:
+      - ./runtime/torch-cache:/opt/torch-cache
+      - ./runtime/training-output:/data/training-output
+      - ./runtime/scann-checkpoints:/data/checkpoints
+      - ./runtime/worker-logs/training:/var/log/scann
+      - ${SCANN_DATASET_DIR:-/mnt/disk1/scann-dataset}:/data/dataset:ro
+    networks:
+      scann-native-net:
+        aliases:
+          - training-worker
+    command: ["scann-training-worker", "--log-level=INFO"]
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'scann-training-worker' >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  scann-native-prelabel-worker:
+    profiles: ["with-prelabel"]
+    build:
+      context: ..
+      dockerfile: docker/worker/Dockerfile
+      args:
+        SCANN_IMAGE_REVISION: ${SCANN_IMAGE_REVISION:-unknown}
+    image: ${SCANN_WORKER_IMAGE:-scann/native-worker:local}
+    container_name: scann-native-prelabel-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SCANN_PRELABEL_SERVER_URL: ${SCANN_PRELABEL_SERVER_URL:-http://backend:8000}
+      SCANN_PRELABEL_WORKER_TOKEN: ${SCANN_PRELABEL_WORKER_TOKEN:?set SCANN_PRELABEL_WORKER_TOKEN in docker/.env}
+      SCANN_PRELABEL_WORKER_DATASET_ROOT: /data/dataset
+      SCANN_PRELABEL_WORKER_OUTPUT_ROOT: /data/prelabel-output
+      SCANN_PRELABEL_WORKER_MODEL_PATH: ${SCANN_PRELABEL_WORKER_MODEL_PATH:?set SCANN_PRELABEL_WORKER_MODEL_PATH in docker/.env}
+      SCANN_PRELABEL_WORKER_MODEL_VERSION: ${SCANN_PRELABEL_WORKER_MODEL_VERSION:?set SCANN_PRELABEL_WORKER_MODEL_VERSION in docker/.env}
+      SCANN_PRELABEL_WORKER_MODEL_ID: ${SCANN_PRELABEL_WORKER_MODEL_ID:?set SCANN_PRELABEL_WORKER_MODEL_ID in docker/.env}
+      SCANN_PRELABEL_WORKER_MODEL_FORMAT: ${SCANN_PRELABEL_WORKER_MODEL_FORMAT:-auto}
+      SCANN_PRELABEL_WORKER_MODEL_BACKBONE: ${SCANN_PRELABEL_WORKER_MODEL_BACKBONE:-auto}
+      SCANN_PRELABEL_WORKER_HOST_NAME: ${SCANN_PRELABEL_WORKER_HOST_NAME:-prelabel-worker}
+      SCANN_PRELABEL_WORKER_ID: ${SCANN_PRELABEL_WORKER_ID:-prelabel-worker}
+      SCANN_PRELABEL_WORKER_NAME: ${SCANN_PRELABEL_WORKER_NAME:-prelabel-worker}
+      SCANN_PRELABEL_WORKER_COMPUTE_DEVICE: ${SCANN_PRELABEL_WORKER_COMPUTE_DEVICE:-cuda}
+      SCANN_PRELABEL_WORKER_DEVICE_LABEL: ${SCANN_PRELABEL_WORKER_DEVICE_LABEL:-auto}
+      SCANN_PRELABEL_WORKER_LOG_LEVEL: ${SCANN_PRELABEL_WORKER_LOG_LEVEL:-INFO}
+      SCANN_PRELABEL_WORKER_IDLE_SECONDS: ${SCANN_PRELABEL_WORKER_IDLE_SECONDS:-5}
+      SCANN_PRELABEL_WORKER_HEARTBEAT_SECONDS: ${SCANN_PRELABEL_WORKER_HEARTBEAT_SECONDS:-30}
+      SCANN_PRELABEL_WORKER_REQUEST_TIMEOUT_SECONDS: ${SCANN_PRELABEL_WORKER_REQUEST_TIMEOUT_SECONDS:-60}
+      TORCH_HOME: /opt/torch-cache
+      TORCH_HUB: /opt/torch-cache/hub
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+    devices:
+      - nvidia.com/gpu=all
+    volumes:
+      - ./runtime/torch-cache:/opt/torch-cache
+      - ./runtime/prelabel-output:/data/prelabel-output
+      - ./runtime/worker-logs/prelabel:/var/log/scann
+      - ${SCANN_DATASET_DIR:-/mnt/disk1/scann-dataset}:/data/dataset:ro
+    networks:
+      scann-native-net:
+        aliases:
+          - prelabel-worker
+    command: ["scann-prelabel-worker", "--log-level=INFO"]
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'scann-prelabel-worker' >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+networks:
+  scann-native-net:
+    external: true
+    name: scann-native-net

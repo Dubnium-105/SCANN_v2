@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -290,9 +291,11 @@ class TrainingLifecycleService:
     @staticmethod
     def _normalize_model_id(value: str | None, *, model_version: str) -> str:
         normalized = str(value or "").strip()
-        if normalized:
-            return normalized
-        return f"{model_version}-{uuid.uuid4().hex[:8]}"
+        if not normalized:
+            normalized = f"{model_version}-{uuid.uuid4().hex[:8]}"
+        if normalized in {".", ".."} or _SAFE_FILENAME_RE.search(normalized):
+            raise ValueError("model id contains unsupported characters")
+        return normalized
 
     @property
     def _control_root(self) -> Path:
@@ -312,11 +315,49 @@ class TrainingLifecycleService:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def _model_directory(self, model_id: str) -> Path:
+        normalized = str(model_id or "").strip()
+        if not normalized or normalized in {".", ".."} or _SAFE_FILENAME_RE.search(normalized):
+            raise ValueError("model id contains unsupported characters")
+        return self._model_root / normalized
+
     def _relative_path(self, path: Path) -> str:
         try:
             return path.resolve().relative_to(self.dataset_root).as_posix()
         except ValueError:
             return str(path.resolve())
+
+    def _resolve_model_artifact_path(self, artifact_path: str, *, model_id: str | None = None) -> Path:
+        normalized = str(artifact_path or "").strip()
+        if not normalized:
+            raise ValueError("model artifact path is missing")
+        file_path = (self.dataset_root / normalized).resolve()
+        try:
+            file_path.relative_to(self.dataset_root)
+        except ValueError as exc:
+            raise ValueError("model artifact path is invalid") from exc
+        if model_id:
+            expected_root = self._model_directory(model_id).resolve()
+            try:
+                file_path.relative_to(expected_root)
+            except ValueError as exc:
+                raise ValueError("model artifact path is outside the model directory") from exc
+        if not file_path.is_file():
+            raise ValueError("model artifact file does not exist")
+        if file_path.stat().st_size <= 0:
+            raise ValueError("model artifact file is empty")
+        return file_path
+
+    @staticmethod
+    def _artifact_metadata(file_path: Path) -> dict[str, Any]:
+        digest = hashlib.sha256()
+        with file_path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return {
+            "size_bytes": file_path.stat().st_size,
+            "sha256": digest.hexdigest(),
+        }
 
     @staticmethod
     def _class_audit_for_document(
@@ -528,6 +569,10 @@ class TrainingLifecycleService:
         force_prelabel: bool = False,
         prelabel_task_ids: list[str] | None = None,
     ) -> PromoteModelResponse | None:
+        model = self._storage.get_registered_model(model_id)
+        if model is None:
+            return None
+        self._resolve_model_artifact_path(model.artifact_path, model_id=model.model_id)
         promoted = self._storage.promote_registered_model(model_id=model_id, promoted_by=promoted_by)
         if promoted is None:
             return None
@@ -634,10 +679,20 @@ class TrainingLifecycleService:
         safe_name = _SAFE_FILENAME_RE.sub("-", Path(filename or f"{job.model_id}.pt").name).strip("-.")
         if not safe_name:
             safe_name = f"{job.model_id}.pt"
-        artifact_dir = self._model_root / job.model_id
+        artifact_dir = self._model_directory(job.model_id)
         artifact_dir.mkdir(parents=True, exist_ok=True)
         artifact_path = artifact_dir / safe_name
-        artifact_path.write_bytes(content)
+        if not content:
+            raise ValueError("model artifact is empty")
+        temporary_path = artifact_dir / f".{safe_name}.{uuid.uuid4().hex}.tmp"
+        try:
+            with temporary_path.open("xb") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, artifact_path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
         return TrainingArtifactUploadResponse(
             job_id=job_id,
             artifact_path=self._relative_path(artifact_path),
@@ -645,9 +700,23 @@ class TrainingLifecycleService:
 
     def complete_job(self, *, job_id: str, payload: TrainingWorkerCompleteRequest) -> TrainingJobLifecycleResponse | None:
         pre_job = self._storage.get_training_job(job_id)
+        if (
+            pre_job is None
+            or pre_job.status != "claimed"
+            or pre_job.claim_worker_id != payload.worker_id
+        ):
+            return None
         snapshot = self._storage.get_dataset_snapshot(pre_job.snapshot_id) if pre_job is not None else None
         metrics = dict(payload.metrics or {})
         metadata = dict(payload.metadata or {})
+        artifact_file = self._resolve_model_artifact_path(
+            payload.artifact_path,
+            model_id=pre_job.model_id,
+        )
+        metadata["artifact"] = {
+            "path": self._relative_path(artifact_file),
+            **self._artifact_metadata(artifact_file),
+        }
         promotion_warnings = self._promotion_warnings_for_completed_job(
             job=pre_job,
             snapshot=snapshot,
@@ -709,14 +778,4 @@ class TrainingLifecycleService:
         model = self._storage.get_registered_model(model_id)
         if model is None:
             raise ValueError("model not found")
-        artifact_path = str(model.artifact_path or "").strip()
-        if not artifact_path:
-            raise ValueError("model artifact path is missing")
-        file_path = (self.dataset_root / artifact_path).resolve()
-        try:
-            file_path.relative_to(self.dataset_root)
-        except ValueError as exc:
-            raise ValueError("model artifact path is invalid") from exc
-        if not file_path.is_file():
-            raise ValueError("model artifact file does not exist")
-        return file_path
+        return self._resolve_model_artifact_path(model.artifact_path, model_id=model.model_id)

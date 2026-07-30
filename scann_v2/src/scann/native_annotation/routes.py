@@ -582,13 +582,16 @@ def promote_training_model(
         for item in str(task_ids or "").split(",")
         if item and item.strip()
     ]
-    response = get_training_service().promote_model(
-        model_id=model_id,
-        promoted_by=current_user.username,
-        enqueue_prelabels=enqueue_prelabels,
-        force_prelabel=force_prelabel,
-        prelabel_task_ids=parsed_task_ids or None,
-    )
+    try:
+        response = get_training_service().promote_model(
+            model_id=model_id,
+            promoted_by=current_user.username,
+            enqueue_prelabels=enqueue_prelabels,
+            force_prelabel=force_prelabel,
+            prelabel_task_ids=parsed_task_ids or None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if response is None:
         raise HTTPException(status_code=404, detail="Model not found")
     return response
@@ -681,7 +684,10 @@ def complete_training_job(
     payload: TrainingWorkerCompleteRequest,
     _worker_token: str = Depends(require_training_worker_token),
 ) -> TrainingJobLifecycleResponse:
-    response = get_training_service().complete_job(job_id=job_id, payload=payload)
+    try:
+        response = get_training_service().complete_job(job_id=job_id, payload=payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if response is None:
         raise HTTPException(status_code=409, detail="Training job is not claimed by this worker")
     return response

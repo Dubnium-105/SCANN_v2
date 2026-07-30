@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -175,6 +176,10 @@ def test_training_snapshot_job_complete_promote_and_enqueue_prelabels(tmp_path, 
     assert complete_payload["run"]["status"] == "completed"
     assert complete_payload["run"]["artifact_path"] == upload_payload["artifact_path"]
     assert complete_payload["model"]["model_id"] == "cls-v3-run-001"
+    artifact_metadata = complete_payload["model"]["metadata"]["artifact"]
+    assert artifact_metadata["path"] == upload_payload["artifact_path"]
+    assert artifact_metadata["size_bytes"] == len(b"mock-checkpoint")
+    assert artifact_metadata["sha256"] == hashlib.sha256(b"mock-checkpoint").hexdigest()
     assert complete_payload["model"]["is_promoted"] is False
     assert complete_payload["auto_promoted"] is False
     assert complete_payload["prelabel_enqueue"] is None
@@ -203,6 +208,16 @@ def test_training_snapshot_job_complete_promote_and_enqueue_prelabels(tmp_path, 
     )
     assert artifact.status_code == 200
     assert artifact.content == b"mock-checkpoint"
+
+    artifact_file = dataset_root / upload_payload["artifact_path"]
+    artifact_file.unlink()
+    rejected_promote = client.post(
+        "/api/training/models/cls-v3-run-001/promote",
+        headers=admin_headers,
+    )
+    assert rejected_promote.status_code == 409
+    assert rejected_promote.json()["detail"] == "model artifact file does not exist"
+    artifact_file.write_bytes(b"mock-checkpoint")
 
     manual_promote = client.post(
         "/api/training/models/cls-v3-run-001/promote",

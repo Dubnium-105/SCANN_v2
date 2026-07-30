@@ -17,6 +17,7 @@ from scann.core.dataset_storage import (
 )
 
 from .dataset_service import DatasetService, TaskSession
+from .worker_liveness import DEFAULT_WORKER_OFFLINE_SECONDS, effective_worker_status
 
 
 DEFAULT_PRELABEL_JOB_TIMEOUT_SECONDS = 15 * 60
@@ -184,6 +185,10 @@ class PrelabelService:
             30,
             int(os.getenv("SCANN_PRELABEL_JOB_TIMEOUT_SECONDS", str(DEFAULT_PRELABEL_JOB_TIMEOUT_SECONDS))),
         )
+        self.worker_offline_seconds = max(
+            30,
+            int(os.getenv("SCANN_WORKER_OFFLINE_SECONDS", str(DEFAULT_WORKER_OFFLINE_SECONDS))),
+        )
 
     def _task_sessions_by_id(self) -> dict[str, TaskSession]:
         return {task.task_id: task for task in self._dataset_service.list_tasks()}
@@ -348,15 +353,18 @@ class PrelabelService:
     def _worker_to_response(capabilities: dict[str, Any]) -> dict[str, Any]:
         return capabilities if isinstance(capabilities, dict) else {}
 
-    @classmethod
-    def _worker_record_to_response(cls, worker) -> PrelabelWorkerResponse:
+    def _worker_record_to_response(self, worker) -> PrelabelWorkerResponse:
         return PrelabelWorkerResponse(
             worker_id=worker.worker_id,
             display_name=worker.display_name,
             host_name=worker.host_name,
             device_label=worker.device_label,
-            status=worker.status,
-            capabilities=cls._worker_to_response(worker.capabilities or {}),
+            status=effective_worker_status(
+                worker.status,
+                worker.last_seen_at,
+                offline_after_seconds=self.worker_offline_seconds,
+            ),
+            capabilities=self._worker_to_response(worker.capabilities or {}),
             last_seen_at=worker.last_seen_at,
             last_claimed_at=worker.last_claimed_at,
             created_at=worker.created_at,
