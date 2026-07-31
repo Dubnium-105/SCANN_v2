@@ -143,7 +143,8 @@ def test_training_snapshot_job_complete_promote_and_enqueue_prelabels(tmp_path, 
     )
     assert snapshot_doc.status_code == 200
     payload = json.loads(snapshot_doc.content.decode("utf-8"))
-    assert payload["version"] == "2.3"
+    assert payload["version"] == "3.0"
+    assert payload["taxonomy_version"] == "scann-discovery-v1"
     assert payload["images"][0]["id"] == "PGC 17069"
 
     upload = client.post(

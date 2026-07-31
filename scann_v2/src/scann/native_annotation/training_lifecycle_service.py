@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import uuid
@@ -15,7 +16,20 @@ from scann.ai.class_balance import (
     merge_imbalance_config,
     sample_records_from_snapshot_document,
 )
+from scann.ai.dataset_partition import (
+    PARTITION_STRATEGY,
+    build_partition_manifest,
+    partition_task_from_image,
+    task_ids_for_splits,
+    verify_partition_manifest,
+)
+from scann.ai.taxonomy import (
+    TAXONOMY_VERSION,
+    build_taxonomy_audit,
+    enrich_annotation,
+)
 from scann.core.dataset_storage import (
+    DatasetPartitionRecord,
     DatasetSnapshotRecord,
     DatasetStorage,
     RegisteredModelRecord,
@@ -26,6 +40,9 @@ from scann.core.dataset_storage import (
 from .prelabel_service import PrelabelEnqueueRequest, PrelabelService
 
 
+logger = logging.getLogger(__name__)
+
+
 DEFAULT_TRAINING_JOB_TIMEOUT_SECONDS = 6 * 60 * 60
 _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -33,6 +50,10 @@ _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 class DatasetSnapshotCreateRequest(BaseModel):
     snapshot_name: Optional[str] = None
     task_ids: list[str] = Field(default_factory=list)
+    partition_id: Optional[str] = None
+    partition_splits: list[Literal["train", "validation"]] = Field(
+        default_factory=lambda: ["train", "validation"]
+    )
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -42,6 +63,37 @@ class DatasetSnapshotResponse(BaseModel):
     document_relpath: str
     task_count: int
     annotation_count: int
+    created_by: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class DatasetPartitionCreateRequest(BaseModel):
+    partition_name: str = Field(..., min_length=1)
+    task_ids: list[str] = Field(default_factory=list)
+    seed: int = 42
+    train_ratio: float = Field(0.70, gt=0.0)
+    validation_ratio: float = Field(0.15, gt=0.0)
+    test_ratio: float = Field(0.15, gt=0.0)
+    activate: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DatasetPartitionResponse(BaseModel):
+    partition_id: str
+    partition_name: str
+    manifest_relpath: str
+    manifest_sha256: str
+    taxonomy_version: str
+    split_strategy: str
+    seed: int
+    task_count: int
+    train_task_count: int
+    validation_task_count: int
+    test_task_count: int
+    is_active: bool = False
+    activated_at: Optional[str] = None
     created_by: Optional[str] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: Optional[str] = None
@@ -220,6 +272,30 @@ class TrainingLifecycleService:
         )
 
     @staticmethod
+    def _partition_to_response(
+        record: DatasetPartitionRecord,
+    ) -> DatasetPartitionResponse:
+        return DatasetPartitionResponse(
+            partition_id=record.partition_id,
+            partition_name=record.partition_name,
+            manifest_relpath=record.manifest_relpath,
+            manifest_sha256=record.manifest_sha256,
+            taxonomy_version=record.taxonomy_version,
+            split_strategy=record.split_strategy,
+            seed=record.seed,
+            task_count=record.task_count,
+            train_task_count=record.train_task_count,
+            validation_task_count=record.validation_task_count,
+            test_task_count=record.test_task_count,
+            is_active=record.is_active,
+            activated_at=record.activated_at,
+            created_by=record.created_by,
+            metadata=record.metadata or {},
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+        )
+
+    @staticmethod
     def _job_to_response(record: TrainingJobRecord) -> TrainingJobResponse:
         return TrainingJobResponse(
             job_id=record.job_id,
@@ -310,6 +386,12 @@ class TrainingLifecycleService:
         return path
 
     @property
+    def _partition_root(self) -> Path:
+        path = self._control_root / "partitions"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
     def _model_root(self) -> Path:
         path = self._control_root / "models"
         path.mkdir(parents=True, exist_ok=True)
@@ -385,6 +467,28 @@ class TrainingLifecycleService:
             raise ValueError("snapshot document is invalid")
         return payload
 
+    def _load_partition_manifest(
+        self,
+        partition: DatasetPartitionRecord,
+    ) -> dict[str, Any]:
+        file_path = (self.dataset_root / partition.manifest_relpath).resolve()
+        try:
+            file_path.relative_to(self.dataset_root)
+        except ValueError as exc:
+            raise ValueError("partition manifest path is invalid") from exc
+        if not file_path.is_file():
+            raise ValueError("partition manifest file does not exist")
+        payload = json.loads(file_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("partition manifest is invalid")
+        if str(payload.get("partition_id") or "") != partition.partition_id:
+            raise ValueError("partition manifest ID does not match registry")
+        if str(payload.get("manifest_sha256") or "") != partition.manifest_sha256:
+            raise ValueError("partition manifest checksum does not match registry")
+        if not verify_partition_manifest(payload):
+            raise ValueError("partition manifest checksum is invalid")
+        return payload
+
     @staticmethod
     def _promotion_warnings_from_model(model: RegisteredModelRecord) -> list[str]:
         warnings: list[str] = []
@@ -430,27 +534,239 @@ class TrainingLifecycleService:
             warnings.append("auto_promotion_suppressed_due_to_class_coverage")
         return list(dict.fromkeys(warnings))
 
-    def _build_snapshot_document(self, *, task_ids: list[str] | None = None) -> tuple[dict[str, Any], int, int]:
+    @staticmethod
+    def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+        temp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            temp_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            os.replace(temp_path, path)
+        finally:
+            if temp_path.exists():
+                temp_path.unlink()
+
+    def create_partition(
+        self,
+        *,
+        payload: DatasetPartitionCreateRequest,
+        created_by: str,
+    ) -> DatasetPartitionResponse:
         annotations_by_id = self._storage.list_current_annotations()
-        selected_ids = [task_id for task_id in dict.fromkeys(task_ids or []) if task_id]
+        selected_ids = [
+            task_id
+            for task_id in dict.fromkeys(payload.task_ids or [])
+            if task_id
+        ]
         if selected_ids:
-            images = [annotations_by_id[task_id] for task_id in selected_ids if task_id in annotations_by_id]
+            missing_ids = [
+                task_id
+                for task_id in selected_ids
+                if task_id not in annotations_by_id
+            ]
+            if missing_ids:
+                raise ValueError(
+                    f"{len(missing_ids)} partition tasks were not found"
+                )
+            images = [annotations_by_id[task_id] for task_id in selected_ids]
         else:
             images = list(annotations_by_id.values())
-        images = [item for item in images if isinstance(item.get("annotations"), list) and item.get("annotations")]
-        annotation_count = sum(len(item.get("annotations") or []) for item in images)
+        images = [
+            item
+            for item in images
+            if isinstance(item.get("annotations"), list)
+            and item.get("annotations")
+        ]
+        manifest = build_partition_manifest(
+            images,
+            partition_name=payload.partition_name,
+            seed=payload.seed,
+            train_ratio=payload.train_ratio,
+            validation_ratio=payload.validation_ratio,
+            test_ratio=payload.test_ratio,
+        )
+        partition_id = str(manifest["partition_id"])
+        manifest_sha256 = str(manifest["manifest_sha256"])
+        partition_path = self._partition_root / f"{partition_id}.json"
+        existing = self._storage.get_dataset_partition(partition_id)
+        if existing is not None:
+            if existing.manifest_sha256 != manifest_sha256:
+                raise ValueError("partition registry checksum conflict")
+            self._load_partition_manifest(existing)
+            if payload.activate and not existing.is_active:
+                existing = self._storage.activate_dataset_partition(partition_id)
+            return self._partition_to_response(existing)
+
+        created_manifest_file = False
+        if partition_path.exists():
+            existing_payload = json.loads(
+                partition_path.read_text(encoding="utf-8")
+            )
+            if (
+                not isinstance(existing_payload, dict)
+                or existing_payload.get("manifest_sha256") != manifest_sha256
+                or not verify_partition_manifest(existing_payload)
+            ):
+                raise ValueError("partition manifest file already exists with different content")
+        else:
+            self._write_json_atomic(partition_path, manifest)
+            created_manifest_file = True
+
+        split_summaries = manifest["audit"]["split_summaries"]
+        try:
+            record = self._storage.create_dataset_partition(
+                partition_id=partition_id,
+                partition_name=str(manifest["partition_name"]),
+                manifest_relpath=self._relative_path(partition_path),
+                manifest_sha256=manifest_sha256,
+                taxonomy_version=str(manifest["taxonomy_version"]),
+                split_strategy=str(manifest["strategy"]),
+                seed=int(manifest["seed"]),
+                task_count=int(manifest["audit"]["task_count"]),
+                train_task_count=int(split_summaries["train"]["task_count"]),
+                validation_task_count=int(
+                    split_summaries["validation"]["task_count"]
+                ),
+                test_task_count=int(split_summaries["test"]["task_count"]),
+                activate=payload.activate,
+                created_by=created_by,
+                metadata={
+                    **payload.metadata,
+                    "ratios": manifest["ratios"],
+                    "audit": manifest["audit"],
+                },
+            )
+        except Exception:
+            if created_manifest_file and partition_path.exists():
+                partition_path.unlink()
+            raise
+        return self._partition_to_response(record)
+
+    def list_partitions(
+        self,
+        *,
+        limit: int = 100,
+    ) -> list[DatasetPartitionResponse]:
+        return [
+            self._partition_to_response(item)
+            for item in self._storage.list_dataset_partitions(limit=limit)
+        ]
+
+    def _resolve_snapshot_selection(
+        self,
+        payload: DatasetSnapshotCreateRequest,
+    ) -> tuple[list[str], dict[str, Any]]:
+        if payload.task_ids and payload.partition_id:
+            raise ValueError("task_ids and partition_id cannot be used together")
+
+        partition: DatasetPartitionRecord | None = None
+        if payload.partition_id:
+            partition = self._storage.get_dataset_partition(payload.partition_id)
+            if partition is None:
+                raise ValueError("dataset partition not found")
+        else:
+            partition = self._storage.get_active_dataset_partition()
+
+        if payload.partition_id and partition is not None:
+            manifest = self._load_partition_manifest(partition)
+            split_names = list(dict.fromkeys(payload.partition_splits))
+            task_ids = task_ids_for_splits(manifest, split_names)
+            return task_ids, {
+                "partition_id": partition.partition_id,
+                "partition_manifest_sha256": partition.manifest_sha256,
+                "partition_splits": split_names,
+                "partition_strategy": partition.split_strategy,
+            }
+
+        if payload.task_ids:
+            selected_ids = [
+                task_id
+                for task_id in dict.fromkeys(payload.task_ids)
+                if task_id
+            ]
+            if partition is not None:
+                manifest = self._load_partition_manifest(partition)
+                gold_ids = set(task_ids_for_splits(manifest, ["test"]))
+                leaked = sorted(gold_ids.intersection(selected_ids))
+                if leaked:
+                    raise ValueError(
+                        f"snapshot selection contains {len(leaked)} gold-test tasks"
+                    )
+            return selected_ids, {}
+
+        if partition is not None:
+            manifest = self._load_partition_manifest(partition)
+            split_names = ["train", "validation"]
+            return task_ids_for_splits(manifest, split_names), {
+                "partition_id": partition.partition_id,
+                "partition_manifest_sha256": partition.manifest_sha256,
+                "partition_splits": split_names,
+                "partition_strategy": partition.split_strategy,
+            }
+        return [], {}
+
+    def _build_snapshot_document(
+        self,
+        *,
+        task_ids: list[str] | None = None,
+        selection_metadata: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], int, int]:
+        annotations_by_id = self._storage.list_current_annotations()
+        selected_ids = [
+            task_id
+            for task_id in dict.fromkeys(task_ids or [])
+            if task_id
+        ]
+        if selected_ids:
+            images = [
+                annotations_by_id[task_id]
+                for task_id in selected_ids
+                if task_id in annotations_by_id
+            ]
+        else:
+            images = list(annotations_by_id.values())
+        images = [
+            item
+            for item in images
+            if isinstance(item.get("annotations"), list)
+            and item.get("annotations")
+        ]
+        enriched_images: list[dict[str, Any]] = []
+        enriched_annotations: list[dict[str, Any]] = []
+        for image in images:
+            enriched_image = dict(image)
+            annotations = [
+                enrich_annotation(annotation)
+                for annotation in image.get("annotations") or []
+                if isinstance(annotation, dict)
+            ]
+            enriched_image["annotations"] = annotations
+            partition_task = partition_task_from_image(enriched_image)
+            if partition_task is not None:
+                enriched_image["night_key"] = partition_task.night_key
+                enriched_image["group_key"] = partition_task.group_key
+            enriched_image["taxonomy_version"] = TAXONOMY_VERSION
+            enriched_images.append(enriched_image)
+            enriched_annotations.extend(annotations)
+
+        annotation_count = len(enriched_annotations)
         document = {
-            "version": "2.3",
+            "version": "3.0",
             "storage": "training_snapshot",
-            "images": images,
+            "taxonomy_version": TAXONOMY_VERSION,
+            "images": enriched_images,
         }
         class_audit = self._class_audit_for_document(document)
+        taxonomy_audit = build_taxonomy_audit(enriched_annotations)
         document["metadata"] = {
             "class_audit": class_audit,
+            "taxonomy_audit": taxonomy_audit,
+            **(selection_metadata or {}),
         }
         return (
             document,
-            len(images),
+            len(enriched_images),
             annotation_count,
         )
 
@@ -460,17 +776,20 @@ class TrainingLifecycleService:
         payload: DatasetSnapshotCreateRequest,
         created_by: str,
     ) -> DatasetSnapshotResponse:
-        document, task_count, annotation_count = self._build_snapshot_document(task_ids=payload.task_ids)
+        selected_task_ids, selection_metadata = self._resolve_snapshot_selection(
+            payload
+        )
+        document, task_count, annotation_count = self._build_snapshot_document(
+            task_ids=selected_task_ids,
+            selection_metadata=selection_metadata,
+        )
         if task_count <= 0 or annotation_count <= 0:
             raise ValueError("no annotated tasks are available for snapshot")
 
         snapshot_id = uuid.uuid4().hex
         snapshot_name = str(payload.snapshot_name or "").strip() or f"snapshot-{snapshot_id[:8]}"
         snapshot_path = self._snapshot_root / f"{snapshot_id}.json"
-        snapshot_path.write_text(
-            json.dumps(document, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        self._write_json_atomic(snapshot_path, document)
         record = self._storage.create_dataset_snapshot(
             snapshot_id=snapshot_id,
             snapshot_name=snapshot_name,
@@ -480,8 +799,11 @@ class TrainingLifecycleService:
             created_by=created_by,
             metadata={
                 **payload.metadata,
-                "task_ids": list(payload.task_ids or []),
+                "task_ids": list(selected_task_ids),
+                "taxonomy_version": TAXONOMY_VERSION,
                 "class_audit": document.get("metadata", {}).get("class_audit", {}),
+                "taxonomy_audit": document.get("metadata", {}).get("taxonomy_audit", {}),
+                **selection_metadata,
             },
         )
         return self._snapshot_to_response(record)

@@ -39,6 +39,9 @@ dev = [
 
 [project.scripts]
 scann = "scann.app:main"
+scann-dataset-audit = "scann.core.dataset_audit:main"
+scann-dataset-migrate = "scann.core.dataset_migrate:main"
+scann-dataset-partition = "scann.ai.dataset_partition:main"
 scann-prelabel-worker = "scann.native_annotation.prelabel_worker:main"
 scann-training-worker = "scann.native_annotation.training_job_worker:main"
 

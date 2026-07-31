@@ -53,6 +53,8 @@ from .prelabel_service import (
 )
 from .task_lock_service import TaskLockService
 from .training_lifecycle_service import (
+    DatasetPartitionCreateRequest,
+    DatasetPartitionResponse,
     DatasetSnapshotCreateRequest,
     DatasetSnapshotResponse,
     PromoteModelResponse,
@@ -484,6 +486,33 @@ def fetch_prelabel_job_fits(
             raise HTTPException(status_code=404, detail=message) from exc
         raise HTTPException(status_code=409, detail=message) from exc
     return Response(content=file_path.read_bytes(), media_type="application/octet-stream")
+
+
+@api_router.post("/dataset-partitions", response_model=DatasetPartitionResponse)
+def create_dataset_partition(
+    payload: DatasetPartitionCreateRequest,
+    current_user: AuthUser = Depends(get_current_user),
+) -> DatasetPartitionResponse:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can create dataset partitions")
+    service = get_training_service()
+    try:
+        return service.create_partition(
+            payload=payload,
+            created_by=current_user.username,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@api_router.get("/dataset-partitions", response_model=list[DatasetPartitionResponse])
+def list_dataset_partitions(
+    limit: int = Query(100, ge=1, le=500),
+    current_user: AuthUser = Depends(get_current_user),
+) -> list[DatasetPartitionResponse]:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can list dataset partitions")
+    return get_training_service().list_partitions(limit=limit)
 
 
 @api_router.post("/training/snapshots", response_model=DatasetSnapshotResponse)

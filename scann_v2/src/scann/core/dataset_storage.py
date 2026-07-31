@@ -11,6 +11,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from scann.core.schema_migrations import apply_dataset_schema_migrations
+
 
 DEFAULT_DATASET_DB_FILE = "scann_dataset.db"
 _CAPABILITY_WILDCARDS = {"", "auto", "any", "*"}
@@ -179,6 +181,27 @@ class DatasetSnapshotRecord:
 
 
 @dataclass(frozen=True)
+class DatasetPartitionRecord:
+    partition_id: str
+    partition_name: str
+    manifest_relpath: str
+    manifest_sha256: str
+    taxonomy_version: str
+    split_strategy: str
+    seed: int
+    task_count: int = 0
+    train_task_count: int = 0
+    validation_task_count: int = 0
+    test_task_count: int = 0
+    is_active: bool = False
+    activated_at: str | None = None
+    created_by: str | None = None
+    metadata: dict[str, Any] | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+@dataclass(frozen=True)
 class TrainingJobRecord:
     job_id: str
     snapshot_id: str
@@ -254,9 +277,14 @@ class DatasetStorage:
         self,
         dataset_root: Path,
         db_file: str = DEFAULT_DATASET_DB_FILE,
+        db_path: Path | None = None,
     ) -> None:
         self.dataset_root = Path(dataset_root)
-        self.db_path = resolve_dataset_db_path(self.dataset_root, db_file=db_file)
+        self.db_path = (
+            Path(db_path).resolve()
+            if db_path is not None
+            else resolve_dataset_db_path(self.dataset_root, db_file=db_file)
+        )
 
     def _connect(self) -> sqlite3.Connection:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -683,6 +711,7 @@ class DatasetStorage:
         self._ensure_column(connection, "task_ai_prelabels", "model_backbone", "TEXT")
         self._ensure_column(connection, "task_ai_prelabels", "candidate_limit", "INTEGER")
         self._ensure_column(connection, "task_ai_prelabels", "confidence_threshold", "REAL")
+        apply_dataset_schema_migrations(connection)
         connection.commit()
         self._schema_ready_paths.add(db_key)
 
@@ -1552,11 +1581,14 @@ class DatasetStorage:
                 """
                 SELECT
                     t.task_id,
+                    t.field_key,
+                    t.capture_key,
                     t.current_source_view,
                     t.current_label,
                     t.current_detail_type,
                     t.current_ai_suggestion,
                     t.current_ai_confidence,
+                    rn.date_obs AS date_obs,
                     rev.metadata_json AS latest_metadata_json,
                     COALESCE(an.relpath, rn.relpath) AS new_path,
                     COALESCE(ao.relpath, ro.relpath) AS old_path,
@@ -1622,6 +1654,14 @@ class DatasetStorage:
             file_name = Path(paths["new"] or paths["old"] or task_id).name
             record: dict[str, Any] = {
                 "id": task_id,
+                "task_id": task_id,
+                "field_key": str(row["field_key"] or ""),
+                "capture_key": str(row["capture_key"] or ""),
+                "date_obs": (
+                    str(row["date_obs"])
+                    if row["date_obs"] is not None
+                    else None
+                ),
                 "file_name": file_name,
                 "file": paths["new"] or "",
                 "paths": paths,
@@ -1893,6 +1933,44 @@ class DatasetStorage:
             metadata=cls._load_json_dict(row["metadata_json"]),
             created_at=str(row["created_at"]) if row["created_at"] is not None else None,
             updated_at=str(row["updated_at"]) if row["updated_at"] is not None else None,
+        )
+
+    @classmethod
+    def _row_to_dataset_partition(cls, row: sqlite3.Row) -> DatasetPartitionRecord:
+        return DatasetPartitionRecord(
+            partition_id=str(row["partition_id"]),
+            partition_name=str(row["partition_name"]),
+            manifest_relpath=str(row["manifest_relpath"]),
+            manifest_sha256=str(row["manifest_sha256"]),
+            taxonomy_version=str(row["taxonomy_version"]),
+            split_strategy=str(row["split_strategy"]),
+            seed=int(row["seed"]),
+            task_count=int(row["task_count"] or 0),
+            train_task_count=int(row["train_task_count"] or 0),
+            validation_task_count=int(row["validation_task_count"] or 0),
+            test_task_count=int(row["test_task_count"] or 0),
+            is_active=bool(int(row["is_active"] or 0)),
+            activated_at=(
+                str(row["activated_at"])
+                if row["activated_at"] is not None
+                else None
+            ),
+            created_by=(
+                str(row["created_by"])
+                if row["created_by"] is not None
+                else None
+            ),
+            metadata=cls._load_json_dict(row["metadata_json"]),
+            created_at=(
+                str(row["created_at"])
+                if row["created_at"] is not None
+                else None
+            ),
+            updated_at=(
+                str(row["updated_at"])
+                if row["updated_at"] is not None
+                else None
+            ),
         )
 
     @classmethod
@@ -2824,6 +2902,190 @@ class DatasetStorage:
                 prelabel_job_id=prelabel.job_id,
             )
         return summaries
+
+    def create_dataset_partition(
+        self,
+        *,
+        partition_id: str,
+        partition_name: str,
+        manifest_relpath: str,
+        manifest_sha256: str,
+        taxonomy_version: str,
+        split_strategy: str,
+        seed: int,
+        task_count: int,
+        train_task_count: int,
+        validation_task_count: int,
+        test_task_count: int,
+        activate: bool,
+        created_by: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> DatasetPartitionRecord:
+        now = _utc_now_iso()
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            if activate:
+                connection.execute(
+                    """
+                    UPDATE dataset_partitions
+                    SET is_active = 0,
+                        updated_at = ?
+                    WHERE is_active = 1
+                    """,
+                    (now,),
+                )
+            connection.execute(
+                """
+                INSERT INTO dataset_partitions (
+                    partition_id,
+                    partition_name,
+                    manifest_relpath,
+                    manifest_sha256,
+                    taxonomy_version,
+                    split_strategy,
+                    seed,
+                    task_count,
+                    train_task_count,
+                    validation_task_count,
+                    test_task_count,
+                    is_active,
+                    activated_at,
+                    created_by,
+                    metadata_json,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    partition_id,
+                    partition_name,
+                    manifest_relpath,
+                    manifest_sha256,
+                    taxonomy_version,
+                    split_strategy,
+                    int(seed),
+                    int(task_count),
+                    int(train_task_count),
+                    int(validation_task_count),
+                    int(test_task_count),
+                    1 if activate else 0,
+                    now if activate else None,
+                    created_by,
+                    json.dumps(metadata or {}, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+            row = connection.execute(
+                """
+                SELECT *
+                FROM dataset_partitions
+                WHERE partition_id = ?
+                """,
+                (partition_id,),
+            ).fetchone()
+            connection.commit()
+        if row is None:
+            raise RuntimeError("failed to create dataset partition")
+        return self._row_to_dataset_partition(row)
+
+    def get_dataset_partition(
+        self,
+        partition_id: str,
+    ) -> DatasetPartitionRecord | None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            row = connection.execute(
+                """
+                SELECT *
+                FROM dataset_partitions
+                WHERE partition_id = ?
+                """,
+                (partition_id,),
+            ).fetchone()
+        return self._row_to_dataset_partition(row) if row is not None else None
+
+    def get_active_dataset_partition(self) -> DatasetPartitionRecord | None:
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            row = connection.execute(
+                """
+                SELECT *
+                FROM dataset_partitions
+                WHERE is_active = 1
+                ORDER BY activated_at DESC, rowid DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        return self._row_to_dataset_partition(row) if row is not None else None
+
+    def activate_dataset_partition(
+        self,
+        partition_id: str,
+    ) -> DatasetPartitionRecord:
+        now = _utc_now_iso()
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            exists = connection.execute(
+                """
+                SELECT 1
+                FROM dataset_partitions
+                WHERE partition_id = ?
+                """,
+                (partition_id,),
+            ).fetchone()
+            if exists is None:
+                raise ValueError("dataset partition not found")
+            connection.execute(
+                """
+                UPDATE dataset_partitions
+                SET is_active = 0,
+                    updated_at = ?
+                WHERE is_active = 1
+                """,
+                (now,),
+            )
+            connection.execute(
+                """
+                UPDATE dataset_partitions
+                SET is_active = 1,
+                    activated_at = ?,
+                    updated_at = ?
+                WHERE partition_id = ?
+                """,
+                (now, now, partition_id),
+            )
+            row = connection.execute(
+                """
+                SELECT *
+                FROM dataset_partitions
+                WHERE partition_id = ?
+                """,
+                (partition_id,),
+            ).fetchone()
+            connection.commit()
+        if row is None:
+            raise RuntimeError("failed to activate dataset partition")
+        return self._row_to_dataset_partition(row)
+
+    def list_dataset_partitions(
+        self,
+        *,
+        limit: int = 100,
+    ) -> list[DatasetPartitionRecord]:
+        normalized_limit = max(1, min(int(limit), 500))
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM dataset_partitions
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                (normalized_limit,),
+            ).fetchall()
+        return [self._row_to_dataset_partition(row) for row in rows]
 
     def create_dataset_snapshot(
         self,
