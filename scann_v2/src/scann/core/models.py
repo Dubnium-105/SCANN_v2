@@ -163,6 +163,18 @@ class CandidateFeatures:
     val_old: float = 0.0      # 旧图局部最大值
     extent: float = 0.0       # 填充率
     aspect_ratio: float = 1.0 # 长宽比
+    snr: float = 0.0
+    flux_difference: float = 0.0
+    fwhm: float = 0.0
+    ellipticity: float = 0.0
+    positive_fraction: float = 0.0
+    negative_fraction: float = 0.0
+    dipole_score: float = 0.0
+    background_gradient: float = 0.0
+    edge_distance: float = 0.0
+    saturated_fraction: float = 0.0
+    centroid_shift: float = 0.0
+    polarity: int = 1
 
 
 @dataclass
@@ -191,6 +203,8 @@ class Candidate:
     bbox_y: int | None = None
     bbox_width: int | None = None
     bbox_height: int | None = None
+    detector_score: float = 0.0
+    polarity: int = 1
 
 
 # ─────────────────────── AI 检测 ───────────────────────

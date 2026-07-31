@@ -388,6 +388,105 @@ class TestTrainingWorkerDetectionTask:
         assert "long_tail_score" in ckpt["best_metrics"]
         assert "selection_score" in ckpt["best_metrics"]
 
+    def test_hierarchical_frozen_training_writes_calibrated_checkpoint(
+        self,
+        tmp_path,
+    ):
+        records = []
+        for index in range(8):
+            records.append(
+                {
+                    "task_id": f"keep-{index}",
+                    "annotation_index": 0,
+                    "detail_type": "asteroid",
+                    "label": 0,
+                    "data": np.full(
+                        (3, 8, 8),
+                        0.2 + index * 0.01,
+                        dtype=np.float32,
+                    ),
+                    "quality_score": 1.0,
+                }
+            )
+        for index in range(8):
+            records.append(
+                {
+                    "task_id": f"reject-{index}",
+                    "annotation_index": 0,
+                    "detail_type": "noise",
+                    "label": 4,
+                    "data": np.full(
+                        (3, 8, 8),
+                        0.7 + index * 0.01,
+                        dtype=np.float32,
+                    ),
+                    "quality_score": 1.0,
+                }
+            )
+        train_idx = list(range(7)) + list(range(8, 15))
+        val_idx = [7, 15]
+        split_support = {
+            "train": [7, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0],
+            "val": [1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
+        }
+        class_support = build_class_audit(
+            records,
+            split_support=split_support,
+        )
+        output_path = tmp_path / "hierarchical.pth"
+        config = merge_imbalance_config(
+            {
+                "training_mode": "hierarchical_frozen",
+                "feature_encoder": "scann_test_identity",
+            }
+        )
+        worker = TrainingWorker(
+            {
+                "training_mode": "hierarchical_frozen",
+                "feature_encoder": "scann_test_identity",
+                "hierarchical_head": {
+                    "hidden_dim": 8,
+                    "dropout": 0.0,
+                },
+                "partition_id": "partition-1",
+                "partition_manifest_sha256": "a" * 64,
+                "seed": 7,
+            }
+        )
+
+        worker._run_hierarchical_feature_training(
+            dataset_root=tmp_path,
+            all_samples=records,
+            train_idx=train_idx,
+            val_idx=val_idx,
+            split_support=split_support,
+            class_support=class_support,
+            imbalance_config=config,
+            device=torch.device("cpu"),
+            epochs=1,
+            batch_size=4,
+            lr=0.01,
+            save_path=str(output_path),
+            backbone_name="scann_test_identity",
+        )
+
+        checkpoint = torch.load(
+            output_path,
+            map_location="cpu",
+            weights_only=False,
+        )
+        assert checkpoint["model_format"] == "hierarchical_v1"
+        assert checkpoint["partition_id"] == "partition-1"
+        assert checkpoint["gold_test_used_for_selection"] is False
+        assert set(checkpoint["temperatures"]) == {
+            "review_action",
+            "phenomenon_family",
+            "detail_type",
+        }
+        assert checkpoint["best_metrics"]["calibration"]["detail_type"][
+            "support"
+        ] == 2
+
     def test_long_tail_selection_score_and_log_summary_are_deduplicated(self):
         metrics = {
             "macro_f1_supported": 0.10,

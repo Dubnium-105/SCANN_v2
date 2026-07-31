@@ -8,8 +8,13 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from .active_learning_service import (
+    ActiveLearningBatchCreateRequest,
+    ActiveLearningBatchResponse,
+    ActiveLearningService,
+)
 from .annotation_service import (
     AnnotationHistoryResponse,
     AnnotationRevisionDetail,
@@ -34,6 +39,19 @@ from .auth_service import (
     register_user,
 )
 from .dataset_service import DatasetService, TaskSession
+from .deployment_service import (
+    CanaryDeploymentRequest,
+    DeploymentService,
+    ModelDeploymentResponse,
+    PromotionDeploymentRequest,
+    RollbackDeploymentRequest,
+    ShadowDeploymentRequest,
+)
+from .evaluation_service import (
+    EvaluationCreateRequest,
+    EvaluationResponse,
+    EvaluationService,
+)
 from .fits_engine import FITSEngine
 from .prelabel_service import (
     PrelabelEnqueueRequest,
@@ -72,8 +90,16 @@ from .training_lifecycle_service import (
     TrainingWorkerHeartbeatRequest,
     TrainingWorkerJobAckResponse,
 )
+from .review_feedback_service import (
+    ReviewFeedbackCreateRequest,
+    ReviewFeedbackResponse,
+    ReviewFeedbackService,
+)
 from scann.core.dataset_storage import DatasetStorage
 from scann.services.dataset_preprocess_service import DatasetPreprocessService
+from scann.services.operational_monitoring import (
+    aggregate_detection_metrics,
+)
 
 api_router = APIRouter(prefix="/api", tags=["api"])
 _fits_engines: Dict[str, FITSEngine] = {}
@@ -123,6 +149,10 @@ class DatasetPreprocessResponse(BaseModel):
     task_count: int
     total_task_count: int = 0
     align_failed_count: int = 0
+
+
+class DetectionMetricsAggregateRequest(BaseModel):
+    traces: list[dict[str, Any]] = Field(default_factory=list)
 
 
 def get_dataset_root() -> Path:
@@ -207,6 +237,22 @@ def get_prelabel_service() -> PrelabelService:
 
 def get_training_service() -> TrainingLifecycleService:
     return TrainingLifecycleService(dataset_root=get_dataset_root())
+
+
+def get_evaluation_service() -> EvaluationService:
+    return EvaluationService(dataset_root=get_dataset_root())
+
+
+def get_review_feedback_service() -> ReviewFeedbackService:
+    return ReviewFeedbackService(dataset_root=get_dataset_root())
+
+
+def get_active_learning_service() -> ActiveLearningService:
+    return ActiveLearningService(dataset_root=get_dataset_root())
+
+
+def get_deployment_service() -> DeploymentService:
+    return DeploymentService(dataset_root=get_dataset_root())
 
 
 def require_prelabel_worker_token(
@@ -486,6 +532,291 @@ def fetch_prelabel_job_fits(
             raise HTTPException(status_code=404, detail=message) from exc
         raise HTTPException(status_code=409, detail=message) from exc
     return Response(content=file_path.read_bytes(), media_type="application/octet-stream")
+
+
+@api_router.post(
+    "/evaluations",
+    response_model=EvaluationResponse,
+)
+def create_evaluation(
+    payload: EvaluationCreateRequest,
+    current_user: AuthUser = Depends(get_current_user),
+) -> EvaluationResponse:
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only admin can create evaluations",
+        )
+    try:
+        return get_evaluation_service().create(
+            payload,
+            created_by=current_user.username,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@api_router.get(
+    "/evaluations",
+    response_model=list[EvaluationResponse],
+)
+def list_evaluations(
+    limit: int = Query(100, ge=1, le=500),
+    current_user: AuthUser = Depends(get_current_user),
+) -> list[EvaluationResponse]:
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only admin can view evaluations",
+        )
+    return get_evaluation_service().list(limit=limit)
+
+
+@api_router.get(
+    "/evaluations/{run_id}",
+    response_model=EvaluationResponse,
+)
+def get_evaluation(
+    run_id: str,
+    current_user: AuthUser = Depends(get_current_user),
+) -> EvaluationResponse:
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only admin can view evaluations",
+        )
+    result = get_evaluation_service().get(run_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Evaluation not found")
+    return result
+
+
+@api_router.post(
+    "/review-feedback",
+    response_model=ReviewFeedbackResponse,
+)
+def create_review_feedback(
+    payload: ReviewFeedbackCreateRequest,
+    current_user: AuthUser = Depends(get_current_user),
+) -> ReviewFeedbackResponse:
+    try:
+        return get_review_feedback_service().create(
+            payload,
+            created_by=current_user.username,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@api_router.get(
+    "/review-feedback",
+    response_model=list[ReviewFeedbackResponse],
+)
+def list_review_feedback(
+    model_id: Optional[str] = Query(None),
+    task_id: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    current_user: AuthUser = Depends(get_current_user),
+) -> list[ReviewFeedbackResponse]:
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only admin can view aggregate review feedback",
+        )
+    return get_review_feedback_service().list(
+        model_id=model_id,
+        task_id=task_id,
+        limit=limit,
+    )
+
+
+@api_router.post(
+    "/active-learning/batches",
+    response_model=ActiveLearningBatchResponse,
+)
+def create_active_learning_batch(
+    payload: ActiveLearningBatchCreateRequest,
+    current_user: AuthUser = Depends(get_current_user),
+) -> ActiveLearningBatchResponse:
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only admin can create active-learning batches",
+        )
+    try:
+        return get_active_learning_service().create_batch(
+            payload,
+            created_by=current_user.username,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@api_router.get(
+    "/active-learning/batches",
+    response_model=list[ActiveLearningBatchResponse],
+)
+def list_active_learning_batches(
+    limit: int = Query(100, ge=1, le=500),
+    current_user: AuthUser = Depends(get_current_user),
+) -> list[ActiveLearningBatchResponse]:
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only admin can view active-learning batches",
+        )
+    return get_active_learning_service().list_batches(limit=limit)
+
+
+@api_router.get(
+    "/active-learning/batches/{batch_id}",
+    response_model=ActiveLearningBatchResponse,
+)
+def get_active_learning_batch(
+    batch_id: str,
+    current_user: AuthUser = Depends(get_current_user),
+) -> ActiveLearningBatchResponse:
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only admin can view active-learning batches",
+        )
+    result = get_active_learning_service().get_batch(batch_id)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Active-learning batch not found",
+        )
+    return result
+
+
+@api_router.get(
+    "/training/model-deployments",
+    response_model=list[ModelDeploymentResponse],
+)
+def list_model_deployments(
+    model_id: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    current_user: AuthUser = Depends(get_current_user),
+) -> list[ModelDeploymentResponse]:
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only admin can view model deployments",
+        )
+    return get_deployment_service().list(
+        model_id=model_id,
+        limit=limit,
+    )
+
+
+@api_router.post(
+    "/training/models/{model_id}/deployments/shadow",
+    response_model=ModelDeploymentResponse,
+)
+def start_model_shadow(
+    model_id: str,
+    payload: ShadowDeploymentRequest,
+    current_user: AuthUser = Depends(get_current_user),
+) -> ModelDeploymentResponse:
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only admin can start shadow deployments",
+        )
+    try:
+        return get_deployment_service().start_shadow(
+            model_id,
+            payload,
+            created_by=current_user.username,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@api_router.post(
+    "/training/models/{model_id}/deployments/canary",
+    response_model=ModelDeploymentResponse,
+)
+def start_model_canary(
+    model_id: str,
+    payload: CanaryDeploymentRequest,
+    current_user: AuthUser = Depends(get_current_user),
+) -> ModelDeploymentResponse:
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only admin can start canary deployments",
+        )
+    try:
+        return get_deployment_service().start_canary(
+            model_id,
+            payload,
+            created_by=current_user.username,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@api_router.post(
+    "/training/models/{model_id}/deployments/promote",
+    response_model=ModelDeploymentResponse,
+)
+def promote_model_deployment(
+    model_id: str,
+    payload: PromotionDeploymentRequest,
+    current_user: AuthUser = Depends(get_current_user),
+) -> ModelDeploymentResponse:
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only admin can promote model deployments",
+        )
+    try:
+        return get_deployment_service().promote(
+            model_id,
+            payload,
+            created_by=current_user.username,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@api_router.post(
+    "/training/models/{model_id}/deployments/rollback",
+    response_model=ModelDeploymentResponse,
+)
+def rollback_model_deployment(
+    model_id: str,
+    payload: RollbackDeploymentRequest,
+    current_user: AuthUser = Depends(get_current_user),
+) -> ModelDeploymentResponse:
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only admin can rollback model deployments",
+        )
+    try:
+        return get_deployment_service().rollback(
+            model_id,
+            payload,
+            created_by=current_user.username,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@api_router.post("/monitoring/detection/aggregate")
+def aggregate_detection_monitoring(
+    payload: DetectionMetricsAggregateRequest,
+    current_user: AuthUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only admin can aggregate detection monitoring",
+        )
+    return aggregate_detection_metrics(payload.traces)
 
 
 @api_router.post("/dataset-partitions", response_model=DatasetPartitionResponse)

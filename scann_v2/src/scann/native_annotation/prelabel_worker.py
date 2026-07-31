@@ -485,6 +485,11 @@ class DetectionPrelabelProcessor:
                 "candidate_count": len(annotations),
                 "raw_candidate_count": len(getattr(result, "candidates", []) or []),
                 "pipeline_error": getattr(result, "error", ""),
+                "detection_trace": (
+                    result.trace.to_dict()
+                    if getattr(result, "trace", None) is not None
+                    else None
+                ),
             },
         )
 

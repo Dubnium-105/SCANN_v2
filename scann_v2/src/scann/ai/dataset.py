@@ -246,6 +246,105 @@ class TripletArrayDataset:
         return counts
 
 
+class MultimodalRecordDataset:
+    """In-memory new/old/difference views plus masked structured features."""
+
+    def __init__(
+        self,
+        records: List[Dict[str, Any]],
+        *,
+        split: str = "train",
+        resize: int = 224,
+        feature_names: Tuple[str, ...] | None = None,
+        augment: bool = True,
+    ) -> None:
+        from scann.ai.multimodal_classifier import (
+            DEFAULT_STRUCTURED_FEATURE_NAMES,
+            build_structured_feature_matrix,
+        )
+
+        self.records = list(records)
+        self.split = str(split)
+        self.resize = int(resize)
+        self.feature_names = tuple(
+            feature_names or DEFAULT_STRUCTURED_FEATURE_NAMES
+        )
+        self.augment = bool(augment and split == "train")
+        self.structured_values, self.structured_mask = (
+            build_structured_feature_matrix(
+                self.records,
+                feature_names=self.feature_names,
+            )
+        )
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __getitem__(self, idx: int):
+        import torch
+        from torchvision.transforms import functional as TF
+
+        from scann.ai.hierarchical_classifier import (
+            taxonomy_target_indices,
+        )
+
+        record = self.records[idx]
+        raw_views = record.get("views")
+        if raw_views is None:
+            raw_views = record.get("data")
+        views = np.asarray(raw_views, dtype=np.float32)
+        if views.ndim == 3 and views.shape[0] == 3:
+            views = np.repeat(views[:, None, :, :], 3, axis=1)
+        if views.ndim != 4 or views.shape[:2] != (3, 3):
+            raise ValueError(
+                "multimodal record views must have shape [3,H,W] "
+                "or [3,3,H,W]"
+            )
+        images = torch.from_numpy(views).float()
+        images = TF.resize(
+            images.reshape(
+                9,
+                images.shape[-2],
+                images.shape[-1],
+            ),
+            [self.resize, self.resize],
+        ).reshape(3, 3, self.resize, self.resize)
+        if self.augment:
+            if random.random() < 0.5:
+                images = TF.hflip(images)
+            if random.random() < 0.5:
+                images = TF.vflip(images)
+            rotation = random.randint(0, 3)
+            if rotation:
+                images = torch.rot90(
+                    images,
+                    rotation,
+                    dims=[-2, -1],
+                )
+        targets = taxonomy_target_indices(record.get("detail_type"))
+        return {
+            "images": images,
+            "structured_values": torch.from_numpy(
+                self.structured_values[idx]
+            ).float(),
+            "structured_mask": torch.from_numpy(
+                self.structured_mask[idx]
+            ).bool(),
+            "review_action": torch.tensor(
+                targets["review_action"],
+                dtype=torch.long,
+            ),
+            "phenomenon_family": torch.tensor(
+                targets["phenomenon_family"],
+                dtype=torch.long,
+            ),
+            "detail_type": torch.tensor(
+                targets["detail_type"],
+                dtype=torch.long,
+            ),
+        }
+
+
 class FitsDetectionDataset:
     """FITS 全图检测数据集 (v2 新格式)
 

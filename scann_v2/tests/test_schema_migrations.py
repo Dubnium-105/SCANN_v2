@@ -31,6 +31,42 @@ def test_dataset_storage_records_schema_baseline(tmp_path):
     assert row[3]
 
 
+def test_dataset_storage_creates_discovery_lifecycle_tables(tmp_path):
+    storage = DatasetStorage(tmp_path)
+    storage.ensure_schema()
+
+    with sqlite3.connect(storage.db_path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'table'
+                """
+            ).fetchall()
+        }
+        migration_ids = [
+            row[0]
+            for row in connection.execute(
+                """
+                SELECT migration_id
+                FROM schema_migrations
+                ORDER BY migration_id
+                """
+            ).fetchall()
+        ]
+
+    assert migration_ids == [1, 2, 3]
+    assert {
+        "evaluation_runs",
+        "annotation_review_events",
+        "active_learning_batches",
+        "active_learning_items",
+        "model_deployments",
+    }.issubset(tables)
+
+
 def test_schema_migrations_are_idempotent():
     connection = sqlite3.connect(":memory:")
     calls = []

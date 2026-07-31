@@ -70,7 +70,7 @@ def test_empty_dataset_schema_audits_cleanly(tmp_path):
     assert report.status == "ok"
     assert report.integrity_check == ["ok"]
     assert report.foreign_key_violation_count == 0
-    assert report.counts["schema_migrations"] == 2
+    assert report.counts["schema_migrations"] == 3
     assert report.counts["dataset_partitions"] == 0
     assert report.files["dataset_partitions"]["invalid"] == 0
     assert storage.db_path.stat().st_mtime_ns == before_mtime

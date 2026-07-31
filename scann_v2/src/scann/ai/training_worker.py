@@ -60,7 +60,19 @@ from scann.ai.feature_classifier import (
     load_feature_encoder,
     preprocess_feature_batch,
 )
+from scann.ai.hierarchical_classifier import (
+    ACTION_CLASSES,
+    DETAIL_CLASSES,
+    FAMILY_CLASSES,
+    HIERARCHICAL_MODEL_FORMAT,
+    HierarchicalHeads,
+    calibration_metrics,
+    fit_temperature_scaling,
+    hierarchical_loss,
+    taxonomy_target_indices,
+)
 from scann.ai.model import ModelFormat, SCANNClassifier
+from scann.ai.taxonomy import TAXONOMY_VERSION
 from scann.ai.trainer import TrainConfig
 from scann.core.fits_annotation_storage import load_v2_annotation_document
 from scann.core.fits_io import read_fits
@@ -487,6 +499,12 @@ class TrainingWorker(QThread):
     def _resolve_training_mode(self, imbalance_config: dict[str, Any]) -> str:
         raw = self._params.get("training_mode", imbalance_config.get("training_mode", "end_to_end"))
         normalized = str(raw or "").strip().lower()
+        if normalized in {
+            "hierarchical_frozen",
+            "hierarchical_frozen_feature",
+            "hierarchical_v1",
+        }:
+            return "hierarchical_frozen"
         if normalized in {"frozen_feature_classifier", "frozen_features", "feature_head"}:
             return "frozen_feature_classifier"
         return "end_to_end"
@@ -1065,6 +1083,498 @@ class TrainingWorker(QThread):
         )
         self.finished.emit(save_path, final_metrics)
 
+    @staticmethod
+    def _hierarchical_validation_metrics(
+        outputs: dict[str, torch.Tensor],
+        targets: dict[str, torch.Tensor],
+    ) -> dict[str, Any]:
+        metrics: dict[str, Any] = {}
+        for prefix, logits_key, target_key, class_names in (
+            (
+                "action",
+                "review_action_logits",
+                "review_action",
+                ACTION_CLASSES,
+            ),
+            (
+                "family",
+                "phenomenon_family_logits",
+                "phenomenon_family",
+                FAMILY_CLASSES,
+            ),
+            (
+                "detail",
+                "detail_type_logits",
+                "detail_type",
+                DETAIL_CLASSES,
+            ),
+        ):
+            class_count = len(class_names)
+            target = targets[target_key]
+            mask = target >= 0
+            if not bool(mask.any()):
+                metrics[f"{prefix}_support"] = 0
+                continue
+            probabilities = torch.softmax(
+                outputs[logits_key][mask],
+                dim=1,
+            )
+            predictions = torch.argmax(probabilities, dim=1)
+            labels_np = target[mask].detach().cpu().numpy()
+            predictions_np = predictions.detach().cpu().numpy()
+            probabilities_np = probabilities.detach().cpu().numpy()
+            per_class: dict[str, Any] = {}
+            f1_values: list[float] = []
+            ap_values: list[float] = []
+            for class_index, class_name in enumerate(class_names):
+                actual = labels_np == class_index
+                predicted = predictions_np == class_index
+                support = int(actual.sum())
+                true_positive = int((actual & predicted).sum())
+                false_positive = int((~actual & predicted).sum())
+                false_negative = int((actual & ~predicted).sum())
+                precision = (
+                    true_positive / (true_positive + false_positive)
+                    if true_positive + false_positive
+                    else 0.0
+                )
+                recall = (
+                    true_positive / (true_positive + false_negative)
+                    if support
+                    else 0.0
+                )
+                f1 = (
+                    2.0 * precision * recall / (precision + recall)
+                    if precision + recall
+                    else 0.0
+                )
+                average_precision = 0.0
+                if support:
+                    try:
+                        from sklearn.metrics import average_precision_score
+
+                        average_precision = float(
+                            average_precision_score(
+                                actual.astype(np.int32),
+                                probabilities_np[:, class_index],
+                            )
+                        )
+                    except Exception:
+                        average_precision = 0.0
+                    f1_values.append(f1)
+                    ap_values.append(average_precision)
+                per_class[str(class_name)] = {
+                    "support": support,
+                    "precision": precision,
+                    "recall": recall,
+                    "f1": f1,
+                    "ap": average_precision,
+                }
+            metrics[f"{prefix}_support"] = int(mask.sum().item())
+            metrics[f"{prefix}_accuracy"] = float(
+                (labels_np == predictions_np).mean()
+            )
+            metrics[f"{prefix}_macro_f1"] = (
+                float(sum(f1_values) / len(f1_values))
+                if f1_values
+                else 0.0
+            )
+            metrics[f"{prefix}_macro_ap"] = (
+                float(sum(ap_values) / len(ap_values))
+                if ap_values
+                else 0.0
+            )
+            metrics[f"{prefix}_per_class"] = per_class
+
+        action_target = targets["review_action"]
+        action_mask = action_target >= 0
+        if bool(action_mask.any()):
+            action_probabilities = torch.softmax(
+                outputs["review_action_logits"][action_mask],
+                dim=1,
+            )
+            action_predictions = torch.argmax(
+                action_probabilities,
+                dim=1,
+            )
+            keep_index = ACTION_CLASSES.index("keep")
+            reject_index = ACTION_CLASSES.index("reject")
+            actual_keep = action_target[action_mask] == keep_index
+            predicted_keep = action_predictions == keep_index
+            actual_reject = action_target[action_mask] == reject_index
+            predicted_reject = action_predictions == reject_index
+            keep_true_positive = int(
+                (actual_keep & predicted_keep).sum().item()
+            )
+            metrics["keep_recall"] = (
+                keep_true_positive / int(actual_keep.sum().item())
+                if int(actual_keep.sum().item())
+                else None
+            )
+            metrics["keep_precision"] = (
+                keep_true_positive / int(predicted_keep.sum().item())
+                if int(predicted_keep.sum().item())
+                else None
+            )
+            reject_true_positive = int(
+                (actual_reject & predicted_reject).sum().item()
+            )
+            metrics["reject_recall"] = (
+                reject_true_positive / int(actual_reject.sum().item())
+                if int(actual_reject.sum().item())
+                else None
+            )
+        return metrics
+
+    def _run_hierarchical_feature_training(
+        self,
+        *,
+        dataset_root: Path,
+        all_samples: list[dict[str, Any]],
+        train_idx: list[int],
+        val_idx: list[int],
+        split_support: dict[str, list[int]],
+        class_support: dict[str, Any],
+        imbalance_config: dict[str, Any],
+        device: torch.device,
+        epochs: int,
+        batch_size: int,
+        lr: float,
+        save_path: str,
+        backbone_name: str,
+    ) -> None:
+        from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
+        import torch.optim as optim
+
+        feature_encoder_raw = str(
+            self._params.get("feature_encoder")
+            or imbalance_config.get("feature_encoder")
+            or "auto"
+        )
+        spec = feature_encoder_spec(feature_encoder_raw, device=device)
+        cache_enabled = bool(
+            self._params.get(
+                "feature_cache_enabled",
+                imbalance_config.get("feature_cache_enabled", True),
+            )
+        )
+        features, _flat_labels, qualities, cache_path, cache_hit = (
+            self._extract_or_load_features(
+                dataset_root,
+                all_samples,
+                feature_encoder=spec.name,
+                batch_size=batch_size,
+                device=device,
+                cache_enabled=cache_enabled,
+            )
+        )
+        target_rows = [
+            taxonomy_target_indices(record.get("detail_type"))
+            for record in all_samples
+        ]
+        targets_np = {
+            key: np.asarray(
+                [row[key] for row in target_rows],
+                dtype=np.int64,
+            )
+            for key in (
+                "review_action",
+                "phenomenon_family",
+                "detail_type",
+            )
+        }
+
+        def class_weights_for(
+            values: np.ndarray,
+            class_count: int,
+        ) -> list[float]:
+            observed = [
+                int(value)
+                for value in values.tolist()
+                if int(value) >= 0
+            ]
+            return compute_class_balanced_weights(
+                observed,
+                beta=float(imbalance_config["class_weight_beta"]),
+                clip=imbalance_config["class_weight_clip"],
+                class_count=class_count,
+            )
+
+        train_targets = {
+            key: values[train_idx]
+            for key, values in targets_np.items()
+        }
+        val_targets = {
+            key: torch.from_numpy(values[val_idx]).long().to(device)
+            for key, values in targets_np.items()
+        }
+        weight_values = {
+            "review_action": class_weights_for(
+                train_targets["review_action"],
+                len(ACTION_CLASSES),
+            ),
+            "phenomenon_family": class_weights_for(
+                train_targets["phenomenon_family"],
+                len(FAMILY_CLASSES),
+            ),
+            "detail_type": class_weights_for(
+                train_targets["detail_type"],
+                len(DETAIL_CLASSES),
+            ),
+        }
+        class_weight_tensors = {
+            key: torch.as_tensor(
+                value,
+                dtype=torch.float32,
+                device=device,
+            )
+            for key, value in weight_values.items()
+        }
+        detail_sample_weights = sampler_weights_from_class_weights(
+            train_targets["detail_type"].tolist(),
+            weight_values["detail_type"],
+            power=float(imbalance_config["sampler_power"]),
+            max_ratio=float(imbalance_config["sampler_max_ratio"]),
+        )
+        train_dataset = TensorDataset(
+            torch.from_numpy(features[train_idx]).float(),
+            torch.from_numpy(train_targets["review_action"]).long(),
+            torch.from_numpy(train_targets["phenomenon_family"]).long(),
+            torch.from_numpy(train_targets["detail_type"]).long(),
+            torch.from_numpy(qualities[train_idx]).float(),
+        )
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            sampler=WeightedRandomSampler(
+                torch.as_tensor(
+                    detail_sample_weights,
+                    dtype=torch.double,
+                ),
+                num_samples=len(train_dataset),
+                replacement=True,
+            ),
+            num_workers=0,
+        )
+        head_config = (
+            self._params.get("hierarchical_head")
+            if isinstance(self._params.get("hierarchical_head"), dict)
+            else {}
+        )
+        hidden_dim = int(head_config.get("hidden_dim") or 256)
+        dropout = float(head_config.get("dropout") or 0.1)
+        heads = HierarchicalHeads(
+            int(features.shape[1]),
+            hidden_dim=hidden_dim,
+            dropout=dropout,
+        ).to(device)
+        optimizer = optim.AdamW(
+            heads.parameters(),
+            lr=float(self._params.get("hierarchical_head_lr", lr) or lr),
+            weight_decay=float(
+                self._params.get("weight_decay", 1e-3) or 1e-3
+            ),
+        )
+        focal_gamma = float(
+            self._params.get("focal_gamma", 2.0) or 2.0
+        )
+        val_features = torch.from_numpy(
+            features[val_idx]
+        ).float().to(device)
+        best_score = -float("inf")
+        best_metrics: dict[str, Any] = {}
+        best_epoch = -1
+
+        for epoch in range(int(epochs)):
+            if self._should_stop:
+                break
+            heads.train()
+            total_loss = 0.0
+            seen = 0
+            for xb, action_y, family_y, detail_y, _quality in train_loader:
+                xb = xb.to(device)
+                batch_targets = {
+                    "review_action": action_y.to(device),
+                    "phenomenon_family": family_y.to(device),
+                    "detail_type": detail_y.to(device),
+                }
+                optimizer.zero_grad()
+                outputs = heads(xb)
+                losses = hierarchical_loss(
+                    outputs,
+                    batch_targets,
+                    focal_gamma=focal_gamma,
+                    class_weights=class_weight_tensors,
+                )
+                losses["loss"].backward()
+                optimizer.step()
+                total_loss += float(losses["loss"].item()) * xb.shape[0]
+                seen += xb.shape[0]
+            train_loss = total_loss / max(seen, 1)
+
+            heads.eval()
+            with torch.no_grad():
+                val_outputs = heads(val_features)
+                val_losses = hierarchical_loss(
+                    val_outputs,
+                    val_targets,
+                    focal_gamma=focal_gamma,
+                    class_weights=class_weight_tensors,
+                )
+            metrics = self._hierarchical_validation_metrics(
+                val_outputs,
+                val_targets,
+            )
+            selection_score = (
+                0.4 * float(metrics.get("action_macro_f1", 0.0))
+                + 0.2 * float(metrics.get("family_macro_f1", 0.0))
+                + 0.4 * float(metrics.get("detail_macro_f1", 0.0))
+            )
+            metrics["selection_metric"] = "hierarchical_composite"
+            metrics["selection_score"] = selection_score
+            metrics["val_loss"] = float(val_losses["loss"].item())
+            self.progress.emit(
+                epoch + 1,
+                int(epochs),
+                train_loss,
+                selection_score,
+            )
+            if selection_score <= best_score + 0.0001:
+                continue
+
+            temperatures = {
+                "review_action": fit_temperature_scaling(
+                    val_outputs["review_action_logits"],
+                    val_targets["review_action"],
+                ),
+                "phenomenon_family": fit_temperature_scaling(
+                    val_outputs["phenomenon_family_logits"],
+                    val_targets["phenomenon_family"],
+                ),
+                "detail_type": fit_temperature_scaling(
+                    val_outputs["detail_type_logits"],
+                    val_targets["detail_type"],
+                ),
+            }
+            calibrated = {
+                "review_action": calibration_metrics(
+                    torch.softmax(
+                        val_outputs["review_action_logits"]
+                        / temperatures["review_action"],
+                        dim=1,
+                    ),
+                    val_targets["review_action"],
+                ),
+                "phenomenon_family": calibration_metrics(
+                    torch.softmax(
+                        val_outputs["phenomenon_family_logits"]
+                        / temperatures["phenomenon_family"],
+                        dim=1,
+                    ),
+                    val_targets["phenomenon_family"],
+                ),
+                "detail_type": calibration_metrics(
+                    torch.softmax(
+                        val_outputs["detail_type_logits"]
+                        / temperatures["detail_type"],
+                        dim=1,
+                    ),
+                    val_targets["detail_type"],
+                ),
+            }
+            best_score = selection_score
+            best_epoch = epoch
+            best_metrics = {
+                **metrics,
+                "calibration": calibrated,
+            }
+            checkpoint = {
+                "model_format": HIERARCHICAL_MODEL_FORMAT,
+                "task_type": "classification",
+                "training_mode": "hierarchical_frozen",
+                "backbone": backbone_name,
+                "feature_encoder": spec.name,
+                "feature_dim": int(features.shape[1]),
+                "input_size": int(spec.input_size),
+                "feature_version": str(
+                    self._params.get(
+                        "feature_version",
+                        "frozen-image-feature-v1",
+                    )
+                ),
+                "taxonomy_version": str(
+                    self._params.get("taxonomy_version")
+                    or TAXONOMY_VERSION
+                ),
+                "partition_id": str(
+                    self._params.get("partition_id") or ""
+                ),
+                "partition_manifest_sha256": str(
+                    self._params.get("partition_manifest_sha256")
+                    or ""
+                ),
+                "head_config": {
+                    "hidden_dim": hidden_dim,
+                    "dropout": dropout,
+                },
+                "head_states": {
+                    "review_action_head": (
+                        heads.review_action_head.state_dict()
+                    ),
+                    "phenomenon_family_head": (
+                        heads.phenomenon_family_head.state_dict()
+                    ),
+                    "detail_type_head": (
+                        heads.detail_type_head.state_dict()
+                    ),
+                },
+                "classes": {
+                    "review_action": list(ACTION_CLASSES),
+                    "phenomenon_family": list(FAMILY_CLASSES),
+                    "detail_type": list(DETAIL_CLASSES),
+                },
+                "class_names": list(DETAIL_CLASSES),
+                "temperatures": temperatures,
+                "class_weights": weight_values,
+                "class_support": class_support,
+                "split_support": split_support,
+                "best_epoch": best_epoch,
+                "best_metrics": best_metrics,
+                "selection_metric": "hierarchical_composite",
+                "selection_score": selection_score,
+                "calibration_source": "validation",
+                "gold_test_used_for_selection": False,
+                "feature_cache_path": (
+                    str(cache_path) if cache_path is not None else ""
+                ),
+                "feature_cache_hit": bool(cache_hit),
+            }
+            torch.save(checkpoint, save_path)
+
+        if best_epoch < 0:
+            raise ValueError(
+                "hierarchical training did not produce a valid checkpoint"
+            )
+        final_metrics = {
+            **best_metrics,
+            "training_mode": "hierarchical_frozen",
+            "best_epoch": best_epoch,
+            "feature_encoder": spec.name,
+            "taxonomy_version": str(
+                self._params.get("taxonomy_version")
+                or TAXONOMY_VERSION
+            ),
+            "partition_id": str(
+                self._params.get("partition_id") or ""
+            ),
+            "gold_test_used_for_selection": False,
+            "promotion_warnings": class_support.get(
+                "promotion_warnings",
+                [],
+            ),
+        }
+        self.finished.emit(save_path, final_metrics)
+
     def run(self) -> None:
         """执行训练流程"""
         try:
@@ -1345,7 +1855,26 @@ class TrainingWorker(QThread):
                 )
             )
 
-            if self._resolve_training_mode(imbalance_config) == "frozen_feature_classifier":
+            training_mode = self._resolve_training_mode(imbalance_config)
+            if training_mode == "hierarchical_frozen":
+                self._run_hierarchical_feature_training(
+                    dataset_root=dataset_root,
+                    all_samples=all_samples,
+                    train_idx=train_idx,
+                    val_idx=val_idx,
+                    split_support=split_support,
+                    class_support=class_support,
+                    imbalance_config=imbalance_config,
+                    device=device,
+                    epochs=epochs,
+                    batch_size=batch_size,
+                    lr=lr,
+                    save_path=save_path,
+                    backbone_name=backbone_name,
+                )
+                return
+
+            if training_mode == "frozen_feature_classifier":
                 self._run_frozen_feature_training(
                     dataset_root=dataset_root,
                     all_samples=all_samples,

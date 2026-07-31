@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Callable, List, Optional
 
 import numpy as np
 
+from scann.ai.detection_trace import DetectionTrace, image_statistics
 from scann.core.candidate_detector import DetectionParams, detect_candidates
 from scann.core.image_aligner import align
 from scann.core.models import AlignResult, Candidate, Detection
@@ -30,6 +32,7 @@ class PipelineResult:
     candidates: List[Candidate]
     align_result: Optional[AlignResult] = None
     error: str = ""
+    trace: DetectionTrace | None = None
 
 
 class DetectionPipeline:
@@ -67,6 +70,28 @@ class DetectionPipeline:
         image_path: str | None = None,
     ) -> PipelineResult:
         """处理单对图像。"""
+        trace = DetectionTrace(
+            pair_name=pair_name,
+            detector_version=str(
+                getattr(self.detection_params, "detector", "legacy")
+                or "legacy"
+            ),
+            detection_mode=self.detection_mode,
+        )
+        trace.image_stats = {
+            "new": image_statistics(new_data),
+            "old": image_statistics(old_data),
+        }
+        trace.thresholds = {
+            "legacy_threshold": int(self.detection_params.thresh),
+            "significance_sigma": float(
+                getattr(self.detection_params, "significance_sigma", 5.0)
+            ),
+            "candidate_topk": int(self.detection_params.topk),
+            "raw_candidate_limit": int(
+                getattr(self.detection_params, "raw_candidate_limit", 500)
+            ),
+        }
         ai_available = (
             self.inference_engine is not None
             and self.inference_engine.is_ready
@@ -94,13 +119,33 @@ class DetectionPipeline:
             align_result = self._align_images(new_data, old_data)
             if align_result.success:
                 aligned_old = align_result.aligned_old
+                trace.alignment = {
+                    "attempted": True,
+                    "success": True,
+                    "dx": float(getattr(align_result, "dx", 0.0) or 0.0),
+                    "dy": float(getattr(align_result, "dy", 0.0) or 0.0),
+                }
             else:
+                error = f"对齐失败: {align_result.error_message}"
+                trace.alignment = {
+                    "attempted": True,
+                    "success": False,
+                    "error": str(align_result.error_message or ""),
+                }
+                trace.finish(error=error)
                 return PipelineResult(
                     pair_name=pair_name,
                     candidates=[],
                     align_result=align_result,
-                    error=f"对齐失败: {align_result.error_message}",
+                    error=error,
+                    trace=trace,
                 )
+        else:
+            trace.alignment = {
+                "attempted": False,
+                "success": True,
+                "reason": "skip_align",
+            }
 
         if aligned_old is None:
             aligned_old = old_data
@@ -123,7 +168,11 @@ class DetectionPipeline:
 
         candidates: List[Candidate]
         if mode == "full_image":
-            candidates = self._dense_full_image_detect(new_data, aligned_old)
+            candidates = self._dense_full_image_detect(
+                new_data,
+                aligned_old,
+                trace=trace,
+            )
             logger.info("AI全图检测: 发现 %d 个候选体", len(candidates))
         elif mode == "hybrid":
             candidates = self._hybrid_detect(
@@ -132,6 +181,7 @@ class DetectionPipeline:
                 ai_new_data,
                 ai_old_data,
                 ai_available=ai_available,
+                trace=trace,
             )
         else:
             candidates = self._patch_detect(
@@ -140,22 +190,27 @@ class DetectionPipeline:
                 ai_new_data,
                 ai_old_data,
                 ai_available=ai_available,
+                trace=trace,
             )
 
         if self.exclusion_service:
+            trace.record_stage("pre_exclusion", len(candidates))
             candidates = self.exclusion_service.check_candidates(
                 candidates,
                 header=header,
                 image_path=image_path,
             )
             candidates = self._exclude_known(candidates)
+            trace.record_stage("post_exclusion", len(candidates))
 
         candidates.sort(key=lambda candidate: candidate.ai_score, reverse=True)
+        trace.finish(candidates=candidates)
 
         return PipelineResult(
             pair_name=pair_name,
             candidates=candidates,
             align_result=align_result,
+            trace=trace,
         )
 
     def _align_images(self, new_data: np.ndarray, old_data: np.ndarray) -> AlignResult:
@@ -188,13 +243,18 @@ class DetectionPipeline:
         ai_old_data: np.ndarray,
         *,
         ai_available: bool,
+        trace: DetectionTrace | None = None,
     ) -> List[Candidate]:
         order = [self.hybrid_primary_mode, "patch" if self.hybrid_primary_mode == "full_image" else "full_image"]
         fallback_reason = ""
 
         for stage in order:
             if stage == "full_image":
-                dense_candidates, dense_status = self._dense_full_image_detect_with_status(new_data, old_data)
+                dense_candidates, dense_status = self._dense_full_image_detect_with_status(
+                    new_data,
+                    old_data,
+                    trace=trace,
+                )
                 if dense_status == "ok":
                     if self._is_hybrid_low_confidence(dense_candidates):
                         dense_threshold = self._get_hybrid_low_confidence_threshold()
@@ -202,6 +262,8 @@ class DetectionPipeline:
                         fallback_reason = (
                             f"low_confidence(max={best_score:.4f}, threshold={dense_threshold:.4f})"
                         )
+                        if trace is not None:
+                            trace.record_fallback(fallback_reason)
                         logger.info("hybrid 回退 patch: %s", fallback_reason)
                         continue
                     logger.info(
@@ -212,6 +274,8 @@ class DetectionPipeline:
                     return dense_candidates
 
                 fallback_reason = dense_status
+                if trace is not None:
+                    trace.record_fallback(dense_status)
                 logger.info(
                     "hybrid full_image 阶段未产出结果: status=%s, order=%s",
                     dense_status,
@@ -225,6 +289,7 @@ class DetectionPipeline:
                 ai_new_data,
                 ai_old_data,
                 ai_available=ai_available,
+                trace=trace,
             )
             if patch_candidates:
                 logger.info(
@@ -236,6 +301,8 @@ class DetectionPipeline:
                 return patch_candidates
 
             fallback_reason = "patch_empty"
+            if trace is not None:
+                trace.record_fallback(fallback_reason)
             logger.info(
                 "hybrid patch 阶段未产出结果: order=%s",
                 "->".join(order),
@@ -256,12 +323,20 @@ class DetectionPipeline:
         ai_old_data: np.ndarray,
         *,
         ai_available: bool,
+        trace: DetectionTrace | None = None,
     ) -> List[Candidate]:
+        stage_started = time.perf_counter()
         candidates = self._detect_candidates(
             new_data,
             old_data,
             params=self.detection_params,
         )
+        if trace is not None:
+            trace.record_stage(
+                "standard",
+                len(candidates),
+                duration_ms=(time.perf_counter() - stage_started) * 1000.0,
+            )
         logger.info(
             "CV检测 (标准参数): 发现 %d 个候选体 (patch_size=%d)",
             len(candidates),
@@ -270,11 +345,19 @@ class DetectionPipeline:
 
         if not candidates and ai_available:
             relaxed_params = self._build_relaxed_params()
+            stage_started = time.perf_counter()
             candidates = self._detect_candidates(
                 new_data,
                 old_data,
                 params=relaxed_params,
             )
+            if trace is not None:
+                trace.record_stage(
+                    "relaxed",
+                    len(candidates),
+                    duration_ms=(time.perf_counter() - stage_started) * 1000.0,
+                )
+                trace.record_fallback("standard_empty")
             logger.info(
                 "CV检测 (放宽参数): 发现 %d 个候选体 (thresh=%d, kill_flat=%s, kill_dipole=%s, topk=%d)",
                 len(candidates),
@@ -285,7 +368,15 @@ class DetectionPipeline:
             )
 
         if not candidates and ai_available:
+            stage_started = time.perf_counter()
             candidates = self._sliding_window_detect(ai_new_data, ai_old_data)
+            if trace is not None:
+                trace.record_stage(
+                    "sliding",
+                    len(candidates),
+                    duration_ms=(time.perf_counter() - stage_started) * 1000.0,
+                )
+                trace.record_fallback("relaxed_empty")
             logger.info("AI滑动窗口检测: 发现 %d 个候选体", len(candidates))
 
         if ai_available and candidates:
@@ -294,8 +385,18 @@ class DetectionPipeline:
                 return candidates
 
             threshold = engine.threshold
+            before_ai = len(candidates)
+            stage_started = time.perf_counter()
             candidates = self._ai_score(candidates, ai_new_data, ai_old_data)
             candidates = [candidate for candidate in candidates if candidate.ai_score >= threshold]
+            if trace is not None:
+                trace.record_stage("pre_ai", before_ai)
+                trace.record_stage(
+                    "post_ai",
+                    len(candidates),
+                    duration_ms=(time.perf_counter() - stage_started) * 1000.0,
+                )
+                trace.thresholds["ai_confidence"] = float(threshold)
             logger.info(
                 "AI过滤后: %d 个候选体 (阈值=%.4f)",
                 len(candidates),
@@ -320,22 +421,37 @@ class DetectionPipeline:
         self,
         new_data: np.ndarray,
         old_data: np.ndarray,
+        *,
+        trace: DetectionTrace | None = None,
     ) -> List[Candidate]:
-        candidates, _ = self._dense_full_image_detect_with_status(new_data, old_data)
+        candidates, _ = self._dense_full_image_detect_with_status(
+            new_data,
+            old_data,
+            trace=trace,
+        )
         return candidates
 
     def _dense_full_image_detect_with_status(
         self,
         new_data: np.ndarray,
         old_data: np.ndarray,
+        *,
+        trace: DetectionTrace | None = None,
     ) -> tuple[List[Candidate], str]:
+        stage_started = time.perf_counter()
         if not self.inference_engine or not self.inference_engine.is_ready:
             logger.warning("full_image 检测跳过：AI 模型不可用")
+            if trace is not None:
+                trace.record_stage("dense", 0)
+                trace.record_fallback("model_unavailable")
             return [], "model_unavailable"
 
         detect_fn = getattr(self.inference_engine, "detect_dense_full_image", None)
         if not callable(detect_fn):
             logger.warning("full_image 检测跳过：推理引擎不支持 detect_dense_full_image")
+            if trace is not None:
+                trace.record_stage("dense", 0)
+                trace.record_fallback("unsupported_dense_api")
             return [], "unsupported_dense_api"
 
         try:
@@ -347,6 +463,13 @@ class DetectionPipeline:
             )
         except Exception:
             logger.exception("full_image 检测执行失败")
+            if trace is not None:
+                trace.record_stage(
+                    "dense",
+                    0,
+                    duration_ms=(time.perf_counter() - stage_started) * 1000.0,
+                )
+                trace.record_fallback("dense_exception")
             return [], "exception"
 
         candidates: List[Candidate] = []
@@ -365,7 +488,19 @@ class DetectionPipeline:
                 )
             )
         if not candidates:
+            if trace is not None:
+                trace.record_stage(
+                    "dense",
+                    0,
+                    duration_ms=(time.perf_counter() - stage_started) * 1000.0,
+                )
             return [], "empty"
+        if trace is not None:
+            trace.record_stage(
+                "dense",
+                len(candidates),
+                duration_ms=(time.perf_counter() - stage_started) * 1000.0,
+            )
         return candidates, "ok"
 
     def _detect_candidates(
@@ -391,6 +526,35 @@ class DetectionPipeline:
             aspect_ratio_max=5.0,
             extent_max=0.95,
             topk=self.detection_params.topk * 3,
+            detector=str(
+                getattr(self.detection_params, "detector", "legacy")
+                or "legacy"
+            ),
+            significance_sigma=max(
+                2.5,
+                float(
+                    getattr(
+                        self.detection_params,
+                        "significance_sigma",
+                        5.0,
+                    )
+                )
+                * 0.75,
+            ),
+            significance_morphology=bool(
+                getattr(
+                    self.detection_params,
+                    "significance_morphology",
+                    True,
+                )
+            ),
+            raw_candidate_limit=int(
+                getattr(
+                    self.detection_params,
+                    "raw_candidate_limit",
+                    500,
+                )
+            ),
         )
 
     def _sliding_window_detect(
@@ -454,7 +618,13 @@ class DetectionPipeline:
             patches.append(patch_3ch)
 
         try:
-            details = self.inference_engine.classify_patches_detailed(patches)
+            details = self.inference_engine.classify_patches_detailed(
+                patches,
+                structured_features=[
+                    vars(candidate.features)
+                    for candidate in candidates
+                ],
+            )
         except Exception:
             return candidates
 

@@ -58,6 +58,8 @@ class ModelFormat(Enum):
     """
     V1_CLASSIFIER = "v1_classifier"
     V2_CLASSIFIER = "v2_classifier"
+    HIERARCHICAL_V1 = "hierarchical_v1"
+    MULTIMODAL_HIERARCHICAL_V1 = "multimodal_hierarchical_v1"
     AUTO = "auto"
 
 

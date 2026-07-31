@@ -2819,6 +2819,56 @@ class DatasetStorage:
         ]
         return self._row_to_ai_prelabel(row), annotations
 
+    def get_task_prelabel_by_id(
+        self,
+        *,
+        task_id: str,
+        prelabel_id: str,
+    ) -> tuple[TaskAIPrelabelRecord, list[dict[str, Any]]] | None:
+        """Return an exact prelabel, including accepted/hidden historical rows."""
+
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            row = connection.execute(
+                """
+                SELECT *
+                FROM task_ai_prelabels
+                WHERE task_id = ? AND prelabel_id = ?
+                LIMIT 1
+                """,
+                (task_id, prelabel_id),
+            ).fetchone()
+            if row is None:
+                return None
+            boxes = connection.execute(
+                """
+                SELECT
+                    box_index, x, y, width, height,
+                    label, detail_type, confidence
+                FROM task_ai_prelabel_boxes
+                WHERE prelabel_id = ?
+                ORDER BY box_index ASC
+                """,
+                (prelabel_id,),
+            ).fetchall()
+        annotations = [
+            {
+                "x": float(box["x"]),
+                "y": float(box["y"]),
+                "width": float(box["width"]),
+                "height": float(box["height"]),
+                "label": box["label"],
+                "detail_type": box["detail_type"],
+                "confidence": (
+                    float(box["confidence"])
+                    if box["confidence"] is not None
+                    else 1.0
+                ),
+            }
+            for box in boxes
+        ]
+        return self._row_to_ai_prelabel(row), annotations
+
     def list_task_prelabel_summaries(self, task_ids: Iterable[str]) -> dict[str, TaskPrelabelSummaryRecord]:
         normalized_ids = [task_id for task_id in dict.fromkeys(task_ids) if task_id]
         if not normalized_ids:

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
-from typing import List, Optional, Sequence
+from typing import Any, List, Mapping, Optional, Sequence
 
 import numpy as np
 import torch
@@ -20,6 +20,16 @@ from torchvision import transforms
 
 from scann.ai.device_utils import get_mixed_precision_context, resolve_device
 from scann.ai.feature_classifier import FrozenFeaturePatchClassifier
+from scann.ai.hierarchical_classifier import (
+    HIERARCHICAL_MODEL_FORMAT,
+    FrozenFeatureHierarchicalClassifier,
+    hierarchical_predictions,
+)
+from scann.ai.multimodal_classifier import (
+    MULTIMODAL_MODEL_FORMAT,
+    SharedEncoderLateFusionClassifier,
+    build_structured_feature_matrix,
+)
 from scann.core.annotation_models import DETAIL_TYPE_TO_LABEL, DetailType
 from scann.core.models import Candidate, Detection, MarkerType
 
@@ -120,6 +130,50 @@ class InferenceEngine:
                 self.model = FrozenFeaturePatchClassifier.from_checkpoint(ckpt, device=self.device)
                 self.model.eval()
                 _logger.info("浣跨敤 frozen feature checkpoint 鍔犺浇: encoder=%s", ckpt.get("feature_encoder"))
+                return
+
+            if (
+                str(ckpt.get("model_format") or "").strip().lower()
+                == HIERARCHICAL_MODEL_FORMAT
+            ):
+                self._model_format = HIERARCHICAL_MODEL_FORMAT
+                self._model_backbone = str(
+                    ckpt.get("feature_encoder")
+                    or "hierarchical_frozen_encoder"
+                )
+                if ckpt.get("threshold") is not None:
+                    self.threshold = float(ckpt["threshold"])
+                self.model = FrozenFeatureHierarchicalClassifier.from_checkpoint(
+                    ckpt,
+                    device=self.device,
+                )
+                self.model.eval()
+                _logger.info(
+                    "使用 hierarchical checkpoint 加载: encoder=%s",
+                    ckpt.get("feature_encoder"),
+                )
+                return
+
+            if (
+                str(ckpt.get("model_format") or "").strip().lower()
+                == MULTIMODAL_MODEL_FORMAT
+            ):
+                self._model_format = MULTIMODAL_MODEL_FORMAT
+                self._model_backbone = str(
+                    ckpt.get("feature_encoder")
+                    or "multimodal_frozen_encoder"
+                )
+                self.model = (
+                    SharedEncoderLateFusionClassifier.from_checkpoint(
+                        ckpt,
+                        device=self.device,
+                    )
+                )
+                self.model.eval()
+                _logger.info(
+                    "使用 multimodal hierarchical checkpoint 加载: encoder=%s",
+                    ckpt.get("feature_encoder"),
+                )
                 return
 
             # 确定实际的模型格式
@@ -306,6 +360,9 @@ class InferenceEngine:
         patches: List[np.ndarray],
         normalize_mean: Optional[tuple] = None,
         normalize_std: Optional[tuple] = None,
+        structured_features: Optional[
+            Sequence[Mapping[str, Any]]
+        ] = None,
     ) -> List[dict[str, object]]:
         if not self.is_ready:
             raise RuntimeError("模型未加载")
@@ -323,13 +380,72 @@ class InferenceEngine:
 
         norm = transforms.Normalize(list(normalize_mean), list(normalize_std))
         resize = transforms.Resize((224, 224), antialias=True)
-        uses_internal_preprocessing = bool(getattr(self.model, "uses_internal_preprocessing", False))
+        internal_preprocessing_flag = getattr(
+            self.model,
+            "uses_internal_preprocessing",
+            False,
+        )
+        uses_internal_preprocessing = (
+            bool(internal_preprocessing_flag)
+            if isinstance(internal_preprocessing_flag, (bool, np.bool_))
+            else False
+        )
+        multimodal_flag = getattr(self.model, "is_multimodal", False)
+        is_multimodal = (
+            bool(multimodal_flag)
+            if isinstance(multimodal_flag, (bool, np.bool_))
+            else False
+        )
 
         all_details: list[dict[str, object]] = []
         batch_size = self.config.batch_size
 
         for i in range(0, len(patches), batch_size):
             batch_raw = patches[i : i + batch_size]
+            if is_multimodal:
+                views: list[torch.Tensor] = []
+                for patch in batch_raw:
+                    tensor = torch.from_numpy(patch).float()
+                    if tensor.ndim != 3 or tensor.shape[0] != 3:
+                        raise ValueError(
+                            "multimodal classifier expects "
+                            "[new,old,difference] patch channels"
+                        )
+                    views.append(
+                        torch.stack(
+                            [
+                                tensor[index].unsqueeze(0).repeat(3, 1, 1)
+                                for index in range(3)
+                            ],
+                            dim=0,
+                        )
+                    )
+                batch_records = (
+                    list(structured_features[i : i + len(batch_raw)])
+                    if structured_features is not None
+                    else [{} for _ in batch_raw]
+                )
+                feature_names = tuple(
+                    self.model.feature_normalization.feature_names
+                )
+                structured_values, structured_mask = (
+                    build_structured_feature_matrix(
+                        batch_records,
+                        feature_names=feature_names,
+                    )
+                )
+                logits = self.model(
+                    torch.stack(views).to(self.device),
+                    torch.from_numpy(structured_values)
+                    .float()
+                    .to(self.device),
+                    torch.from_numpy(structured_mask)
+                    .bool()
+                    .to(self.device),
+                )
+                all_details.extend(hierarchical_predictions(logits))
+                continue
+
             tensors = []
             for p in batch_raw:
                 t = torch.from_numpy(p).float()
@@ -366,6 +482,14 @@ class InferenceEngine:
                     logits = self.model(stack)
             else:
                 logits = self.model(stack)
+
+            if isinstance(logits, dict) and {
+                "review_action_logits",
+                "phenomenon_family_logits",
+                "detail_type_logits",
+            }.issubset(logits):
+                all_details.extend(hierarchical_predictions(logits))
+                continue
 
             probs = torch.softmax(logits, dim=1)
             class_count = int(probs.shape[1]) if probs.ndim == 2 else 2

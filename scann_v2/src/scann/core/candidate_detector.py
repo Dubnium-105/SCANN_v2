@@ -32,6 +32,10 @@ class DetectionParams:
     aspect_ratio_max: float = 3.0
     extent_max: float = 0.90
     topk: int = 20
+    detector: str = "legacy"
+    significance_sigma: float = 5.0
+    significance_morphology: bool = True
+    raw_candidate_limit: int = 500
 
 
 def detect_candidates(
@@ -51,10 +55,37 @@ def detect_candidates(
     Returns:
         候选目标列表
     """
-    import cv2
-
     if params is None:
         params = DetectionParams()
+    detector = str(getattr(params, "detector", "legacy") or "legacy").strip().lower()
+    if detector == "significance_v1":
+        from scann.services.candidate_feature_extractor import (
+            detect_significance_candidates,
+        )
+
+        return detect_significance_candidates(
+            new_data,
+            old_data,
+            params=params,
+        )
+    return _detect_candidates_legacy(
+        new_data,
+        old_data,
+        diff_data=diff_data,
+        params=params,
+    )
+
+
+def _detect_candidates_legacy(
+    new_data: np.ndarray,
+    old_data: np.ndarray,
+    *,
+    diff_data: Optional[np.ndarray],
+    params: DetectionParams,
+) -> List[Candidate]:
+    """Byte-for-byte compatible legacy detector implementation."""
+
+    import cv2
 
     # 计算差异图
     if diff_data is None:

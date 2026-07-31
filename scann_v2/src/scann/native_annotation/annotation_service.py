@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from collections import defaultdict, deque
 from datetime import datetime, timezone
@@ -11,6 +12,14 @@ from pydantic import BaseModel, Field
 
 from scann.core.dataset_storage import DatasetStorage
 from scann.services.dataset_preprocess_service import DatasetPreprocessService
+
+from .review_feedback_service import (
+    ReviewFeedbackCreateRequest,
+    ReviewFeedbackService,
+)
+
+
+logger = logging.getLogger(__name__)
 
 
 class AnnotationBox(BaseModel):
@@ -35,6 +44,7 @@ class AnnotationSaveResponse(BaseModel):
     saved_count: int
     revision_id: str
     accepted_prelabel_id: Optional[str] = None
+    review_event_id: Optional[str] = None
 
 
 class AnnotationRevision(BaseModel):
@@ -534,6 +544,7 @@ class AnnotationService:
         )
         accepted_prelabel_id = self._extract_applied_prelabel_id(payload.metadata)
         accepted_prelabel = None
+        review_event_id = None
         if accepted_prelabel_id:
             accepted_prelabel = self._storage.mark_prelabel_accepted(
                 task_id=task_id,
@@ -542,6 +553,32 @@ class AnnotationService:
                 accepted_by=submitted_by,
                 acceptance_metadata=self._extract_applied_prelabel_metadata(payload.metadata),
             )
+            if accepted_prelabel is not None:
+                applied_metadata = self._extract_applied_prelabel_metadata(
+                    payload.metadata
+                )
+                try:
+                    feedback = ReviewFeedbackService(self.dataset_root).create(
+                        ReviewFeedbackCreateRequest(
+                            task_id=task_id,
+                            prelabel_id=accepted_prelabel.prelabel_id,
+                            revision_id=revision.revision_id,
+                            review_duration_seconds=applied_metadata.get(
+                                "review_duration_seconds"
+                            ),
+                        ),
+                        created_by=submitted_by,
+                    )
+                    review_event_id = feedback.event_id
+                except Exception:
+                    logger.exception(
+                        "annotation saved but review feedback creation failed",
+                        extra={
+                            "task_id": task_id,
+                            "prelabel_id": accepted_prelabel.prelabel_id,
+                            "revision_id": revision.revision_id,
+                        },
+                    )
 
         return AnnotationSaveResponse(
             task_id=task_id,
@@ -550,4 +587,5 @@ class AnnotationService:
             saved_count=len(payload.annotations),
             revision_id=revision.revision_id,
             accepted_prelabel_id=accepted_prelabel.prelabel_id if accepted_prelabel is not None else None,
+            review_event_id=review_event_id,
         )

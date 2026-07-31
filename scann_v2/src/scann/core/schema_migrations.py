@@ -193,6 +193,127 @@ def _create_dataset_partitions(connection: sqlite3.Connection) -> None:
     )
 
 
+def _create_discovery_lifecycle_tables(
+    connection: sqlite3.Connection,
+) -> None:
+    statements = (
+        """
+        CREATE TABLE evaluation_runs (
+            run_id TEXT PRIMARY KEY,
+            run_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            partition_id TEXT,
+            model_id TEXT,
+            artifact_relpath TEXT,
+            artifact_sha256 TEXT,
+            config_json TEXT NOT NULL DEFAULT '{}',
+            metrics_json TEXT NOT NULL DEFAULT '{}',
+            error_message TEXT,
+            created_by TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE INDEX idx_evaluation_runs_created_at
+        ON evaluation_runs(created_at)
+        """,
+        """
+        CREATE INDEX idx_evaluation_runs_partition
+        ON evaluation_runs(partition_id, run_type)
+        """,
+        """
+        CREATE TABLE annotation_review_events (
+            event_id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            prelabel_id TEXT,
+            revision_id TEXT,
+            model_id TEXT,
+            outcome TEXT NOT NULL,
+            match_algorithm_version TEXT NOT NULL,
+            result_json TEXT NOT NULL DEFAULT '{}',
+            created_by TEXT,
+            created_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE INDEX idx_annotation_review_events_task
+        ON annotation_review_events(task_id, created_at)
+        """,
+        """
+        CREATE INDEX idx_annotation_review_events_model
+        ON annotation_review_events(model_id, created_at)
+        """,
+        """
+        CREATE TABLE active_learning_batches (
+            batch_id TEXT PRIMARY KEY,
+            batch_name TEXT NOT NULL,
+            status TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            model_id TEXT,
+            partition_id TEXT,
+            budget INTEGER NOT NULL,
+            config_json TEXT NOT NULL DEFAULT '{}',
+            summary_json TEXT NOT NULL DEFAULT '{}',
+            created_by TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE INDEX idx_active_learning_batches_created_at
+        ON active_learning_batches(created_at)
+        """,
+        """
+        CREATE TABLE active_learning_items (
+            batch_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            rank INTEGER NOT NULL,
+            score REAL NOT NULL,
+            group_key TEXT,
+            reasons_json TEXT NOT NULL DEFAULT '[]',
+            dual_review INTEGER NOT NULL DEFAULT 0,
+            review_status TEXT NOT NULL DEFAULT 'pending',
+            reviewed_at TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            PRIMARY KEY (batch_id, task_id),
+            FOREIGN KEY (batch_id)
+                REFERENCES active_learning_batches(batch_id)
+                ON DELETE CASCADE
+        )
+        """,
+        """
+        CREATE INDEX idx_active_learning_items_rank
+        ON active_learning_items(batch_id, rank)
+        """,
+        """
+        CREATE TABLE model_deployments (
+            deployment_id TEXT PRIMARY KEY,
+            model_id TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            status TEXT NOT NULL,
+            traffic_fraction REAL NOT NULL DEFAULT 0.0,
+            previous_deployment_id TEXT,
+            config_json TEXT NOT NULL DEFAULT '{}',
+            metrics_json TEXT NOT NULL DEFAULT '{}',
+            created_by TEXT,
+            created_at TEXT NOT NULL,
+            ended_at TEXT
+        )
+        """,
+        """
+        CREATE INDEX idx_model_deployments_model
+        ON model_deployments(model_id, created_at)
+        """,
+        """
+        CREATE INDEX idx_model_deployments_stage
+        ON model_deployments(stage, status)
+        """,
+    )
+    for statement in statements:
+        connection.execute(statement)
+
+
 DATASET_SCHEMA_MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration(
         migration_id=1,
@@ -212,6 +333,16 @@ DATASET_SCHEMA_MIGRATIONS: tuple[SchemaMigration, ...] = (
             "taxonomy, split strategy, task counts, activation state, and metadata."
         ),
         apply=_create_dataset_partitions,
+    ),
+    SchemaMigration(
+        migration_id=3,
+        name="create_discovery_lifecycle_tables",
+        checksum_source=(
+            "Create evaluation_runs, annotation_review_events, "
+            "active_learning_batches/items, and model_deployments for the "
+            "versioned discovery, review, selection, and rollout frameworks."
+        ),
+        apply=_create_discovery_lifecycle_tables,
     ),
 )
 

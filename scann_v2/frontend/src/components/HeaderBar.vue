@@ -2,6 +2,8 @@
   <header class="border-b border-slate-800 bg-slate-900 px-4 flex items-center justify-between">
     <h1 class="text-lg font-semibold">SCANN Native Annotation</h1>
     <div class="flex items-center gap-3">
+      <DiscoveryControlMenu v-if="isAdmin" />
+
       <TrainingLoopMenu
         v-if="isAdmin"
         :active-task-id="activeTaskId"
@@ -288,6 +290,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import { fetchAnnotationSyncStatus, runAnnotationSync } from '../services/annotationSyncApi'
 import { fetchDatasetStats } from '../services/datasetApi'
+import DiscoveryControlMenu from './DiscoveryControlMenu.vue'
 import TrainingLoopMenu from './TrainingLoopMenu.vue'
 
 const props = defineProps({

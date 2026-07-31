@@ -438,6 +438,7 @@ def test_annotation_save_accepts_applied_prelabel_and_skips_duplicate_enqueue(tm
     save_payload = save.json()
     assert save_payload["accepted_prelabel_id"] == prelabel_id
     assert save_payload["revision_id"]
+    assert save_payload["review_event_id"].startswith("review-")
 
     prelabel = client.get("/api/prelabels/PGC%2017069", headers=annotator_headers)
     assert prelabel.status_code == 200

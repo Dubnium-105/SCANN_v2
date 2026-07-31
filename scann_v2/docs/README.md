@@ -14,6 +14,8 @@
   - 原生 FITS 标注平台的长期预标注架构、外部 GPU worker 控制面与当前实现边界
 - `native_annotation_training_loop.md`
   - 原生 FITS 标注平台的训练闭环、训练 worker、模型注册表与长期运行控制面
+- `discovery_framework_implementation.md`
+  - 候选评估、显著性 detector、分层/多模态分类、主动学习、OOD 与模型发布治理的当前实现
 
 ## 相关目录文档
 
