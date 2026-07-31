@@ -68,6 +68,9 @@ RUN pip install --no-cache-dir \
         --trusted-host "${PYPI_TRUSTED_HOST}" \
         "PyQt5>=5.15,<6"
 
+COPY docker/worker/entrypoint.sh /usr/local/bin/scann-worker-entrypoint
+RUN chmod 0755 /usr/local/bin/scann-worker-entrypoint
+
 COPY scann_v2 /opt/scann_v2
 RUN pip install --no-cache-dir \
         --timeout 120 \
@@ -77,10 +80,11 @@ RUN pip install --no-cache-dir \
         -e /opt/scann_v2 \
     && python -c "import scann; from scann.native_annotation import prelabel_worker, training_job_worker; print('scann worker package OK')"
 
-COPY --from=backbone-fetcher /opt/torch-cache /opt/torch-cache
+COPY --from=backbone-fetcher /opt/torch-cache /opt/scann-cache-seed
 
 RUN mkdir -p /var/log/scann
 
 HEALTHCHECK NONE
 WORKDIR /opt/scann_v2
+ENTRYPOINT ["/usr/local/bin/scann-worker-entrypoint"]
 CMD ["scann-training-worker", "--log-level=INFO"]
